@@ -10,7 +10,7 @@ def run_mpc_digital_twin():
     L = 60.0
     N_CELLS = 100
     DT = 0.04
-    SIM_HOURS = 7.0
+    SIM_HOURS = 10.0
     MPC_INTERVAL_SEC = 60.0  # MPC runs every 60s of sim time
     
     TOTAL_STEPS = int(SIM_HOURS * 3600 / DT)

@@ -1,12 +1,12 @@
 """
-Full rotary kiln PDE system assembly.
-
-dx/dt + v * dx/dz = source_terms
+Full rotary kiln PDE system assembly (Vectorized & 18-State Compatible).
+Equation: ∂x/∂t + v * ∂x/∂z = source_terms
 """
 
+import numpy as np
 from core.state import *
-from core.physics import *
-from core.flow import *
+from core.physics import energy_terms_vec, mass_terms_vec, compute_reaction_rates
+from core.flow import compute_velocities, compute_porosity
 
 
 # -------------------------------------------------
@@ -15,80 +15,61 @@ from core.flow import *
 
 def kiln_pde_system(x, u, dx_dz):
     """
-    x     : state vector
-    u     : control vector
-    dx_dz : spatial derivative ∂x/∂z
+    x     : Mevcut durum vektörü (State vector)
+    u     : Kontrol vektörü (Control vector)
+    dx_dz : Mekansal türev ∂x/∂z (Spatial derivative)
     """
 
     # -----------------------------
-    # 1. FLOW FIELD
+    # 1. FLOW FIELD & STRUCTURE
     # -----------------------------
+    # Hızlar: Fazların fırın içindeki taşınım hızları
     v_s, v_g = compute_velocities(x, u)
 
-    # structural dynamics
+    # Yapısal dinamikler (Gözeneklilik ve doluluk etkisi)
     d_epsilon = compute_porosity(x, u)
-    d_phi     = phi_feed_effect(u[IDX_FEED])  # FIX: was missing correct coupling
+    
+    # phi_feed_effect: Besleme hızının fırın doluluğuna (bed depth) etkisi
+    # Basitleştirilmiş lineer ilişki: Besleme arttıkça doluluk artar
+    d_phi = 0.01 * u[IDX_FEED] 
 
     # -----------------------------
-    # 2. PHYSICS TERMS
+    # 2. PHYSICS TERMS (SOURCE TERMS)
     # -----------------------------
+    # Vektörize fizik motorundan enerji ve kütle değişimlerini alıyoruz
+    E_terms = energy_terms_vec(x, u)
+    M_terms = mass_terms_vec(x, u)
     R_terms = compute_reaction_rates(x)
-    E_terms = energy_terms(x, u)
-    M_terms = mass_terms(x, u)
 
     # -----------------------------
-    # 3. INIT STATE VECTOR
+    # 3. PDE ASSEMBLY (∂x/∂t = -v * ∂x/∂z + Source)
     # -----------------------------
-    dx_dt = zeros_like(x)
+    # zeros_like yerine np.zeros_like kullanarak hızlanıyoruz
+    dx_dt = np.zeros_like(x)
 
-    # =============================
-    # ENERGY
-    # =============================
-    dx_dt[IDX_T_S] = (
-        - v_s * dx_dz[IDX_T_S]
-        + E_terms["solid_energy"]
-    )
+    # --- ENERGY TRANSPORT ---
+    dx_dt[IDX_T_S] = -v_s * dx_dz[IDX_T_S] + E_terms["solid_energy"]
+    dx_dt[IDX_T_G] = -v_g * dx_dz[IDX_T_G] + E_terms["gas_energy"]
 
-    dx_dt[IDX_T_G] = (
-        - v_g * dx_dz[IDX_T_G]
-        + E_terms["gas_energy"]
-    )
+    # --- SOLID SPECIES TRANSPORT (Mass Balances) ---
+    # Tüm katı bileşenler v_s hızıyla taşınır
+    for idx in SOLID_SPECIES:
+        name = StateIdx(idx).name
+        dx_dt[idx] = -v_s * dx_dz[idx] + M_terms.get(name, 0.0)
 
-    # =============================
-    # SOLID SPECIES
-    # =============================
-    dx_dt[IDX_CaCO3] = - v_s * dx_dz[IDX_CaCO3] + M_terms["CaCO3"]
-    dx_dt[IDX_CaO]   = - v_s * dx_dz[IDX_CaO]   + M_terms["CaO"]
-    dx_dt[IDX_C2S]   = - v_s * dx_dz[IDX_C2S]   + M_terms["C2S"]
-    dx_dt[IDX_C3S]   = - v_s * dx_dz[IDX_C3S]   + M_terms["C3S"]
-    dx_dt[IDX_C3A]   = - v_s * dx_dz[IDX_C3A]   + M_terms["C3A"]
-    dx_dt[IDX_C4AF]  = - v_s * dx_dz[IDX_C4AF]  + M_terms["C4AF"]
+    # --- GAS SPECIES TRANSPORT ---
+    # Gaz bileşenleri v_g (genellikle negatif) hızıyla taşınır
+    for idx in GAS_SPECIES:
+        name = StateIdx(idx).name
+        dx_dt[idx] = -v_g * dx_dz[idx] + M_terms.get(name, 0.0)
 
-    dx_dt[IDX_SiO2]  = - v_s * dx_dz[IDX_SiO2]  + M_terms["SiO2"]
-    dx_dt[IDX_Al2O3] = - v_s * dx_dz[IDX_Al2O3] + M_terms["Al2O3"]
-    dx_dt[IDX_Fe2O3] = - v_s * dx_dz[IDX_Fe2O3] + M_terms["Fe2O3"]
-
-    # =============================
-    # GAS SPECIES
-    # =============================
-    dx_dt[IDX_CO2] = - v_g * dx_dz[IDX_CO2] + M_terms["CO2"]
-    dx_dt[IDX_O2]  = - v_g * dx_dz[IDX_O2]  + M_terms["O2"]
-
-    # =============================
-    # STRUCTURE
-    # =============================
+    # --- STRUCTURAL DYNAMICS ---
     dx_dt[IDX_PHI]     = d_phi
-    dx_dt[IDX_EPSILON] = d_epsilon + M_terms["epsilon"]
+    dx_dt[IDX_EPSILON] = d_epsilon + M_terms.get("epsilon", 0.0)
 
-    # -----------------------------
-    # OUTPUT
-    # -----------------------------
     return {
         "dx_dt": dx_dt,
-        "velocities": {
-            "solid": v_s,
-            "gas": v_g
-        },
+        "velocities": {"solid": v_s, "gas": v_g},
         "terms": {
             "reaction": R_terms,
             "energy": E_terms,
@@ -96,10 +77,9 @@ def kiln_pde_system(x, u, dx_dz):
         }
     }
 
-
 # -------------------------------------------------
 # UTILITY
 # -------------------------------------------------
-
 def zeros_like(x):
-    return [0.0 for _ in x]
+    """Geriye dönük uyumluluk için, ancak dahili olarak NumPy kullanır."""
+    return np.zeros_like(x)

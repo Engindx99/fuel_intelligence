@@ -22,8 +22,8 @@ physics:
     # A ve Ea değerleri "Efektif" yaklaşım ile güncellendi:
     # Ea artırılarak reaksiyonun 1150K öncesi üretimi baskılandı.
     # A artırılarak 1250K+ sıcaklıklardaki verim korundu.
-    A: 2500000000000.0        # 1.5e10'dan 2.5e12'ye çıkarıldı (Kinetik denge için)
-    Ea: 410000.0     # (Efektif Ea bariyeri)
+    A: 1.0e12      # (Kinetik denge için)
+    Ea: 407000.0     # (Efektif Ea bariyeri)
 
   c3a_formation:
     A: 50000000.0
@@ -35,11 +35,11 @@ physics:
 
 thermal:
   lhv_fuel: 32000000.0
-  h_gs_base: 150.0
+  h_gs_base: 200.0
   enthalpy_calc: 178000.0
   enthalpy_c3s: 13000.0
   rho_solid: 1600.0
-  cp_solid: 850.0
+  cp_solid: 780.0
   rho_gas: 1.2
   cp_gas: 1050.0
   emissivity: 0.85
