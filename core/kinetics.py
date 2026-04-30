@@ -1,5 +1,5 @@
 """
-Mass-conserving R1–R3 kinetics (STABLE KILN VERSION)
+Mass-conserving R1–R3 kinetics (EXPONENTIAL ARRHENIUS VERSION)
 """
 
 import os
@@ -27,7 +27,7 @@ Ea_c2s = _cfg["physics"]["c2s_formation"]["Ea"]
 A_c3s = _cfg["physics"]["c3s_formation"]["A"]
 Ea_c3s = _cfg["physics"]["c3s_formation"]["Ea"]
 
-_C3S_GATE_TEMP_K = 1200.0
+# NOT: _C3S_GATE_TEMP_K kaldırıldı, reaksiyon artık tamamen T'ye bağlı.
 
 # -------------------------------------------------
 # MASS-BASED STOICHIOMETRY
@@ -52,7 +52,8 @@ S = np.array([
 # REACTION RATES
 # -------------------------------------------------
 def safe_exp(x):
-    return np.exp(np.clip(x, -50.0, 50.0))
+    # Sayısal taşmayı (overflow) önlemek için clip kullanmaya devam ediyoruz
+    return np.exp(np.clip(x, -100.0, 50.0))
 
 def compute_reaction_rates(X, T=None):
     X = np.asarray(X, dtype=np.float64)
@@ -64,6 +65,7 @@ def compute_reaction_rates(X, T=None):
     else:
         T = np.asarray(T, dtype=np.float64).reshape(-1)
 
+    # Fiziksel alt sınır (Mutlak sıfıra yaklaşmayı engeller)
     T = np.maximum(T, 300.0)
     invT = 1.0 / T
     Xp = np.maximum(X, 0.0)
@@ -73,28 +75,25 @@ def compute_reaction_rates(X, T=None):
     SiO2  = Xp[:, StateIdx.SiO2]
     C2S   = Xp[:, StateIdx.C2S]
 
+    # Arrhenius hız sabitleri
     k1 = A_calc * safe_exp(-Ea_calc * invT / R_gas)
     k2 = A_c2s  * safe_exp(-Ea_c2s  * invT / R_gas)
     k3 = A_c3s  * safe_exp(-Ea_c3s  * invT / R_gas)
 
+    # Reaksiyonlar (r3 artık bir gate'e değil, tamamen T ve k3'e bağlı)
     r1 = k1 * CaCO3
     r2 = k2 * CaO * SiO2
-    gate = (T >= _C3S_GATE_TEMP_K).astype(np.float64)
-    r3 = gate * k3 * np.minimum(C2S, CaO)
+    r3 = k3 * np.minimum(C2S, CaO)  # Kısıtlayıcı bileşen mantığı devam ediyor
 
     return np.stack([r1, r2, r3], axis=1)
 
-# -------------------------------------------------
-# IMPORT ERROR'I ÇÖZEN EKSİK FONKSİYON
-# -------------------------------------------------
+# ... (Geri kalan fonksiyonlar aynı kalıyor)
+
 def compute_reaction_rates_vec(X):
-    """Energy ve Validation modülleri için sözlük yapısında çıktı üretir."""
     X = np.asarray(X, dtype=np.float64)
     if X.ndim == 1:
         X = X.reshape(1, -1)
-
     r = compute_reaction_rates(X, T=X[:, StateIdx.T_S])
-
     return {
         "r_calcination": r[:, 0],
         "r_C2S": r[:, 1],
@@ -103,9 +102,6 @@ def compute_reaction_rates_vec(X):
         "r_C4AF": np.zeros(len(r)),
     }
 
-# -------------------------------------------------
-# INTEGRATION
-# -------------------------------------------------
 def dX_kin(r):
     r = np.asarray(r, dtype=np.float64)
     if r.ndim == 1:
@@ -116,6 +112,3 @@ def kinetics_step(X, T):
     r = compute_reaction_rates(X, T)
     dx = dX_kin(r)
     return dx, r
-
-# Aliaslar (Diğer modüllerle uyumluluk için)
-dXdt_kinetic_subspace = dX_kin
