@@ -1,120 +1,65 @@
-# flow.py
-
-"""
-Flow and structural dynamics module for rotary kiln.
-
-Includes:
-- axial velocity field
-- porosity evolution (epsilon_l)
-- solid fraction evolution (phi)
-
-NO:
-- discretization
-- numerical constants
-- direct reaction implementation (use concentrations only)
-"""
-
-from core.state import *
+import numpy as np
+from core.state import IDX_FAN, IDX_REACTOR, IDX_FEED, IDX_EPSILON
 
 
-# -------------------------------------------------
-# 1. AXIAL VELOCITY
-# -------------------------------------------------
+# -----------------------------
+# GAS FLOW
+# -----------------------------
+def v_gas_model(fan_rpm, epsilon):
 
-def compute_velocity(x, u):
-    """
-    Symbolic axial velocity field v(z,t).
+    k = 0.001
 
-    Depends on:
-    - fan_rpm (gas driving force)
-    - feed_rate (solid loading)
-    - porosity (epsilon_l)
-    """
+    eps = max(epsilon, 0.05)
 
-    fan_rpm   = u[IDX_FAN]
-    feed_rate = u[IDX_FEED]
-
-    epsilon_l = x[IDX_EPSILON]
-
-    # Gas-driven contribution
-    v_gas = v_gas_model(fan_rpm, epsilon_l)
-
-    # Solid loading resistance
-    v_solid = v_solid_model(feed_rate, epsilon_l)
-
-    # Combined effective velocity
-    v = v_gas - v_solid
-
-    return v
+    # pressure-driven + porosity resistance
+    return -(k * fan_rpm) / eps
 
 
-# -------------------------------------------------
-# 2. POROSITY EVOLUTION (epsilon_l)
-# -------------------------------------------------
+# -----------------------------
+# SOLID FLOW
+# -----------------------------
+def v_solid_model(reactor_rpm, feed_rate, epsilon):
 
+    slope = 0.03
+    D = 4.5
+    k = 0.02
+
+    # load damping
+    load = 1.0 / (1.0 + 0.001 * feed_rate)
+
+    # packing resistance (nonlinear stabilized)
+    eps = np.clip(epsilon, 0.0, 0.9)
+    packing = (1.0 - eps)**1.5
+
+    return k * D * slope * reactor_rpm * load * packing
+
+
+# -----------------------------
+# VELOCITY FIELD
+# -----------------------------
+def compute_velocities(x, u):
+
+    fan = u[IDX_FAN]
+    reactor = u[IDX_REACTOR]
+    feed = u[IDX_FEED]
+
+    epsilon = x[IDX_EPSILON]
+
+    v_g = v_gas_model(fan, epsilon)
+    v_s = v_solid_model(reactor, feed, epsilon)
+
+    return v_s, v_g
+
+
+# -----------------------------
+# POROSITY DYNAMICS
+# -----------------------------
 def compute_porosity(x, u):
-    """
-    Porosity evolution (epsilon_l).
 
-    Influenced by:
-    - reaction progress (conversion)
-    - reactor rotation (mixing)
-    """
+    CaCO3 = x[2]   # IDX_CaCO3
+    CaO = x[3]     # IDX_CaO
 
-    reactor_rpm = u[IDX_REACTOR]
+    # reaction-driven expansion
+    k = 0.05
 
-    C_CaCO3 = x[IDX_CaCO3]
-    C_CaO   = x[IDX_CaO]
-
-    # Reaction-induced structural change
-    eps_reaction = porosity_reaction_effect(C_CaCO3, C_CaO)
-
-    # Mixing / agitation effect
-    eps_mixing = porosity_mixing_effect(reactor_rpm)
-
-    d_epsilon = eps_reaction + eps_mixing
-
-    return d_epsilon
-
-
-# -------------------------------------------------
-# 3. SOLID FRACTION (phi)
-# -------------------------------------------------
-
-def compute_solid_fraction(x, u):
-    """
-    Solid fraction (phi) evolution.
-
-    Influenced by:
-    - feed_rate (mass inflow)
-    - reaction (mass redistribution)
-    """
-
-    feed_rate = u[IDX_FEED]
-
-    C_CaCO3 = x[IDX_CaCO3]
-    C_CaO   = x[IDX_CaO]
-
-    # Inflow contribution
-    phi_in = phi_feed_effect(feed_rate)
-
-    # Reaction redistribution
-    phi_rxn = phi_reaction_effect(C_CaCO3, C_CaO)
-
-    d_phi = phi_in + phi_rxn
-
-    return d_phi
-
-
-# -------------------------------------------------
-# 4. SYMBOLIC PLACEHOLDERS
-# -------------------------------------------------
-
-def v_gas_model(fan_rpm, epsilon_l): pass
-def v_solid_model(feed_rate, epsilon_l): pass
-
-def porosity_reaction_effect(C_CaCO3, C_CaO): pass
-def porosity_mixing_effect(reactor_rpm): pass
-
-def phi_feed_effect(feed_rate): pass
-def phi_reaction_effect(C_CaCO3, C_CaO): pass
+    return k * max(CaCO3, 0.0) * (1.0 - max(CaO, 0.0))

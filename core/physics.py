@@ -1,165 +1,165 @@
-# physics.py
+import numpy as np
+import yaml
+import os
 
-"""
-Symbolic physics module for rotary kiln digital twin.
-
-Includes:
-- Reaction kinetics (symbolic)
-- Energy balance terms
-- Mass balance source terms
-
-NO:
-- numerical constants
-- discretization
-- velocity definition (handled in flow.py)
-"""
-
-from core.state import *
+from core.state import StateIdx, N_STATES
+from core.kinetics import compute_reaction_rates, dX_kin
 
 
 # -------------------------------------------------
-# 1. REACTION KINETICS
+# CONFIG
 # -------------------------------------------------
 
-def compute_reaction_rates(x):
-    """
-    Returns reaction rates R for all species.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CFG_PATH = os.path.join(_ROOT, "configs", "model_config.yaml")
 
-    All rates are symbolic functions of:
-    - T_s
-    - concentrations
-    """
 
-    T_s = x[IDX_T_S]
+def load_config():
+    with open(_CFG_PATH, "r") as f:
+        return yaml.safe_load(f)
 
-    C_CaCO3 = x[IDX_CaCO3]
-    C_CaO   = x[IDX_CaO]
 
-    C_C2S  = x[IDX_C2S]
-    C_C3S  = x[IDX_C3S]
-    C_C3A  = x[IDX_C3A]
-    C_C4AF = x[IDX_C4AF]
-
-    # --- Primary calcination reaction ---
-    # CaCO3 → CaO + CO2
-    r_calcination = k_calcination(T_s) * C_CaCO3
-
-    # --- Clinker formation reactions (symbolic placeholders) ---
-    r_C2S  = k_C2S(T_s)  * C_CaO
-    r_C3S  = k_C3S(T_s)  * C_CaO
-    r_C3A  = k_C3A(T_s)  * C_CaO
-    r_C4AF = k_C4AF(T_s) * C_CaO
-
-    return {
-        "r_calcination": r_calcination,
-        "r_C2S": r_C2S,
-        "r_C3S": r_C3S,
-        "r_C3A": r_C3A,
-        "r_C4AF": r_C4AF
-    }
+cfg = load_config()
 
 
 # -------------------------------------------------
-# 2. ENERGY TERMS
+# PARAMETERS
+# -------------------------------------------------
+
+_r_gas = cfg["physics"]["r_gas"]
+
+_diff_cfg = cfg["physics"]["diffusion"]
+_D0 = _diff_cfg["D0"]
+_tau = _diff_cfg["tau"]
+
+_rho_s = cfg["thermal"]["rho_solid"]
+_cp_s = cfg["thermal"]["cp_solid"]
+_rho_g = cfg["thermal"]["rho_gas"]
+_cp_g = cfg["thermal"]["cp_gas"]
+
+_lhv = cfg["thermal"]["lhv_fuel"]
+_h_base = cfg["thermal"]["h_gs_base"]
+_eps_rad = cfg["thermal"]["emissivity"]
+_sigma = cfg["thermal"]["sigma_sb"]
+
+_dH_calc = cfg["thermal"]["enthalpy_calc"]
+_dH_c3s = cfg["thermal"]["enthalpy_c3s"]
+
+_geom = cfg["kiln_geometry"]
+_D = float(_geom["diameter"])
+_A_cs = np.pi * (_D / 2.0) ** 2
+_length = float(_geom["length"])
+
+_rho_cp_s = _rho_s * _cp_s
+_rho_cp_g = _rho_g * _cp_g
+_kiln_vol = _A_cs * _length
+
+
+# -------------------------------------------------
+# ENERGY
+# -------------------------------------------------
+
+def energy_terms_vec(X, u):
+
+    X = np.asarray(X, dtype=np.float64)
+
+    T_s = np.clip(X[:, StateIdx.T_S], 200, 3000)
+    T_g = np.clip(X[:, StateIdx.T_G], 200, 3000)
+
+    phi = np.maximum(X[:, StateIdx.PHI], 0.0)
+
+    # kinetics
+    r = compute_reaction_rates(X, T_s)
+
+    r_calc = r[:, 0]
+    r_c3s = r[:, 2]
+
+    MW_CaCO3 = 0.10009
+    MW_C3S = 0.1723
+
+    Q_rxn = (_dH_calc / MW_CaCO3) * r_calc - (_dH_c3s / MW_C3S) * r_c3s
+
+    # heat transfer
+    h_gs = _h_base * (1.0 + 0.5 * phi)
+
+    Q_conv = h_gs * (T_g - T_s)
+    Q_rad = _sigma * _eps_rad * (T_g**4 - T_s**4)
+
+    Q_xfer = Q_conv + Q_rad
+
+    # burner (no linspace allocation)
+    N = X.shape[0]
+    z = np.arange(N, dtype=np.float64) / (N - 1 + 1e-12)
+
+    fuel_rate = u[0]
+
+    q_dist = np.exp(-(1.0 - z)**2 / 0.05)
+    q_dist /= (np.mean(q_dist) + 1e-12)
+
+    Q_fuel = fuel_rate * _lhv * q_dist / _kiln_vol
+
+    solid_dT = (-Q_rxn + Q_xfer + 0.05 * Q_fuel) / _rho_cp_s
+    gas_dT = (0.95 * Q_fuel - Q_xfer) / _rho_cp_g
+
+    return solid_dT, gas_dT
+
+
+# -------------------------------------------------
+# MASS
+# -------------------------------------------------
+
+def mass_terms_vec(X, u):
+
+    X = np.asarray(X, dtype=np.float64)
+
+    r = compute_reaction_rates(X, T=X[:, StateIdx.T_S])
+    dX = dX_kin(r)
+
+    dC = np.zeros((X.shape[0], N_STATES), dtype=np.float64)
+
+    kin_idx = np.array([
+        StateIdx.CaCO3,
+        StateIdx.CaO,
+        StateIdx.SiO2,
+        StateIdx.C2S,
+        StateIdx.C3S,
+        StateIdx.CO2
+    ], dtype=np.intp)
+
+    dC[:, kin_idx] = dX
+
+    # inert
+    dC[:, StateIdx.C3A] = 0.0
+    dC[:, StateIdx.C4AF] = 0.0
+    dC[:, StateIdx.Al2O3] = 0.0
+    dC[:, StateIdx.Fe2O3] = 0.0
+
+    # porosity
+    dC[:, StateIdx.EPSILON] = 0.05 * r[:, 0]
+
+    return dC
+
+
+# -------------------------------------------------
+# SINGLE CELL WRAPPERS
 # -------------------------------------------------
 
 def energy_terms(x, u):
-    """
-    Returns symbolic energy contributions for:
-    - solid temperature (T_s)
-    - gas temperature (T_g)
-    """
+    x = np.asarray(x).reshape(1, -1)
+    u = np.asarray(u)
 
-    T_s = x[IDX_T_S]
-    T_g = x[IDX_T_G]
-
-    fuel_rate = u[IDX_FUEL]
-
-    R = compute_reaction_rates(x)
-
-    # --- Reaction heat source (symbolic) ---
-    Q_reaction = (
-        H_calcination() * R["r_calcination"] +
-        H_C2S()  * R["r_C2S"] +
-        H_C3S()  * R["r_C3S"] +
-        H_C3A()  * R["r_C3A"] +
-        H_C4AF() * R["r_C4AF"]
-    )
-
-    # --- Gas-solid heat exchange ---
-    Q_exchange = h_gs(x) * (T_g - T_s)
-
-    # --- Fuel heat input (affects gas phase) ---
-    Q_fuel = Q_fuel_source(fuel_rate)
+    s, g = energy_terms_vec(x, u)
 
     return {
-        "solid_energy": Q_reaction + Q_exchange,
-        "gas_energy": Q_fuel - Q_exchange
+        "solid_energy": float(s[0]),
+        "gas_energy": float(g[0])
     }
 
-
-# -------------------------------------------------
-# 3. MASS BALANCE TERMS
-# -------------------------------------------------
 
 def mass_terms(x, u):
-    """
-    Returns source terms for all species.
+    x = np.asarray(x).reshape(1, -1)
+    u = np.asarray(u)
 
-    Transport (advection) is NOT included here.
-    Only reaction contributions.
-    """
+    dC = mass_terms_vec(x, u)[0]
 
-    R = compute_reaction_rates(x)
-
-    # --- Solid species ---
-    dC_CaCO3 = -R["r_calcination"]
-    dC_CaO   = (
-        + R["r_calcination"]
-        - R["r_C2S"]
-        - R["r_C3S"]
-        - R["r_C3A"]
-        - R["r_C4AF"]
-    )
-
-    dC_C2S  = +R["r_C2S"]
-    dC_C3S  = +R["r_C3S"]
-    dC_C3A  = +R["r_C3A"]
-    dC_C4AF = +R["r_C4AF"]
-
-    # --- Gas species ---
-    dCO2 = +R["r_calcination"]
-    dO2  = -O2_consumption(u)  # linked to combustion
-
-    return {
-        "CaCO3": dC_CaCO3,
-        "CaO": dC_CaO,
-        "C2S": dC_C2S,
-        "C3S": dC_C3S,
-        "C3A": dC_C3A,
-        "C4AF": dC_C4AF,
-        "CO2": dCO2,
-        "O2": dO2
-    }
-
-
-# -------------------------------------------------
-# 4. SYMBOLIC PLACEHOLDERS (INTENTIONALLY EMPTY)
-# -------------------------------------------------
-
-def k_calcination(T): pass
-def k_C2S(T): pass
-def k_C3S(T): pass
-def k_C3A(T): pass
-def k_C4AF(T): pass
-
-def H_calcination(): pass
-def H_C2S(): pass
-def H_C3S(): pass
-def H_C3A(): pass
-def H_C4AF(): pass
-
-def h_gs(x): pass
-def Q_fuel_source(fuel_rate): pass
-
-def O2_consumption(u): pass
+    return {i: float(dC[i]) for i in range(len(dC))}

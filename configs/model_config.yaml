@@ -1,0 +1,52 @@
+
+kiln_geometry:
+  length: 60.0
+  diameter: 4.5
+  slope: 0.03
+  # cross_section intentionally removed:
+  # A = π(D/2)^2 is computed in physics layer
+
+physics:
+  r_gas: 8.314
+
+  diffusion:
+    D0: 0.05
+    tau: 2.0
+
+  calcination:
+    A: 128000000.0
+    Ea: 180000.0
+
+  c2s_formation:
+    A: 2400000.0
+    Ea: 150000.0
+
+  c3s_formation:
+    A: 15000000000.0
+    Ea: 220000.0
+
+  c3a_formation:
+    A: 50000000.0
+    Ea: 120000.0
+
+  c4af_formation:
+    A: 40000000.0
+    Ea: 115000.0
+
+
+thermal:
+  lhv_fuel: 32000000.0
+
+  h_gs_base: 150.0
+
+  enthalpy_calc: 178000.0
+  enthalpy_c3s: 13000.0
+
+  rho_solid: 1600.0
+  cp_solid: 850.0
+
+  rho_gas: 1.2
+  cp_gas: 1050.0
+
+  emissivity: 0.85
+  sigma_sb: 5.67e-8

@@ -1,0 +1,38 @@
+
+# =========================
+# MPC CONFIGURATION
+# Rotary Kiln Digital Twin
+# =========================
+
+horizon:
+  N: 30          # prediction horizon (~30 min @ dt=60s)
+  Nc: 10         # control horizon
+  dt: 60.0       # [s]
+
+setpoints:
+  T_solid_ref: 1723.0    # ~1450°C (C3S optimum zone)
+  T_gas_max: 2200.0      # safety constraint
+  T_solid_max: 1800.0    # refractories safety margin increased
+
+weights:
+  W_T_solid: 100.0       # main tracking objective
+  W_C3S: 20.0            # clinker quality
+  W_fuel: 2.0            # energy cost
+  W_slew: 15.0           # control smoothness
+  W_T_gas: 10.0          # gas overheating penalty (added)
+
+scaling:
+  T_scale: 2000.0
+  C_scale: 1.0
+  fuel_scale: 1.0
+
+constraints:
+  hard:
+    T_gas_max: 2200.0
+    T_solid_max: 1800.0
+  soft_penalty_gain: 50.0
+
+solver:
+  max_iter: 200
+  tol: 1e-5
+  print_level: 0
