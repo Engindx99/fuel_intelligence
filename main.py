@@ -2,10 +2,10 @@
 Rotary Kiln Digital Twin - Industrial Driver
 
 Enhancements:
+- Minute-based logging (10-min intervals)
 - Runtime physical validation
 - Stability monitoring (CFL + NaN checks)
 - Mass/energy sanity hooks
-- Safe logging
 """
 
 import time
@@ -24,9 +24,11 @@ def run_digital_twin():
     N_CELLS = 100
     DT = 0.04
     SIM_HOURS = 7.0
+    LOG_EVERY_MINUTES = 10  # Loglama periyodu: 10 dakika
 
     TOTAL_STEPS = int(SIM_HOURS * 3600 / DT)
-    LOG_INTERVAL = max(1, int(3600 / DT))
+    # 10 dakikalık saniye (600s) / dt ile adım sayısını buluyoruz
+    LOG_INTERVAL = max(1, int((LOG_EVERY_MINUTES * 60) / DT))
 
     sim = KilnSimulation(L, N_CELLS, DT)
 
@@ -58,15 +60,17 @@ def run_digital_twin():
     u[IDX_REACTOR] = 3.5
 
     print("\nRotary Kiln Digital Twin (INDUSTRIAL MODE)")
-    print("=" * 70)
+    print("=" * 80)
     print(f"Cells     : {N_CELLS}")
     print(f"dt        : {DT} s")
-    print(f"Sim time  : {SIM_HOURS} h")
+    print(f"Sim time  : {SIM_HOURS} h ({SIM_HOURS*60} min)")
     print(f"Steps     : {TOTAL_STEPS:,}")
-    print("=" * 70)
+    print(f"Log Freq  : Every {LOG_EVERY_MINUTES} minutes")
+    print("=" * 80)
 
-    print(f"{'t(h)':>8} | {'Ts':>8} | {'Tg':>8} | {'CaCO3':>8} | {'CaO':>8} | {'C2S':>8} | {'C3S':>8} | {'total':>8} | {'wall(s)':>10}")
-    print("-" * 100)
+    # Başlık dakika (t_min) olarak güncellendi
+    print(f"{'t(min)':>8} | {'Ts':>8} | {'Tg':>8} | {'CaCO3':>8} | {'CaO':>8} | {'C2S':>8} | {'C3S':>8} | {'solids':>8} | {'wall(s)':>10}")
+    print("-" * 110)
 
     wall_start = time.time()
 
@@ -80,39 +84,38 @@ def run_digital_twin():
         # -----------------------------
         # SAFETY CHECKS (CRITICAL)
         # -----------------------------
-
-        # NaN / Inf check
         if np.any(~np.isfinite(X)):
             raise RuntimeError(f"Numerical instability detected at step {step}")
 
-        # Physical validation
+        # Fiziksel doğrulama (Kütle ve Enerji Dengesi)
         validate_state(X, step)
 
         # -----------------------------
-        # LOGGING
+        # LOGGING (DAKİKA BAZLI)
         # -----------------------------
         if step % LOG_INTERVAL == 0:
 
-            t_h = step * DT / 3600
+            t_min = (step * DT) / 60  # Zamanı dakikaya çeviriyoruz
             elapsed = time.time() - wall_start
 
             avg = lambda i: np.mean(X[:, i])
 
-            total = (
+            # Katı bileşenlerin toplamı (CO2 gaz fazına geçtiği için toplamın düşmesi normaldir)
+            current_solids = (
                 avg(IDX_CaCO3) +
                 avg(IDX_CaO) +
                 avg(IDX_C2S) +
                 avg(IDX_C3S)
             )
 
-            print(f"{t_h:8.2f} | "
+            print(f"{t_min:8.1f} | "
                   f"{avg(IDX_T_S):8.1f} | "
                   f"{avg(IDX_T_G):8.1f} | "
                   f"{avg(IDX_CaCO3):8.3f} | "
                   f"{avg(IDX_CaO):8.3f} | "
                   f"{avg(IDX_C2S):8.3f} | "
                   f"{avg(IDX_C3S):8.3f} | "
-                  f"{total:8.3f} | "
+                  f"{current_solids:8.3f} | "
                   f"{elapsed:10.1f}")
 
     # -----------------------------
@@ -120,9 +123,9 @@ def run_digital_twin():
     # -----------------------------
     wall_time = time.time() - wall_start
 
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 80)
     print("SIMULATION COMPLETE")
-    print("=" * 70)
+    print("=" * 80)
     print(f"Wall time : {wall_time:.2f} s")
     print(f"Speedup   : {(SIM_HOURS*3600)/wall_time:.1f}x real time")
 
@@ -135,8 +138,8 @@ def run_digital_twin():
         print(f"C2S   : {row[IDX_C2S]:.4f}")
         print(f"C3S   : {row[IDX_C3S]:.4f}")
 
-    report("EXIT", X[-1])
-    report("MID", X[len(X)//2])
+    report("EXIT (Klinker Çıkışı)", X[-1])
+    report("MID (Fırın Ortası)", X[len(X)//2])
 
 
 if __name__ == "__main__":
