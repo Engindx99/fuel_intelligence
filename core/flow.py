@@ -1,73 +1,88 @@
+import os
+import yaml
 import numpy as np
-from core.state import StateIdx, IDX_FAN, IDX_REACTOR, IDX_FEED, IDX_EPSILON
+from core.state import StateIdx, IDX_FAN, IDX_REACTOR, IDX_FEED
 
-# -----------------------------
-# GAS FLOW
-# -----------------------------
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CFG_PATH = os.path.join(_ROOT, "configs", "model_config.yaml")
+with open(_CFG_PATH, "r", encoding="utf-8") as f:
+    _flow_cfg = yaml.safe_load(f) or {}
+
+_g = _flow_cfg.get("kiln_geometry") or {}
+_t = _flow_cfg.get("thermal") or {}
+_FLOW_D = float(_g.get("diameter", 4.5))
+_FLOW_RHO_G = float(_t.get("rho_gas", 1.2))
+_MDOT_G_BASE = float(_t.get("mdot_gas_base", 20.0))
+_MDOT_G_PER_FAN = float(_t.get("mdot_gas_per_fan", 0.05))
+_CROSS_A = np.pi * (_FLOW_D / 2.0) ** 2
+
+
 def v_gas_model(fan_rpm, epsilon):
     """
-    Gaz hızı modeli: Fan devri ve boşluk oranı (epsilon) ile ters orantılı.
+    Interstitial axial gas speed [m/s], counter-current (negative toward z decreasing).
+
+    Superficial: u_sup = dot(m)_g / (rho_g A). Interstitial divides by epsilon.
+    Gives ~few–few×10 seconds gas residence through a 60 m kiln with plant-scale mdot,
+    replacing the empirical k*fan/eps surrogate that overstated tau by orders.
     """
-    k = 0.001
-    # Bölme hatasını önlemek için epsilon alt sınırı
-    eps = np.maximum(epsilon, 0.05)
-    
-    # Basınç kaynaklı akış (Negatif yön: Fırın çıkışından girişine doğru)
-    return -(k * fan_rpm) / eps
+    eps = np.maximum(np.asarray(epsilon, dtype=np.float64), 0.05)
+    mdot = _MDOT_G_BASE + _MDOT_G_PER_FAN * float(fan_rpm)
+    v_sup = mdot / (_FLOW_RHO_G * _CROSS_A + 1e-18)
+    v_int = -(v_sup / eps)
+    return np.clip(v_int, -120.0, -0.3)
 
 
-# -----------------------------
-# SOLID FLOW
-# -----------------------------
 def v_solid_model(reactor_rpm, feed_rate, epsilon):
     """
-    Katı hızı modeli: Fırın eğimi, çapı ve doluluk oranına bağlı.
+    Düzeltilmiş katı faz eksenel hız modeli (granular flow surrogate).
     """
-    slope = 0.03
-    D = 4.5
-    k = 0.02
 
-    # Yükleme sönümlemesi (Besleme hızı arttıkça hızın hafif azalması)
-    load = 1.0 / (1.0 + 0.001 * feed_rate)
+    R = _FLOW_D / 2.0
 
-    # Paketleme direnci (Boşluk oranı azaldıkça sürtünme artar)
-    eps = np.clip(epsilon, 0.0, 0.9)
-    packing = (1.0 - eps)**1.5
+    omega = 2.0 * np.pi * reactor_rpm / 60.0
 
-    return k * D * slope * reactor_rpm * load * packing
+    v_t = omega * R
+
+    theta = float(_g.get("slope", 0.03))
+    slope_effect = np.tan(theta)
+
+    eps = np.clip(np.asarray(epsilon, dtype=np.float64), 0.05, 0.95)
+    packing = eps / (eps + 0.3)
+
+    load_effect = np.exp(-0.0005 * feed_rate)
+
+    slip_factor = np.tanh(v_t * slope_effect)
+
+    v_s = v_t * slope_effect * slip_factor * packing * load_effect
+
+    return np.clip(v_s, 0.0, 0.25)
 
 
-# -----------------------------
-# VELOCITY FIELD
-# -----------------------------
 def compute_velocities(x, u):
     """
-    Mevcut state (x) ve kontrol (u) vektörlerinden faz hızlarını hesaplar.
+    State + control → phase velocities (scalars matching engine RTD midpoint usage).
     """
     fan = u[IDX_FAN]
     reactor = u[IDX_REACTOR]
     feed = u[IDX_FEED]
-    epsilon = x[IDX_EPSILON]
+    epsilon = x[StateIdx.EPSILON]
 
-    v_g = v_gas_model(fan, epsilon)
-    v_s = v_solid_model(reactor, feed, epsilon)
+    v_g_raw = v_gas_model(fan, epsilon)
+    v_g = float(np.asarray(v_g_raw, dtype=np.float64).ravel()[0])
+
+    v_s_raw = v_solid_model(reactor, feed, epsilon)
+    v_s = float(np.asarray(v_s_raw, dtype=np.float64).ravel()[0])
 
     return v_s, v_g
 
 
-# -----------------------------
-# POROSITY DYNAMICS
-# -----------------------------
 def compute_porosity(x, u):
     """
-    Kalsinasyon reaksiyonuna bağlı gözeneklilik (porosity) değişimi.
+    CaCO3 → CaO dönüşümüne bağlı gözeneklilik değişimi.
     """
-    # İndeksleri StateIdx üzerinden güvenli alıyoruz
     CaCO3 = x[StateIdx.CaCO3]
     CaO = x[StateIdx.CaO]
 
-    # Reaksiyon kaynaklı genleşme katsayısı
     k = 0.05
 
-    # CaCO3 azaldıkça ve CaO oluştukça gözeneklilik karakteristiği değişir
     return k * np.maximum(CaCO3, 0.0) * (1.0 - np.maximum(CaO, 0.0))

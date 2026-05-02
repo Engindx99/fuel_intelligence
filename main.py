@@ -7,6 +7,7 @@ import numpy as np
 from simulation.engine import KilnSimulation
 from core.state import *
 from core.validation import validate_state
+from utils.energy_audit import total_energy_J
 
 def run_digital_twin():
     # -----------------------------
@@ -15,11 +16,11 @@ def run_digital_twin():
     L = 60.0
     N_CELLS = 100
     DT = 0.04 # Fiziksel kararlılık için ideal adım
-    SIM_HOURS = 10.0
+    SIM_HOURS = 4.0
     LOG_EVERY_MINUTES = 10  
 
-    TOTAL_STEPS = int(SIM_HOURS * 3600 / DT)
     LOG_INTERVAL = max(1, int((LOG_EVERY_MINUTES * 60) / DT))
+    T_END = SIM_HOURS * 3600.0
 
     # Simülasyon motorunu başlat
     sim = KilnSimulation(L, N_CELLS, DT)
@@ -43,10 +44,10 @@ def run_digital_twin():
     # 3. CONTROL INPUT (İşletme Parametreleri)
     # -----------------------------
     u = create_zero_control()
-    u[IDX_FUEL] = 8.0      # kg/s yakıt
-    u[IDX_FAN] = 5000.0    # m3/h hava
+    u[IDX_FUEL] = 16.0      # kg/s yakıt
+    u[IDX_FAN] = 800.0    # m3/h hava
     u[IDX_FEED] = 10.0     # kg/s hammadde
-    u[IDX_REACTOR] = 3.5   # rpm fırın hızı
+    u[IDX_REACTOR] = 2.0   # rpm fırın hızı
 
     print("\nRotary Kiln Digital Twin (18-STATE OPTIMIZED MODE)")
     print("=" * 110)
@@ -54,47 +55,59 @@ def run_digital_twin():
     print("-" * 110)
 
     # Başlıklar
-    print(f"{'t(min)':>8} | {'Ts(K)':>8} | {'Tg(K)':>8} | {'CaCO3':>8} | {'CaO':>8} | {'C2S':>8} | {'C3S':>8} | {'TotalSol':>8} | {'Speed(x)':>10}")
+    print(
+        f"{'t(min)':>8} | {'Ts(K)':>8} | {'Tg(K)':>8} | {'min(Tg-Ts)':>10} | "
+        f"{'CaCO3':>8} | {'CaO':>8} | {'C2S':>8} | {'C3S':>8} | {'TotalSol':>8} | {'Speed(x)':>10}"
+    )
     print("-" * 110)
 
     wall_start = time.time()
+    E_prev = total_energy_J(sim.X, L=L, D=4.5, Tw=getattr(sim, "Tw", None))
+    t_prev = 0.0
 
     # -----------------------------
     # 4. SIM LOOP
     # -----------------------------
     try:
-        for step in range(TOTAL_STEPS):
-            # Ana simülasyon adımı (Vektörize edilmiş)
+        step = 0
+        # Not: CFL `sim.dt` değişebildiği için bitiş `sim.t` üzerinden; adım sayısı `DT` ile kıstaslanmaz.
+        while sim.t < T_END - 1e-9:
             X = sim.step(u)
+            step += 1
 
             # Loglama ve Doğrulama
             if step % LOG_INTERVAL == 0:
                 # Sayısal kararlılık kontrolü
                 if not np.all(np.isfinite(X)):
-                    raise RuntimeError(f"Numerical instability (NaN) at t = {step*DT/60:.2f} min")
+                    raise RuntimeError(f"Numerical instability (NaN) at t = {sim.t/60:.2f} min")
 
                 # Fiziksel doğrulama (Kütle ve sıcaklık sınırları)
                 validate_state(X, step)
 
-                t_min = (step * DT) / 60
+                t_min = sim.t / 60.0
                 elapsed_wall = time.time() - wall_start
-                real_time_ratio = (t_min * 60) / max(0.001, elapsed_wall)
+                real_time_ratio = sim.t / max(0.001, elapsed_wall)
+                E_now = total_energy_J(sim.X, L=L, D=4.5, Tw=getattr(sim, "Tw", None))
+                dE_dt_kW = (E_now - E_prev) / max(1e-9, (sim.t - t_prev)) / 1000.0
+                E_prev, t_prev = E_now, sim.t
                 
                 avg = lambda i: np.mean(X[:, i])
 
                 # 18 bileşenli yapıda toplam katı kütlesi takibi
                 # CaCO3 (2) ile Fe2O3 (10) arasındaki tüm katıları toplar
                 current_solids = np.sum([avg(i) for i in range(StateIdx.CaCO3, StateIdx.Fe2O3 + 1)])
+                min_gap = float(np.min(X[:, IDX_T_G] - X[:, IDX_T_S]))
 
                 print(f"{t_min:8.1f} | "
                       f"{avg(IDX_T_S):8.1f} | "
                       f"{avg(IDX_T_G):8.1f} | "
+                      f"{min_gap:10.2f} | "
                       f"{avg(IDX_CaCO3):8.3f} | "
                       f"{avg(IDX_CaO):8.3f} | "
                       f"{avg(IDX_C2S):8.3f} | "
                       f"{avg(IDX_C3S):8.3f} | "
                       f"{current_solids:8.3f} | "
-                      f"{real_time_ratio:10.1f}x")
+                      f"{real_time_ratio:10.1f}x | dE/dt={dE_dt_kW:8.1f} kW")
 
     except Exception as e:
         print(f"\n[ERROR] Simülasyon durduruldu: {e}")

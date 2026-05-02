@@ -5,7 +5,8 @@ Equation: ∂x/∂t + v * ∂x/∂z = source_terms
 
 import numpy as np
 from core.state import *
-from core.physics import energy_terms_vec, mass_terms_vec, compute_reaction_rates
+from core.physics import energy_terms_vec, mass_terms_vec
+from core.kinetics import compute_reaction_rates
 from core.flow import compute_velocities, compute_porosity
 
 
@@ -15,71 +16,61 @@ from core.flow import compute_velocities, compute_porosity
 
 def kiln_pde_system(x, u, dx_dz):
     """
-    x     : Mevcut durum vektörü (State vector)
-    u     : Kontrol vektörü (Control vector)
-    dx_dz : Mekansal türev ∂x/∂z (Spatial derivative)
+    x     : State vector — 1D (N_STATES,) veya 2D (N_cells, N_STATES).
+    dx_dz : Mekansal türev ile aynı şekil.
     """
 
-    # -----------------------------
-    # 1. FLOW FIELD & STRUCTURE
-    # -----------------------------
-    # Hızlar: Fazların fırın içindeki taşınım hızları
-    v_s, v_g = compute_velocities(x, u)
+    x = np.asarray(x, dtype=np.float64)
+    dx_dz_a = np.asarray(dx_dz, dtype=np.float64)
+    singleton = x.ndim == 1
+    if singleton:
+        x = x.reshape(1, -1)
+        dx_dz_a = dx_dz_a.reshape(1, -1)
+    xc = x[0] if x.shape[0] == 1 else x[x.shape[0] // 2]
 
-    # Yapısal dinamikler (Gözeneklilik ve doluluk etkisi)
-    d_epsilon = compute_porosity(x, u)
-    
-    # phi_feed_effect: Besleme hızının fırın doluluğuna (bed depth) etkisi
-    # Basitleştirilmiş lineer ilişki: Besleme arttıkça doluluk artar
-    d_phi = 0.01 * u[IDX_FEED] 
+    v_s, v_g = compute_velocities(xc, u)
 
-    # -----------------------------
-    # 2. PHYSICS TERMS (SOURCE TERMS)
-    # -----------------------------
-    # Vektörize fizik motorundan enerji ve kütle değişimlerini alıyoruz
-    E_terms = energy_terms_vec(x, u)
-    M_terms = mass_terms_vec(x, u)
-    R_terms = compute_reaction_rates(x)
+    d_epsilon = compute_porosity(xc, u)
+    d_phi = 0.01 * u[IDX_FEED]
 
-    # -----------------------------
-    # 3. PDE ASSEMBLY (∂x/∂t = -v * ∂x/∂z + Source)
-    # -----------------------------
-    # zeros_like yerine np.zeros_like kullanarak hızlanıyoruz
+    dE_s, dE_g = energy_terms_vec(x, u)
+    M_mat = mass_terms_vec(x, u)
+    R_full = compute_reaction_rates(x)
+    reaction_vec = np.asarray(R_full[0], dtype=np.float64) if singleton else np.mean(R_full, axis=0)
+
     dx_dt = np.zeros_like(x)
 
-    # --- ENERGY TRANSPORT ---
-    dx_dt[IDX_T_S] = -v_s * dx_dz[IDX_T_S] + E_terms["solid_energy"]
-    dx_dt[IDX_T_G] = -v_g * dx_dz[IDX_T_G] + E_terms["gas_energy"]
+    dx_dt[:, IDX_T_S] = -v_s * dx_dz_a[:, IDX_T_S] + dE_s
+    dx_dt[:, IDX_T_G] = -v_g * dx_dz_a[:, IDX_T_G] + dE_g
 
-    # --- SOLID SPECIES TRANSPORT (Mass Balances) ---
-    # Tüm katı bileşenler v_s hızıyla taşınır
     for idx in SOLID_SPECIES:
-        name = StateIdx(idx).name
-        dx_dt[idx] = -v_s * dx_dz[idx] + M_terms.get(name, 0.0)
+        dx_dt[:, idx] = -v_s * dx_dz_a[:, idx] + M_mat[:, idx]
 
-    # --- GAS SPECIES TRANSPORT ---
-    # Gaz bileşenleri v_g (genellikle negatif) hızıyla taşınır
     for idx in GAS_SPECIES:
-        name = StateIdx(idx).name
-        dx_dt[idx] = -v_g * dx_dz[idx] + M_terms.get(name, 0.0)
+        dx_dt[:, idx] = -v_g * dx_dz_a[:, idx] + M_mat[:, idx]
 
-    # --- STRUCTURAL DYNAMICS ---
-    dx_dt[IDX_PHI]     = d_phi
-    dx_dt[IDX_EPSILON] = d_epsilon + M_terms.get("epsilon", 0.0)
+    dx_dt[:, IDX_PHI] = d_phi
+    deps_col = np.full((x.shape[0],), float(d_epsilon), dtype=np.float64)
+    if M_mat.ndim == 2:
+        deps_col = deps_col + M_mat[:, IDX_EPSILON]
+    dx_dt[:, IDX_EPSILON] = deps_col
+
+    out_dx_dt = dx_dt[0].copy() if singleton else dx_dt
+    mass_dict = {StateIdx(ix).name: float(M_mat[0, ix]) for ix in range(N_STATES)} if singleton else {}
 
     return {
-        "dx_dt": dx_dt,
+        "dx_dt": out_dx_dt,
         "velocities": {"solid": v_s, "gas": v_g},
         "terms": {
-            "reaction": R_terms,
-            "energy": E_terms,
-            "mass": M_terms
-        }
+            "reaction": reaction_vec,
+            "energy": {"solid_energy": float(dE_s[0]), "gas_energy": float(dE_g[0])}
+            if singleton
+            else {"solid_energy": dE_s, "gas_energy": dE_g},
+            "mass": mass_dict if singleton else M_mat,
+        },
     }
 
-# -------------------------------------------------
-# UTILITY
-# -------------------------------------------------
+
 def zeros_like(x):
     """Geriye dönük uyumluluk için, ancak dahili olarak NumPy kullanır."""
     return np.zeros_like(x)

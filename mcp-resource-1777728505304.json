@@ -1,0 +1,29 @@
+{
+  "id": "fuel-intelligence",
+  "url": "https://notebooklm.google.com/notebook/cbec8b4f-139f-4255-a626-576489505ac5",
+  "name": "Fuel Intelligence",
+  "description": "fuel_intelligence projesi için teknik kaynaklar: döner fırın süreç modeli, kinetik, enerji/kütle dengesi, PDE tabanlı simülasyon ve MPC.",
+  "topics": [
+    "fuel_intelligence",
+    "rotary kiln",
+    "process simulation",
+    "reaction kinetics",
+    "model predictive control"
+  ],
+  "content_types": [
+    "documentation",
+    "examples"
+  ],
+  "use_cases": [
+    "fuel_intelligence mimarisi ve fizik modeli soruları",
+    "kiln/simülasyon ve MPC tasarımı"
+  ],
+  "added_at": "2026-05-02T13:09:12.831Z",
+  "last_used": "2026-05-02T13:27:22.531Z",
+  "use_count": 2,
+  "tags": [
+    "fuel_intelligence",
+    "notebooklm"
+  ],
+  "auto_generated": false
+}

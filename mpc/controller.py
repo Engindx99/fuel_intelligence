@@ -14,7 +14,7 @@ class MPCController:
         self.u_min, self.u_max = get_control_constraints()
         self.x_min, self.x_max = get_state_constraints()
 
-        with open(os.path.join("configs", "model_config.yaml"), "r") as f:
+        with open(os.path.join("configs", "model_config.yaml"), "r", encoding="utf-8") as f:
             self.cfg = yaml.safe_load(f)
 
         self.solver = self._build_nlp_solver()

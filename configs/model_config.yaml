@@ -21,26 +21,88 @@ physics:
   c3s_formation:
     # A ve Ea değerleri "Efektif" yaklaşım ile güncellendi:
     # Ea artırılarak reaksiyonun 1150K öncesi üretimi baskılandı.
-    # A artırılarak 1250K+ sıcaklıklardaki verim korundu.
-    A: 1.0e12      # (Kinetik denge için)
-    Ea: 407000.0     # (Efektif Ea bariyeri)
+    # Biraz daha düşük pre-exponential zaman profilinde sert düşük-t→yüksek-T dirseğini yumuşatır.
+    A: 6.5e11
+    Ea: 412000.0
 
   c3a_formation:
-    A: 50000000.0
-    Ea: 120000.0
+    A: 1.25e7
+    Ea: 122000.0
 
   c4af_formation:
-    A: 40000000.0
-    Ea: 115000.0
+    A: 9.5e6
+    Ea: 118000.0
 
 thermal:
   lhv_fuel: 32000000.0
-  h_gs_base: 200.0
+  # Direct gas->solid coupling. Keep low when wall inertia is enabled.
+  # Moderate coupling: extremely high values drive exit flue gas to ~Ts at z=0.
+  # Slightly lower base coupling → nonzero Δ(Tg−Ts) in preheat bands (still exchanged implicitly).
+  h_gs_base: 2200.0
+  # Full coupling along axis (taper caused long low-exchange precalc plateau).
+  h_gs_near_cold_mult: 1.0
+  h_gs_near_cold_width_frac: 0.0
+  # Fuel heat release location:
+  # - boundary: added via hot-end gas inlet enthalpy (burner model in engine)
+  # - distributed: volumetric source in core/physics.py (legacy)
+  fuel_heat_mode: distributed
+  # Normalized axial spread of distributed fuel Gaussian (fraction of kiln length toward hot end).
+  fuel_gaussian_sigma: 0.22
+  # Boundary conditions for the discrete engine (see simulation/engine.py).
+  # Gas flows from z=L -> z=0, so gas inlet temperature is applied at z=L cell.
+  # Kiln inlet meal after precalciner / LP cyclones (~800–980 °C class plants).
+  t_solid_inlet: 1100.0
+  # If true, only species/epsilon are pinned at z=0; Ts evolves (avoids inlet shock plateau).
+  t_solid_inlet_soft_bc: true
+  # Burner / hot-end gas inlet model (thermodynamically consistent).
+  t_air_in: 300.0
+  burner_efficiency: 0.20
+  burner_tau_s: 7200.0
+  burner_t_gas_min: 300.0
+  burner_t_gas_max: 1920.0
+  # Effective gas massflow from fan (kg/s). Maps your "fan" unit to an effective mdot.
+  mdot_gas_base: 20.0
+  mdot_gas_per_fan: 0.05
+  # Solid temperature bounds (engine clip).
+  t_solid_min: 300.0
+  t_solid_max: 1985.0
+  t_gas_max: 2175.0
   enthalpy_calc: 178000.0
   enthalpy_c3s: 13000.0
-  rho_solid: 1600.0
-  cp_solid: 780.0
+  rho_solid: 2000.0
+  # Effective cp for kiln+charge inertia (tune to ~45-60 K/h mean Ts drift).
+  cp_solid: 900.0
   rho_gas: 1.2
   cp_gas: 1050.0
   emissivity: 0.85
   sigma_sb: 5.67e-8
+  # Lumped surrogate: deflate linearized gas–solid radiation so T_g stays hotter than bed.
+  radiation_gas_solid_scale: 0.055
+  # Global multiplier on volumetric interphase k_eff before semi-implicit exchange.
+  interphase_exchange_scale: 0.62
+  # Ambient heat losses (effective volumetric UA, W/(m^3 K)).
+  # These prevent runaway when clipping is removed.
+  ua_g_amb: 125.0
+  ua_s_amb: 56.0
+  # Ek kayıplar: sıcaklık eşiğinin üzerinde lineer bileşen [W/(m³ K) × K_excess].
+  ua_g_super_linear: 32.0
+  superheat_gas_linear_threshold_k: 1825.0
+  ua_s_super_linear: 42.0
+  superheat_solid_linear_threshold_k: 1730.0
+  # Aksiyel gürültülü tasarım için Tg yayılım sürrogatı [m²/s] (yüksek sıcaklıkta baca ile sıkı-uç daha uyumlu olur).
+  gas_axial_thermal_mix_m2_s: 0.34
+  # YAML t_solid_max / t_gas_max sınırlarını son adımda uygula (runaway grafikleri için).
+  enforce_yaml_thermal_caps: true
+  # Effective exotherms for alumino-ferrite skeleton channels (J per kg reacting mixture basis).
+  enthalpy_c3a: 2.85e5
+  enthalpy_c4af: 2.55e5
+  # Wall / refractory thermal inertia (thermodynamically consistent lag).
+  # NOTE: Wall inertia can strongly damp gas temperature along the axis and
+  # make profiles look "flat" unless carefully tuned. Keep disabled by default.
+  wall_enabled: false
+  wall_t_init: 300.0
+  wall_rho_cp: 3.0e7      # J/(m^3 K) heavier refractory / more inertia
+  h_gw: 40.0              # W/(m^3 K) gas -> wall coupling (effective)
+  h_ws: 40.0              # W/(m^3 K) wall -> solid coupling (effective)
+  wall_loss: 10.0         # W/(m^3 K) wall -> ambient linear loss
+  t_amb: 300.0
