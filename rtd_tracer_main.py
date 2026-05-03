@@ -8,26 +8,25 @@ from utils.rtd_tracer import compute_rtd_lagrangian, rtd_histogram
 
 
 def _steady_snapshot(L=60.0, N_CELLS=100, DT=0.04, SIM_HOURS=1.25, log_every_s=120.0):
+    # Aynı global thermal YAML (calibration_reference) — RTD süresi bağımsız.
     sim = KilnSimulation(L, N_CELLS, DT)
-
-    initial_x = create_zero_state(N_CELLS)
-    zs = np.linspace(0.0, L, N_CELLS)
-    initial_x[:, IDX_T_S] = sim._T_s_in
-    tg_cold = float(max(350.0, sim._T_amb + 80.0))
-    tg_hot = float(min(1050.0, sim._T_s_in - 80.0))
-    initial_x[:, IDX_T_G] = tg_cold + (tg_hot - tg_cold) * (zs / L)
-    initial_x[:, IDX_CaCO3] = 0.8
-    initial_x[:, IDX_SiO2] = 0.14
-    initial_x[:, IDX_Al2O3] = 0.04
-    initial_x[:, IDX_Fe2O3] = 0.02
-    initial_x[:, IDX_EPSILON] = 0.4
-    sim.set_initial_condition(initial_x)
 
     u = create_zero_control()
     u[IDX_FUEL] = 16.0
     u[IDX_FAN] = 800.0
     u[IDX_FEED] = 10.0
     u[IDX_REACTOR] = 2.0
+
+    initial_x = create_zero_state(N_CELLS)
+    zs = np.linspace(0.0, L, N_CELLS)
+    initial_x[:, IDX_T_S] = sim._T_s_in
+    initial_x[:, IDX_T_G] = sim.gas_ic_axial_k(u, zs / L)
+    initial_x[:, IDX_CaCO3] = 0.8
+    initial_x[:, IDX_SiO2] = 0.14
+    initial_x[:, IDX_Al2O3] = 0.04
+    initial_x[:, IDX_Fe2O3] = 0.02
+    initial_x[:, IDX_EPSILON] = 0.4
+    sim.set_initial_condition(initial_x)
 
     TOTAL_STEPS = int(SIM_HOURS * 3600 / DT)
     log_every = max(1, int(log_every_s / DT))

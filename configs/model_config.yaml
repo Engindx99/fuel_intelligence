@@ -34,63 +34,103 @@ physics:
     Ea: 118000.0
 
 thermal:
+  # --- Fiziksel öncüller (önce bu aralıklar); tesis hedefi MPC + u ile ---
+  # Nominal referans: visualize_kiln varsayılan u (ör. 16 kg/s yakıt). Motor `sim.t` için saatlik kesme yok.
+  # fuel_heat_ramp_tau_s: Q_fuel erken evre yumuşatması (1-exp(-t/tau)), tüm koşuda geçerli.
+  # velocity_probe_mode: v_s/v_g için epsilon kaynağı (mean_axis = eksen ortalaması).
+  # Ts@z=L: sabit nominal yakıtta plato genelde gaz–katı değişim + UA + baca debisi dengesidir (yakıt kg/s değil).
+  # Aşağıdaki hedefler tasarım bandıdır.
+  calibration_reference:
+    nominal_fuel_kg_s: 16.0
+    target_Ts_at_L_slope_K_per_h_range: [50, 60]
+    long_run_hours: 28.0
+    long_run_target_exit_ts_K: 1750.0
+    notes: "Tesis bandı; lhv_fuel yakıt analizi, burner_eff brülör/yanma dengesi, mdot_g ikincil hava + baca debisi sürrogatı."
+
+  # π (D/2)² [m²]; kiln_geometry.diameter ile tutarlı (MPC hacim ölçeği).
+  kiln_cross_section: 15.904312688413908
+
+  # Alt ısıl değer (LHV) [J/kg] — burada sezgisel ölçekleme yok; tipik aralıklar (kuru/operasyon raporları):
+  # bitüminöz kömür ~24–30 MJ/kg, petrokok ~31–35 MJ/kg, antrasit biraz daha düşük olabilir.
+  # Varsayılan 32 MJ/kg: yüksek kalorili kömür / petrokok sınıfı; tesis yakıt analizine göre değiştirin.
   lhv_fuel: 32000000.0
-  # Direct gas->solid coupling. Keep low when wall inertia is enabled.
-  # Moderate coupling: extremely high values drive exit flue gas to ~Ts at z=0.
-  # Slightly lower base coupling → nonzero Δ(Tg−Ts) in preheat bands (still exchanged implicitly).
-  h_gs_base: 2200.0
-  # Full coupling along axis (taper caused long low-exchange precalc plateau).
-  h_gs_near_cold_mult: 1.0
-  h_gs_near_cold_width_frac: 0.0
+  # Efektif gaz–katı hacimsel katsayı sürrogatı [W/(m³·K)] tabanı; k_eff = interphase_scale×(h_gs+k_rad_linear).
+  h_gs_base: 7000.0
+  # Soğak uç (z≈0): çok agresif çarpanlar Tg≈Ts yapar; 1.0–1.25 tipik.
+  h_gs_near_cold_mult: 1.18
+  h_gs_near_cold_width_frac: 0.20
+  h_gs_exchange_cell0_mult: 1.35
   # Fuel heat release location:
-  # - boundary: added via hot-end gas inlet enthalpy (burner model in engine)
-  # - distributed: volumetric source in core/physics.py (legacy)
-  fuel_heat_mode: distributed
-  # Normalized axial spread of distributed fuel Gaussian (fraction of kiln length toward hot end).
-  fuel_gaussian_sigma: 0.22
+  # - boundary: yakıt entalpisi → sıcak uç Tg_in (brülör dengesi, mdot_g FAN’dan). Uzun trendde yüksek T hedefi için uygundur.
+  # - distributed: hacimsel Q_fuel; sıcak uç Tg girişi t_air_in ile tutarlı (soğuk); nominal yakıtta Ts@L ~800 K platosu sık görülür.
+  fuel_heat_mode: boundary
+  # Yalnızca distributed modda kullanılır (core/physics); boundary’de 0 kabul edilir.
+  # Boundary modda: yakıt ısısının küçük bir kesrini sıcak uçta doğrudan yatağa ver (alev-yatak teması sürrogatı).
+  fuel_heat_direct_to_solid_frac: 0.12
+  # Dağıtık Q_fuel rampası: ölçek = 1 - exp(-t/tau); t motor zamanı [s], tüm koşul boyunca. 0 = anında tam güç.
+  fuel_heat_ramp_tau_s: 3200.0
+  fuel_gaussian_sigma: 0.15
   # Boundary conditions for the discrete engine (see simulation/engine.py).
   # Gas flows from z=L -> z=0, so gas inlet temperature is applied at z=L cell.
-  # Kiln inlet meal after precalciner / LP cyclones (~800–980 °C class plants).
-  t_solid_inlet: 1100.0
+  # Soğak hat / preheat çıkışı meal (~359 K sınıfı ham besleme; fırın içinde ısınır).
+  t_solid_inlet: 359.0
   # If true, only species/epsilon are pinned at z=0; Ts evolves (avoids inlet shock plateau).
   t_solid_inlet_soft_bc: true
   # Burner / hot-end gas inlet model (thermodynamically consistent).
   t_air_in: 300.0
-  burner_efficiency: 0.20
-  burner_tau_s: 7200.0
+  # LHV’den fırın hacmine yararlı ısı (yanma + taşıma sürrogatı); 0.52–0.64 tipik bant.
+  burner_efficiency: 0.66
+  # Sıcak uç Tg_in’in brülör dengesine oturma hızı [s]; düşük → trendde daha erken üst banta yaklaşım.
+  burner_tau_s: 4800.0
   burner_t_gas_min: 300.0
-  burner_t_gas_max: 1920.0
-  # Effective gas massflow from fan (kg/s). Maps your "fan" unit to an effective mdot.
-  mdot_gas_base: 20.0
-  mdot_gas_per_fan: 0.05
+  burner_t_gas_max: 2250.0
+  # Katı eksenel hız ölçeği: v_s ∝ feed / feed_rate_nominal (core/flow.py). Eski exp(-0.0005*feed) oyuncaktı.
+  feed_rate_nominal_kg_s: 10.0
+  # Ek giriş soğutması: z=0 hücrede (T_s_in - Ts) gevşemesi × (feed/feed_rate_nominal). v_s yükünden bağımsız
+  # ek "soğuk meal" debisi sürrogatı [m/s]; 0 = devre dışı (yalnızca v_s×(T_in-T)/dz).
+  inlet_feed_enthalpy_velocity_m_s: 0.002
+  # RPM ↑ → v_s ↑ (daha kısa kalış, daha az ısınma). core/flow.py: v_rotate ∝ rpm * D * packing * feed_scale.
+  # Biraz düşük v_s → daha uzun yatak rezidansı, gazdan daha fazla sensible ısı birikimi.
+  solid_axial_rpm_coeff: 0.0060
+  # Eğim + teğet hızdan küçük ek eksenel kayma katsayısı.
+  solid_axial_slope_coeff: 0.07
+  # Efektif baca/ikincil hava kütlesel debi [kg/s]; fan birimi tesis kalibrasyonuna göre ölçeklenir.
+  mdot_gas_base: 14.5
+  mdot_gas_per_fan: 0.035
+  # v_s / v_g için packing (epsilon): mean_axis = eksen ortalaması (önerilen, uzun süre);
+  # mid_cell = yalnızca N/2 hücre (eski); blend_endcells = (z=0 + z=L)/2.
+  velocity_probe_mode: mean_axis
   # Solid temperature bounds (engine clip).
   t_solid_min: 300.0
   t_solid_max: 1985.0
-  t_gas_max: 2175.0
+  t_gas_max: 2400.0
   enthalpy_calc: 178000.0
   enthalpy_c3s: 13000.0
-  rho_solid: 2000.0
-  # Effective cp for kiln+charge inertia (tune to ~45-60 K/h mean Ts drift).
-  cp_solid: 900.0
+  # Yatak bulk yoğunluk ve katı faz cp (meal/klinker karışımı sürrogatı; oda sıcaklığına yakın taban).
+  rho_solid: 1680.0
+  cp_solid: 880.0
   rho_gas: 1.2
   cp_gas: 1050.0
   emissivity: 0.85
   sigma_sb: 5.67e-8
   # Lumped surrogate: deflate linearized gas–solid radiation so T_g stays hotter than bed.
-  radiation_gas_solid_scale: 0.055
-  # Global multiplier on volumetric interphase k_eff before semi-implicit exchange.
-  interphase_exchange_scale: 0.62
-  # Ambient heat losses (effective volumetric UA, W/(m^3 K)).
-  # These prevent runaway when clipping is removed.
-  ua_g_amb: 125.0
-  ua_s_amb: 56.0
+  radiation_gas_solid_scale: 0.55
+  interphase_exchange_scale: 6.0
+  # Eski visualize/RTD gaz IC offset'i; başlangıç Tg(z) artık engine.gas_ic_axial_k (brülör + T_amb clip).
+  # İhtiyaç halinde yeniden kullanım için saklanır; motor IC bunu okumaz.
+  t_gas_profile_offset_k: 125.0
+  # Kabuk/kaçak sürrogatı [W/(m³·K)]; çok düşük runaway, çok yüksek erken soğuma riski.
+  ua_g_amb: 10.0
+  ua_s_amb: 4.5
   # Ek kayıplar: sıcaklık eşiğinin üzerinde lineer bileşen [W/(m³ K) × K_excess].
   ua_g_super_linear: 32.0
   superheat_gas_linear_threshold_k: 1825.0
   ua_s_super_linear: 42.0
   superheat_solid_linear_threshold_k: 1730.0
   # Aksiyel gürültülü tasarım için Tg yayılım sürrogatı [m²/s] (yüksek sıcaklıkta baca ile sıkı-uç daha uyumlu olur).
-  gas_axial_thermal_mix_m2_s: 0.34
+  # Biraz düşük → soğak uçta Tg'nin Ts altına sarkması azalır (aşırı yatay Tg homojenizasyonu).
+  # Çok yüksek Tg’yi eksende düzleştirip orta bantta Tg<Ts yapıyordu; düşürüldü.
+  gas_axial_thermal_mix_m2_s: 0.18
   # YAML t_solid_max / t_gas_max sınırlarını son adımda uygula (runaway grafikleri için).
   enforce_yaml_thermal_caps: true
   # Effective exotherms for alumino-ferrite skeleton channels (J per kg reacting mixture basis).

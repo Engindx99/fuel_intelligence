@@ -14,6 +14,9 @@ _FLOW_D = float(_g.get("diameter", 4.5))
 _FLOW_RHO_G = float(_t.get("rho_gas", 1.2))
 _MDOT_G_BASE = float(_t.get("mdot_gas_base", 20.0))
 _MDOT_G_PER_FAN = float(_t.get("mdot_gas_per_fan", 0.05))
+_FEED_NOMINAL_KG_S = float(_t.get("feed_rate_nominal_kg_s", 10.0))
+_K_RPM_AX = float(_t.get("solid_axial_rpm_coeff", 0.0105))
+_K_SLOPE_AX = float(_t.get("solid_axial_slope_coeff", 0.07))
 _CROSS_A = np.pi * (_FLOW_D / 2.0) ** 2
 
 
@@ -34,27 +37,33 @@ def v_gas_model(fan_rpm, epsilon):
 
 def v_solid_model(reactor_rpm, feed_rate, epsilon):
     """
-    Düzeltilmiş katı faz eksenel hız modeli (granular flow surrogate).
+    Katı eksenel hız [m/s] — dönüş (RPM), tambur çapı, packing ve besleme ile ölçeklenir.
+
+    Eski `tanh(v_t * slope)` RPM'i fiilen sıfıra yakın bir faktörde bastırıyordu; kontrol çıktıları
+    anlamlı değişmiyordu. Yüksek RPM → daha büyük v_s → daha kısa rezidans → eksende daha az ısınma.
     """
 
     R = _FLOW_D / 2.0
-
-    omega = 2.0 * np.pi * reactor_rpm / 60.0
-
+    rpm = float(max(reactor_rpm, 0.05))
+    omega = 2.0 * np.pi * rpm / 60.0
     v_t = omega * R
 
     theta = float(_g.get("slope", 0.03))
-    slope_effect = np.tan(theta)
+    slope_effect = float(np.tan(theta))
 
     eps = np.clip(np.asarray(epsilon, dtype=np.float64), 0.05, 0.95)
     packing = eps / (eps + 0.3)
 
-    load_effect = np.exp(-0.0005 * feed_rate)
+    feed = float(max(feed_rate, 1e-6))
+    load_factor = feed / (_FEED_NOMINAL_KG_S + 1e-9)
+    load_factor = float(np.clip(load_factor, 0.15, 4.0))
 
-    slip_factor = np.tanh(v_t * slope_effect)
+    # Ana terim: RPM ve çap ile doğrudan ölçek (yatak dönüşü → eksenel taşınım sürrogatı).
+    v_rotate = _K_RPM_AX * rpm * _FLOW_D * packing * load_factor
+    # Eğim + teğet hızdan küçük ek (düşük RPM'de bile sıfırlanmasın diye tanh(1) sabit eğim akışı).
+    v_slope = v_t * slope_effect * packing * load_factor * _K_SLOPE_AX * 0.7615941559557649  # tanh(1)
 
-    v_s = v_t * slope_effect * slip_factor * packing * load_effect
-
+    v_s = v_rotate + v_slope
     return np.clip(v_s, 0.0, 0.25)
 
 

@@ -10,6 +10,7 @@ def run_mpc_digital_twin():
     L = 60.0
     N_CELLS = 100
     DT = 0.04
+    # Thermal params: configs/model_config.yaml (global t; calibration_reference).
     SIM_HOURS = 4.0
     MPC_INTERVAL_SEC = 60.0  # MPC runs every 60s of sim time
     

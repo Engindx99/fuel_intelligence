@@ -128,20 +128,24 @@ class MPCController:
         RHO_CP_G = RHO_G * CP_G
         RHO_CP_S = RHO_S * CP_S
 
-        V_KILN = self.cfg['kiln_geometry']['length'] * self.cfg['thermal']['kiln_cross_section']
-        Q_fuel = u[IDX_FUEL] * LHV * 0.9 / V_KILN # scaled per unit vol
-        
+        th = self.cfg['thermal']
+        V_KILN = self.cfg['kiln_geometry']['length'] * float(th['kiln_cross_section'])
+        burn_eff = float(th.get('burner_efficiency', 0.58))
+        Q_fuel = u[IDX_FUEL] * LHV * burn_eff / V_KILN
+
         # Heat transfer approximation (Convection + Radiation)
-        h_gs = self.cfg['thermal']['h_gs_base']
+        h_gs = float(th['h_gs_base'])
         Q_conv = h_gs * (T_g - T_s)
-        Q_rad = 5.67e-8 * 0.85 * (T_g**4 - T_s**4)
+        sig = float(th.get('sigma_sb', 5.67e-8))
+        eps = float(th.get('emissivity', 0.85))
+        Q_rad = sig * eps * (T_g**4 - T_s**4)
         Q_xfer = Q_conv + Q_rad
 
-        # Advection (Fan effect): 
-        # m_dot_gas * cp_g * (T_in - T_out) / Vol
-        # Approximate m_dot_gas proportional to fan_rpm
-        m_dot_gas = u[IDX_FAN] * 0.05 
-        T_g_inlet = 1200.0
+        # Advection: motor ile aynı mdot sürrogatı (kg/s)
+        m_dot_gas = float(th.get('mdot_gas_base', 18.0)) + float(th.get('mdot_gas_per_fan', 0.044)) * u[IDX_FAN]
+        T_air = float(th.get('t_air_in', 300.0))
+        Tg_cap = float(th.get('burner_t_gas_max', 1920.0))
+        T_g_inlet = T_air + 0.42 * (Tg_cap - T_air)
         Q_adv = m_dot_gas * CP_G * (T_g_inlet - T_g) / V_KILN
 
         # Solid Temperature

@@ -2,11 +2,15 @@ import numpy as np
 import os
 import yaml
 from core.state import *
-from core.physics import energy_terms_vec, mass_terms_vec, heat_exchange_coeff_vec
+from core.physics import energy_terms_vec, mass_terms_vec, heat_exchange_coeff_vec, fuel_ramp_scale_at
 from core.flow import compute_velocities
 from core.correction import mass_drift_correction
 
 class KilnSimulation:
+    """Döküm fırını PDE motoru. Isıl parametreler `configs/model_config.yaml` → `thermal` altında
+    her `step()` için geçerlidir; `sim.t` için saatlik kesme yok. Hızlar `velocity_probe_mode` ile
+    eksen boyunca temsil edilen epsilon üzerinden hesaplanır (yalnızca N/2 hücre değil)."""
+
     def __init__(self, L, N_cells, dt):
         self.L = L
         self.N = N_cells
@@ -27,7 +31,15 @@ class KilnSimulation:
         self._T_air_in = float(thermal.get("t_air_in", 300.0))
         self._lhv = float(thermal.get("lhv_fuel", 3.2e7))
         self._burner_eff = float(thermal.get("burner_efficiency", 0.55))
+        # In boundary fuel mode, optionally route a small fraction of fuel heat
+        # directly to the solid bed at the hot end (flame/bed contact surrogate).
+        # This fraction is also removed from the gas-side burner enthalpy balance
+        # to preserve overall energy accounting.
+        self._fuel_direct_solid_frac = float(
+            np.clip(float(thermal.get("fuel_heat_direct_to_solid_frac", 0.0)), 0.0, 0.3)
+        )
         self._burner_tau = float(thermal.get("burner_tau_s", 7200.0))
+        self._fuel_gaussian_sigma = float(thermal.get("fuel_gaussian_sigma", 0.12))
         self._Tg_min = float(thermal.get("burner_t_gas_min", self._T_air_in))
         self._Tg_max_burner = float(thermal.get("burner_t_gas_max", 2600.0))
         self._mdot_g_base = float(thermal.get("mdot_gas_base", 2.0))
@@ -46,6 +58,7 @@ class KilnSimulation:
         self._rho_cp_s = rho_s * cp_s
         self._rho_cp_g = rho_g * cp_g
         self._cp_g = cp_g
+        self._A_cs = float(thermal.get("kiln_cross_section", np.pi * (4.5 / 2.0) ** 2))
         # Thermodynamically consistent wall / refractory thermal inertia (optional).
         self._wall_on = bool(thermal.get("wall_enabled", False))
         self._wall_rho_cp = float(thermal.get("wall_rho_cp", 1.0e6))
@@ -53,6 +66,10 @@ class KilnSimulation:
         self._h_ws = float(thermal.get("h_ws", 0.0))
         self._wall_loss = float(thermal.get("wall_loss", 0.0))
         self._T_amb = float(thermal.get("t_amb", 300.0))
+        self._feed_nom_kg_s = float(thermal.get("feed_rate_nominal_kg_s", 10.0))
+        self._v_inlet_feed_enthalpy = float(thermal.get("inlet_feed_enthalpy_velocity_m_s", 0.0))
+        # v_s, v_g: compute_velocities hangi hücre(ler)den epsilon (ve packing) okuyacak — tüm t ve tüm eksen.
+        self._velocity_probe_mode = str(thermal.get("velocity_probe_mode", "mean_axis")).lower()
         wall_init = float(thermal.get("wall_t_init", self._T_s_in))
         self.Tw = np.full((N_cells,), wall_init, dtype=np.float64)
         # Burner state (hot-end gas inlet temperature)
@@ -97,11 +114,26 @@ class KilnSimulation:
         self._gas_inlet = row_g[GAS_SPECIES].copy()
         self._phi_inlet = float(row_g[IDX_PHI])
 
+    def _xc_for_velocities(self, X):
+        """Hız modeli için yerel durum satırı: epsilon eksen boyunca temsil edilir (mid ≠ global)."""
+        N = self.N
+        mid = N // 2
+        mode = self._velocity_probe_mode
+        row = X[mid].copy()
+        if mode == "mid_cell":
+            return row
+        if mode == "blend_endcells":
+            row[IDX_EPSILON] = 0.5 * (float(X[0, IDX_EPSILON]) + float(X[N - 1, IDX_EPSILON]))
+            return row
+        # mean_axis: varsayılan — tüm hücrelerde ortalama gözeneklilik (uzun süreli davranış için).
+        row[IDX_EPSILON] = float(np.mean(X[:, IDX_EPSILON]))
+        return row
+
     def _mdot_gas(self, u) -> float:
         md = self._mdot_g_base + self._mdot_g_per_fan * float(u[IDX_FAN])
         return float(max(1e-6, md))
 
-    def _burner_equilibrium_Tg(self, u) -> float:
+    def _burner_equilibrium_Tg(self, u, t=None) -> float:
         """Hot-end gas equilibrium temperature from fuel+air enthalpy balance."""
         # If fuel heat is deposited as a distributed volumetric source (core/physics),
         # keep the hot-end inlet at the air temperature to avoid double-counting.
@@ -109,8 +141,24 @@ class KilnSimulation:
             return float(np.clip(self._T_air_in, self._Tg_min, self._Tg_max_burner))
         mdot_g = self._mdot_gas(u)
         mfuel = float(max(0.0, u[IDX_FUEL]))
-        Tg_eq = self._T_air_in + (self._burner_eff * self._lhv * mfuel) / (mdot_g * (self._cp_g + 1e-12))
+        if t is not None:
+            mfuel *= fuel_ramp_scale_at(t)
+        gas_heat_frac = 1.0 - (self._fuel_direct_solid_frac if self._fuel_heat_mode != "distributed" else 0.0)
+        Tg_eq = self._T_air_in + (gas_heat_frac * self._burner_eff * self._lhv * mfuel) / (mdot_g * (self._cp_g + 1e-12))
         return float(np.clip(Tg_eq, self._Tg_min, self._Tg_max_burner))
+
+    def gas_ic_axial_k(self, u, z_frac, t=None):
+        """Axial gas temperature IC Tg(z): cold end z=0 → ambient clip, hot end z=L → _burner_equilibrium_Tg(u).
+
+        Uses the same burner surrogate and clips as the time-stepper (no script-only offsets).
+        t: opsiyonel; boundary modda rampalı mfuel ile uyum için (ör. t=0 başlangıç).
+        """
+        zf = np.asarray(z_frac, dtype=np.float64)
+        tg_hot = float(self._burner_equilibrium_Tg(u, t))
+        tg_cold = float(np.clip(self._T_amb, self._Tg_min, self._T_g_max))
+        lo = min(tg_cold, tg_hot)
+        hi = max(tg_cold, tg_hot)
+        return lo + (hi - lo) * zf
 
     def step(self, u):
         # Yerel değişkenlere atama (hız için)
@@ -122,8 +170,7 @@ class KilnSimulation:
         # -----------------------------
         # 1. VELOCITIES & DYNAMIC CFL
         # -----------------------------
-        # Orta hücre yerine giriş/çıkış kontrolü daha güvenlidir
-        v_s, v_g = compute_velocities(X[N // 2], u)
+        v_s, v_g = compute_velocities(self._xc_for_velocities(X), u)
         
         max_v = max(abs(v_s), abs(v_g))
         cfl = max_v * dt / dz
@@ -132,8 +179,11 @@ class KilnSimulation:
             dt = 0.8 * dz / (max_v + 1e-12)
             self.dt = dt
 
+        # Adım ortası simülasyon zamanı (rampa + brülör için yumuşak ölçek)
+        t_mid = float(self.t + 0.5 * dt)
+
         # Burner update (hot-end gas inlet temperature)
-        Tg_eq = self._burner_equilibrium_Tg(u)
+        Tg_eq = self._burner_equilibrium_Tg(u, t_mid)
         # First-order lag
         tau = max(1e-6, self._burner_tau)
         self.Tg_in += (dt / tau) * (Tg_eq - self.Tg_in)
@@ -163,7 +213,7 @@ class KilnSimulation:
         # -----------------------------
         # 3. SOURCE TERMS (Vektörize)
         # -----------------------------
-        dE_s, dE_g = energy_terms_vec(X, u)
+        dE_s, dE_g = energy_terms_vec(X, u, t_mid)
         dM = mass_terms_vec(X, u)
 
         # Source-only temperature terms (reaction heats + fuel deposition).
@@ -171,12 +221,31 @@ class KilnSimulation:
         dX[:, IDX_T_G] += dE_g
         dX += dM
 
+        # Boundary mode: route a fraction of fuel heat directly to solids at z=L.
+        if self._fuel_heat_mode != "distributed" and self._fuel_direct_solid_frac > 1e-9:
+            mfuel = float(max(0.0, u[IDX_FUEL]))
+            mfuel *= fuel_ramp_scale_at(t_mid)
+            Q_solid = self._fuel_direct_solid_frac * self._burner_eff * self._lhv * mfuel  # [W]
+            # Spread this solid-side heat over a short hot-end zone (not a single cell),
+            # otherwise profiles show an artificial "needle" at z=L.
+            z = (np.arange(N, dtype=np.float64) + 0.5) / float(N)
+            sig = float(max(getattr(self, "_fuel_gaussian_sigma", 0.12), 0.04))
+            q = np.exp(-np.square((1.0 - z) / sig))
+            q /= (np.sum(q) + 1e-12)
+            cell_vol = self._A_cs * dz
+            dX[:, IDX_T_S] += (Q_solid * q) / (self._rho_cp_s * (cell_vol + 1e-12))
+
         # Solid feed inlet (z=0): missing ghost-cell upwind ⇒ add convective enthalpy
         # influx so hot meal (~t_solid_inlet) is physically carried into the kiln.
         # Without this, cell 0 is advection-starved and equilibrates with cold gas
         # (dead zone + collapsing exitTs / exitTg paradox in counter-current plots).
         if v_s >= 0:
-            dX[0, IDX_T_S] += v_s * (self._T_s_in - X[0, IDX_T_S]) / dz
+            dT_in = self._T_s_in - X[0, IDX_T_S]
+            dX[0, IDX_T_S] += v_s * dT_in / dz
+            if self._v_inlet_feed_enthalpy > 0.0:
+                feed = float(max(0.0, u[IDX_FEED]))
+                feed_scale = feed / (self._feed_nom_kg_s + 1e-12)
+                dX[0, IDX_T_S] += self._v_inlet_feed_enthalpy * feed_scale * dT_in / dz
 
         # -----------------------------
         # 4. EULER UPDATE

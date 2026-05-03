@@ -33,7 +33,7 @@ def kiln_pde_system(x, u, dx_dz):
     d_epsilon = compute_porosity(xc, u)
     d_phi = 0.01 * u[IDX_FEED]
 
-    dE_s, dE_g = energy_terms_vec(x, u)
+    dE_s, dE_g = energy_terms_vec(x, u, t=None)
     M_mat = mass_terms_vec(x, u)
     R_full = compute_reaction_rates(x)
     reaction_vec = np.asarray(R_full[0], dtype=np.float64) if singleton else np.mean(R_full, axis=0)

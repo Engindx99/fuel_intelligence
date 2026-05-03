@@ -2,7 +2,7 @@ import numpy as np
 import yaml
 import os
 
-from core.state import StateIdx, N_STATES, SOLID_SPECIES, GAS_SPECIES, IDX_REACTOR
+from core.state import StateIdx, N_STATES, SOLID_SPECIES, GAS_SPECIES
 from core.kinetics import compute_reaction_rates, dX_kin
 
 # -------------------------------------------------
@@ -32,6 +32,7 @@ _sigma = cfg["thermal"]["sigma_sb"]
 _dH_calc = cfg["thermal"]["enthalpy_calc"]
 _dH_c3s = cfg["thermal"]["enthalpy_c3s"]
 _fuel_heat_mode = str(cfg["thermal"].get("fuel_heat_mode", "distributed")).lower()
+_fuel_heat_ramp_tau_s = float(cfg["thermal"].get("fuel_heat_ramp_tau_s", 0.0))
 # Burner efficiency is used to scale fuel heat release in distributed mode.
 _burner_eff = float(cfg["thermal"].get("burner_efficiency", 1.0))
 _T_amb = float(cfg["thermal"].get("t_amb", 300.0))
@@ -55,6 +56,11 @@ _h_gs_near_cold_width_frac = float(cfg["thermal"].get("h_gs_near_cold_width_frac
 # collapsing Tg≈Ts each sub-step (unphysical for kiln flame vs bed ΔT ~ 150–450 K bands).
 _rad_gs_scale = float(cfg["thermal"].get("radiation_gas_solid_scale", 1.0))
 _interphase_exchange_scale = float(cfg["thermal"].get("interphase_exchange_scale", 1.0))
+_h_gs_exchange_cell0_mult = float(cfg["thermal"].get("h_gs_exchange_cell0_mult", 1.0))
+# distributed modda Q_fuel'un bu kesri doğrudan katı kaynağı (alev–yatak/partikül sürrogatı); [0,0.3].
+_fuel_direct_solid_frac = float(
+    np.clip(float(cfg["thermal"].get("fuel_heat_direct_to_solid_frac", 0.0)), 0.0, 0.3)
+)
 
 _geom = cfg["kiln_geometry"]
 _D = float(_geom["diameter"])
@@ -68,7 +74,14 @@ _kiln_vol = _A_cs * _L
 # -------------------------------------------------
 # ENERGY DYNAMICS
 # -------------------------------------------------
-def energy_terms_vec(X, u):
+def fuel_ramp_scale_at(t):
+    """Yakıt ısı rampası [0,1); t simülasyon zamanı [s], tau>0 iken tüm t boyunca uygulanır; tau=0 → 1."""
+    if _fuel_heat_ramp_tau_s < 1e-9:
+        return 1.0
+    return float(1.0 - np.exp(-max(0.0, float(t)) / _fuel_heat_ramp_tau_s))
+
+
+def energy_terms_vec(X, u, t=None):
     X = np.asarray(X, dtype=np.float64)
     N = X.shape[0]
     dz = _L / N
@@ -104,8 +117,14 @@ def energy_terms_vec(X, u):
         q_dist = np.exp(-np.square((1.0 - z) / sig))
         q_dist /= (np.sum(q_dist) / N + 1e-12)
         Q_fuel = (_burner_eff * fuel_rate * _lhv) * q_dist / _kiln_vol
+        if _fuel_heat_ramp_tau_s > 1e-9 and t is not None:
+            Q_fuel = Q_fuel * fuel_ramp_scale_at(t)
+        f_s = _fuel_direct_solid_frac
+        Q_fuel_s = Q_fuel * f_s
+        Q_fuel_g = Q_fuel * (1.0 - f_s)
     else:
-        Q_fuel = 0.0
+        Q_fuel_g = 0.0
+        Q_fuel_s = 0.0
 
     # Not: Bu fonksiyon yalnızca SOURCE TERMS üretmelidir.
     # Adveksiyon (uzaysal taşınım) `simulation/engine.py` içinde zaten uygulanıyor;
@@ -122,8 +141,12 @@ def energy_terms_vec(X, u):
     Q_loss_s = Q_loss_s + _ua_s_sup * np.maximum(Ts_c - _thr_s_sup, 0.0)
     Q_loss_g = Q_loss_g + _ua_g_sup * np.maximum(Tg_c - _thr_g_sup, 0.0)
 
-    solid_dT = (-Q_rxn - Q_loss_s) / (_rho_cp_s + 1e-6)
-    gas_dT = (Q_fuel - Q_loss_g) / (_rho_cp_g + 1e-6)
+    if _fuel_heat_mode == "distributed":
+        solid_dT = (-Q_rxn - Q_loss_s + Q_fuel_s) / (_rho_cp_s + 1e-6)
+        gas_dT = (Q_fuel_g - Q_loss_g) / (_rho_cp_g + 1e-6)
+    else:
+        solid_dT = (-Q_rxn - Q_loss_s) / (_rho_cp_s + 1e-6)
+        gas_dT = (Q_fuel_g - Q_loss_g) / (_rho_cp_g + 1e-6)
 
     return solid_dT, gas_dT
 
@@ -156,14 +179,25 @@ def heat_exchange_coeff_vec(X: np.ndarray) -> np.ndarray:
 
     k_eff = _interphase_exchange_scale * (h_gs + k_rad)
 
-    # Axial tapering near cold end (same factor as previously applied to Q_xfer)
+    # Axial tapering near cold end (z_norm small): mult<1 weakens exchange in preheat;
+    # mult>1 strengthens it (fixes Tg<Ts pinch when YAML used mult>1 but old code path never ran).
     z_centers = (np.arange(N, dtype=np.float64) + 0.5) * dz
     z_norm = np.clip(z_centers / (_L + 1e-12), 0.0, 1.0)
-    if _h_gs_near_cold_width_frac > 1e-9 and (_h_gs_near_cold_mult + 1e-12) < 1.0:
+    if _h_gs_near_cold_width_frac > 1e-9:
         ramp = np.clip(z_norm / max(_h_gs_near_cold_width_frac, 1e-9), 0.0, 1.0)
         blend = 0.5 * (1.0 - np.cos(np.pi * ramp))
-        fac = _h_gs_near_cold_mult + (1.0 - _h_gs_near_cold_mult) * blend
+        m = _h_gs_near_cold_mult
+        if m < 1.0:
+            fac = m + (1.0 - m) * blend
+        elif m > 1.0:
+            fac = 1.0 + (m - 1.0) * (1.0 - blend)
+        else:
+            fac = 1.0
         k_eff = fac * k_eff
+
+    if abs(_h_gs_exchange_cell0_mult - 1.0) > 1e-9:
+        k_eff = np.array(k_eff, dtype=np.float64, copy=True)
+        k_eff[0] *= _h_gs_exchange_cell0_mult
 
     return k_eff
 
@@ -175,7 +209,11 @@ def mass_terms_vec(X, u):
     N = X.shape[0]
     # Kinetik reaksiyon hızları
     r = compute_reaction_rates(X, T=X[:, StateIdx.T_S])
-    dX_reac = dX_kin(r) / (_rho_s + 1e-9)
+    # Species in `X` are modeled as **mass fractions** (dimensionless) per control volume.
+    # Therefore kinetic rates returned by `compute_reaction_rates` are in 1/s and must be
+    # applied directly as d(mass-fraction)/dt. Dividing by bulk density would incorrectly
+    # slow all chemistry by ~O(1e3) and can make CaCO3 consumption appear "stuck".
+    dX_reac = dX_kin(r)
     # Not: Adveksiyon `simulation/engine.py` içinde uygulanıyor; burada sadece reaksiyon
     # ve yerel kaynaklar (örn. porozite) dönülür.
     dC = dX_reac
@@ -197,7 +235,7 @@ def calculate_vs(rpm):
     return (rpm * _D * slope) / (0.19 * _L + 1e-6)
 
 def energy_terms(x, u):
-    s_dt, g_dt = energy_terms_vec(x, u)
+    s_dt, g_dt = energy_terms_vec(x, u, t=None)
     return {"solid_energy": float(s_dt[0]), "gas_energy": float(g_dt[0])}
 
 def mass_terms(x, u):

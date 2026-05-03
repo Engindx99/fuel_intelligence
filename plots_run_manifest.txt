@@ -1,2 +1,2 @@
-Fuel Intelligence | SIM_HOURS=8.0 | N_CELLS=100 | DT=0.05 | model_config.sha256[1b115d40aef95e05] | fuel_mode=distributed | generated 2026-05-02 23:13:29 local
+Fuel Intelligence | sim_hours=10.0 | N_CELLS=100 | dt_init=0.05 | dt_last=0.05 | steps=720001 | fuel_kg_s=16.0 | model_config.sha256[83a4edf3a9a5fa28] | fuel_mode=boundary | generated 2026-05-03 19:06:23 local
 Outputs: kiln_temp_profile, kiln_temp_trend, kiln_chem_*, kiln_clinker_quality.png
