@@ -16,7 +16,6 @@ def run_digital_twin():
     L = 60.0
     N_CELLS = 100
     DT = 0.04 # Fiziksel kararlılık için ideal adım
-    # Isıl sürrogate model_config.yaml thermal; tüm sim süresi için geçerli (calibration_reference).
     SIM_HOURS = 4.0
     LOG_EVERY_MINUTES = 10  
 
