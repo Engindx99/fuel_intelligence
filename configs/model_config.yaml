@@ -3,7 +3,7 @@ kiln:
   length: 60.0
   diameter: 3.5
   slope: 0.03
-  rpm: 1.0             # Kontrol: Düşük RPM = Daha uzun kalış süresi = Daha iyi ısınma
+  rpm: 2.0             # Kontrol: Düşük RPM = Daha uzun kalış süresi = Daha iyi ısınma
   nodes: 100
   filling_degree: 0.10
 
@@ -27,18 +27,18 @@ kinetics:
 gas:
   # KONTROL DEĞİŞKENLERİ (Simulation tarafından okunur)
   fuel_rate: 16    # kg/s (Isıl kazancı 50K/saat üzerine çıkarmak için artırıldı)
-  fan_rate: 850.0  # RPM (Hava debisini 8.5 kg/s seviyesinde tutacak değer)
+  fan_rate: 800.0  # RPM (Hava debisini 8.5 kg/s seviyesinde tutacak değer)
   
   # FİZİKSEL HESAPLAMA PARAMETRELERİ
   flow_rate: 8.5       # kg/s (16.0'dan düşürüldü; gazın ısıyı malzemeye bırakması için gereken süre sağlandı)
   temp_inlet: 2000.0   # K (Yakıt artışına bağlı olarak potansiyel alev sıcaklığı)
   cp_g: 1250.0         # Yanma gazları için güncellendi
-  h_gs: 1.0           # Konveksiyon katsayısı (Isı geçişini zorlamak için artırıldı)
-  emissivity_g: 0.30   # Radyasyon gücü (1750K hedefi için gazın radyasyon etkisi artırıldı)
+  h_gs: 400.0           # Konveksiyon katsayısı (Isı geçişini zorlamak için artırıldı)
+  emissivity_g: 0.85   # Radyasyon gücü (1750K hedefi için gazın radyasyon etkisi artırıldı)
 
 # Numerical & Solver Controls
 solver:
-  dt: 0.1
+  dt: 0.05
   t_final: 108000      # 30 saatlik tam kapasite analiz
   tolerance: 1e-4
   
