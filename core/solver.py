@@ -12,12 +12,12 @@ def _numba_step_core(N, Ts, Tg, X, m_CaO, m_SiO2, m_C2S, rho_g, dt, dz, v_s, m_d
     """
     rates = np.zeros((3, N))
     
-    # Reaksiyon Maskeleri
+    # Reaksiyon Maskeleri: Fiziksel limitlerde (hammadde bittiğinde) reaksiyonu durdurur
     mask_calc = (Ts >= T_min_vec[0]) & (X < 1.0)
     mask_c2s  = (Ts >= T_min_vec[1]) & (m_CaO > 0.001) & (m_SiO2 > 0.001)
     mask_c3s  = (Ts >= T_min_vec[2]) & (m_C2S > 0.001) & (m_CaO > 0.001)
 
-    # Arrhenius Hız Denklemleri (Sayısal kararlılık için limitli)
+    # Arrhenius Hız Denklemleri
     k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts))
     rates[0, mask_calc] = np.minimum(k_calc[mask_calc] * (1.0 - X[mask_calc]), 0.01)
 
@@ -120,45 +120,47 @@ class KilnSolver:
             self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min
         )
 
-        # State Güncelleme
+        # --- DURUM GÜNCELLEME ---
         self.state.X  += rates[0] * dt_val
         self.state.Ts += dTs * dt_val
         self.state.Tg += dTg * dt_val
         
-        # --- STOİKİOMETRİK KÜTLE DENGESİ (REVISED) ---
+        # --- STOİKİOMETRİK KÜTLE DENGESİ (FINAL REVISION) ---
         c0 = self.cfg['raw_meal_composition']
+        CO2_LOSS_FACTOR = 0.44 # CaCO3 kütlesinin uçucu CO2 oranı
         
-        # 1. Ana Faz Entegrasyonu
+        # 1. Faz Entegrasyonu
         self.state.m_C2S += rates[1] * dt_val
         self.state.m_C3S += rates[2] * dt_val
         
-        # 2. CaCO3 ve Yan Fazların Stoikiometrik Limitlenmesi
-        self.state.m_CaCO3 = c0['CaCO3'] * (1.0 - self.state.X)
+        # 2. Hammadde Stok Kontrolü ve Yan Fazlar
+        self.state.m_CaCO3 = np.maximum(0.0, c0['CaCO3'] * (1.0 - self.state.X))
         
         sinter_mask = self.state.Ts > 1530.0 
-        # C3A ve C4AF artış hızı doygunluğa (hammadde limitine) yaklaştıkça yavaşlatılmalı
-        # Al2O3 * 2.65 ~= C3A stoikiometrik limiti, Fe2O3 * 3.04 ~= C4AF limiti
         self.state.m_C3A[sinter_mask] = np.minimum(self.state.m_C3A[sinter_mask] + 0.05 * dt_val, c0['Al2O3'] * 2.6)
         self.state.m_C4AF[sinter_mask] = np.minimum(self.state.m_C4AF[sinter_mask] + 0.05 * dt_val, c0['Fe2O3'] * 3.0)
+
+        # 3. Toplam Katı Kütlesi (Grafikteki siyah çizgi zıplamasını düzeltir)
+        # Sadece CO2 kaybı kütleyi azaltır, klinkerleşme kütleyi korur.
+        self.state.total_mass = 1.0 - (self.state.X * c0['CaCO3'] * CO2_LOSS_FACTOR)
         
-        # 3. CaO ve SiO2 Dengesi (Tüketimlerin Düşülmesi)
+        # 4. CaO ve SiO2 Dengesi (Net Tüketim Hesabı)
         produced_CaO = self.state.X * c0['CaCO3'] * self.MW_CAO_RATIO
-        # Tüketilen CaO: C2S(%65), C3S(%25), C3A(%55), C4AF(%46) yaklaşımıyla
-        consumed_CaO = (self.state.m_C2S * 0.65) + (self.state.m_C3S * 0.25) + \
-                       (self.state.m_C3A * 0.55) + (self.state.m_C4AF * 0.46)
+        consumed_CaO = (self.state.m_C2S * 0.651) + (self.state.m_C3S * 0.737) + \
+                       (self.state.m_C3A * 0.623) + (self.state.m_C4AF * 0.461)
         
         self.state.m_CaO = np.maximum(0.0, produced_CaO - consumed_CaO)
-        self.state.m_SiO2 = np.maximum(0.0, c0['SiO2'] - (self.state.m_C2S * 0.35))
+        self.state.m_SiO2 = np.maximum(0.0, c0['SiO2'] - (self.state.m_C2S * 0.349) - (self.state.m_C3S * 0.263))
 
-        # --- Fiziksel Taşınım ve Stabilite ---
+        # --- Fiziksel Taşınım (Flow) ---
         flow_factor = min(1.0, v_s * dt_val / self.dz)
-        phases = ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
+        phases = ['m_SiO2', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X', 'total_mass']
         for p in phases:
             arr = getattr(self.state, p)
             arr[1:] += flow_factor * (arr[:-1] - arr[1:])
-            # Klinker fazları için gerçekçi üst limitler (C3S baskın fazdır)
-            limit = 0.85 if p == 'm_C3S' else 0.4
-            setattr(self.state, p, np.clip(arr, 0.0, limit if p in phases[4:-1] else 1.0))
+            # Klinker fazları için doyum limitleri
+            limit = 0.85 if p == 'm_C3S' else 0.4 if p in ['m_C2S', 'm_C3A', 'm_C4AF'] else 1.0
+            setattr(self.state, p, np.clip(arr, 0.0, limit))
 
         # Sınır Koşulları
         self.state.Ts[0] = self._safe_f(self.cfg['material']['temp_inlet'])
