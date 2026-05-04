@@ -20,15 +20,15 @@ def plot_kiln_results(z, Ts, Tg, X, title="Rotary Kiln Calcination Profile"):
     Tg = np.array(Tg, dtype=float)
     X = np.array(X, dtype=float)
 
-    line1 = ax1.plot(z, Tg, 'r-', linewidth=2.5, label='Gas Temp (Tg) [Flame End -> Feed]')
-    line2 = ax1.plot(z, Ts, 'b-', linewidth=2.5, label='Solid Temp (Ts) [Feed -> Discharge]')
+    line1 = ax1.plot(z, Tg, 'r-', linewidth=1.0, label='Gas Temp (Tg) [Flame End -> Feed]')
+    line2 = ax1.plot(z, Ts, 'b-', linewidth=1.0, label='Solid Temp (Ts) [Feed -> Discharge]')
     
     ax1.tick_params(axis='y', labelcolor='tab:red')
     ax1.grid(True, which='both', linestyle=':', alpha=0.6)
 
     ax2 = ax1.twinx()
     ax2.set_ylabel('Conversion (X) [0-1]', color='tab:green', fontsize=12)
-    line3 = ax2.plot(z, X, 'g--', linewidth=2, label='CaCO3 Conversion (X)')
+    line3 = ax2.plot(z, X, 'g--', linewidth=1.0, label='CaCO3 Conversion (X)')
     
     ax2.tick_params(axis='y', labelcolor='tab:green')
     ax2.set_ylim(-0.02, 1.02)

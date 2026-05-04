@@ -1,20 +1,25 @@
-# transport.py - Kiln Simulation Component
 import numpy as np
 
 class TransportModel:
     def __init__(self, config):
+        # Statik geometrik parametreler
+        self.cfg = config
         self.L = config['kiln']['length']
         self.D = config['kiln']['diameter']
         self.S = config['kiln']['slope']
-        self.rpm = config['kiln']['rpm']
 
     def calculate_solid_velocity(self):
         """
         Sullivan-Friedman Denklemi: Katı faz eksenel hızı (m/s)
+        Dinamik RPM okuması yapar.
         """
-        # v = (1.77 * D * rpm * S) / (sin(theta)) - basitleştirilmiş form
-        v_s = (0.19 * self.D * self.rpm * self.S) / 60.0 # m/s
-        return v_s
+        # Güncel RPM değerini çek (Kontrolcü tarafından değiştirilmiş olabilir)
+        current_rpm = self.cfg['kiln']['rpm']
+        if isinstance(current_rpm, list): current_rpm = current_rpm[0]
+        
+        # v_s (m/s) hesabı
+        v_s = (0.19 * self.D * float(current_rpm) * self.S) / 60.0 
+        return max(1e-4, v_s) # Bölme hatası için alt limit
 
     def get_residence_time(self):
         return self.L / self.calculate_solid_velocity()
