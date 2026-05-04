@@ -3,7 +3,7 @@ kiln:
   length: 60.0
   diameter: 3.5
   slope: 0.03
-  rpm: 2.0             # Kontrol: Düşük RPM = Daha uzun kalış süresi = Daha iyi ısınma
+  rpm: 1.0             # Kontrol: Düşük RPM = Daha uzun kalış süresi = Daha iyi ısınma
   nodes: 100
   filling_degree: 0.10
 
