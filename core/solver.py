@@ -134,5 +134,5 @@ class KilnSolver:
         self.state.Tg[-1] = self._safe_f(self.cfg['gas']['temp_inlet'])
         
         self.state.X = np.clip(self.state.X, 0.0, 1.0)
-        self.state.Ts = np.clip(self.state.Ts, 300.0, 1950.0)
+        self.state.Ts = np.clip(self.state.Ts, 300.0, 2000.0)
         self.state.Tg = np.clip(self.state.Tg, 300.0, 2600.0)

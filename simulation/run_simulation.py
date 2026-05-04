@@ -62,7 +62,7 @@ def main():
     exit_tg_history = []
 
     print("\n" + "="*60)
-    print(f"🔥 FUEL INTELLIGENCE - Simülasyon ve Görselleştirme Başlatıldı")
+    print(f"--FUEL INTELLIGENCE-- ")
     print("="*60 + "\n")
 
     start_wall_time = time.time()

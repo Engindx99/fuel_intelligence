@@ -43,5 +43,5 @@ solver:
   tolerance: 1e-4
   
   # SAYISAL SINIRLAR (Clipping Engelleri)
-  max_temp_s: 1950.0   # 1600K "takılma" sorununu çözen kritik sınır
+  max_temp_s: 2000.0   # 1600K "takılma" sorununu çözen kritik sınır
   max_temp_g: 2700.0
