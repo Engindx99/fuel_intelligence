@@ -17,23 +17,36 @@ material:
 
 # Reaction Kinetics
 kinetics:
+  # Kalsinasyon (CaCO3 -> CaO)
   k0: 1.8e6
   Ea: 2.2e5
   R: 8.314
   T_min_rxn: 1073.0    # 800°C civarı kalsinasyon başlangıcı
   dH: 1.78e6           # Endotermik reaksiyon enerjisi
 
+  # Belit (C2S) Oluşumu (2CaO + SiO2 -> C2S)
+  k0_c2s: 1.5e6        
+  Ea_c2s: 1.8e5        
+  T_min_c2s: 1100.0    # C2S oluşum başlangıcı (K)
+  dH_c2s: -5.0e5       # J/kg (Ekzotermik - Isı veren)
+
+  # Alit (C3S) Oluşumu (C2S + CaO -> C3S)
+  k0_c3s: 1.3e6        
+  Ea_c3s: 2.8e5        
+  T_min_c3s: 1450.0    # Sinterleşme ve C3S başlangıcı (K)
+  dH_c3s: -1.2e5       # J/kg (Ekzotermik - Isı veren)
+
 # Gas Phase (Dinamik Kontrol Blokları)
 gas:
   # KONTROL DEĞİŞKENLERİ (Simulation tarafından okunur)
-  fuel_rate: 16    # kg/s (Isıl kazancı 50K/saat üzerine çıkarmak için artırıldı)
-  fan_rate: 800.0  # RPM (Hava debisini 8.5 kg/s seviyesinde tutacak değer)
+  fuel_rate: 16.4        # kg/s (Isıl kazancı 50K/saat üzerine çıkarmak için artırıldı)
+  fan_rate: 800.0      # RPM (Hava debisini 8.5 kg/s seviyesinde tutacak değer)
   
   # FİZİKSEL HESAPLAMA PARAMETRELERİ
-  flow_rate: 8.5       # kg/s (16.0'dan düşürüldü; gazın ısıyı malzemeye bırakması için gereken süre sağlandı)
+  flow_rate: 8.5       # kg/s (Gazın ısıyı malzemeye bırakması için gereken süre sağlandı)
   temp_inlet: 2000.0   # K (Yakıt artışına bağlı olarak potansiyel alev sıcaklığı)
   cp_g: 1250.0         # Yanma gazları için güncellendi
-  h_gs: 400.0           # Konveksiyon katsayısı (Isı geçişini zorlamak için artırıldı)
+  h_gs: 400.0          # Konveksiyon katsayısı (Isı geçişini zorlamak için artırıldı)
   emissivity_g: 0.85   # Radyasyon gücü (1750K hedefi için gazın radyasyon etkisi artırıldı)
 
 # Numerical & Solver Controls
@@ -45,3 +58,14 @@ solver:
   # SAYISAL SINIRLAR (Clipping Engelleri)
   max_temp_s: 2000.0   # 1600K "takılma" sorununu çözen kritik sınır
   max_temp_g: 2700.0
+
+# --- SİSTEM KONTROL VE FAN PARAMETRELERİ (YENİ) ---
+fan_rate_current: 800.0 # Dinamik fan kontrolü için referans
+
+# --- MALZEME KOMPOZİSYONU (YENİ) ---
+# Giriş hammadde (raw meal) kütle oranları
+raw_meal_composition:
+  CaCO3: 0.78
+  SiO2: 0.14
+  Al2O3: 0.05
+  Fe2O3: 0.03

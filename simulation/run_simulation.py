@@ -39,24 +39,36 @@ def main():
     dt = float(config['solver']['dt'])
     
     # Girişler
-    fuel_rate = float(config['gas'].get('fuel_rate', 0.65))
-    fan_rate  = float(config['gas'].get('fan_rate', 1200.0))
-    kiln_rpm  = float(config['kiln'].get('rpm', 1.2))
+    fuel_rate = float(config['gas'].get('fuel_rate', 16.0))
+    fan_rate  = float(config['gas'].get('fan_rate', 800.0))
+    kiln_rpm  = float(config['kiln'].get('rpm', 2.0))
     feed_rate = float(config['material'].get('feed_rate', 10.0))
 
-    print(f" Simülasyon Başladı: {t_final/3600:.1f} saatlik operasyon...")
+    print(f"\n[SİMÜLASYON BAŞLADI] Hedef: {t_final/3600:.1f} saat")
+    print("-" * 110)
+    # Header formatı: Zaman | Sıcaklık | Kalsinasyon | Serbest Kireç | Klinker Fazları
+    header = f"{'Saat':>6} | {'Ts_out':>8} | {'X':>5} | {'CaO':>6} | {'SiO2':>6} | {'C2S':>6} | {'C3S':>6} | {'C3A':>6} | {'C4AF':>6}"
+    print(header)
+    print("-" * 110)
 
     # 4. Simülasyon Döngüsü
     start_wall_time = time.time()
     while t < t_final:
         solver.solve_step(dt=dt, fuel_rate=fuel_rate, feed_rate=feed_rate, kiln_rpm=kiln_rpm, fan_rate=fan_rate)
         t += dt
+        
+        # Her 10 dakikada bir detaylı log bas (600 saniye)
         if int(t) % 600 == 0 and (t - dt) < int(t):
-            print(f" {t/3600:5.1f}h | Ts_out: {solver.state.Ts[-1]:6.1f}K | CaO_out: {solver.state.m_CaO[-1]:.3f}", flush=True)
+            s = solver.state
+            log_line = (f"{t/3600:6.1f}h | {s.Ts[-1]:8.1f}K | {s.X[-1]:5.3f} | {s.m_CaO[-1]:6.3f} | "
+                        f"{s.m_SiO2[-1]:6.3f} | {s.m_C2S[-1]:6.3f} | {s.m_C3S[-1]:6.3f} | "
+                        f"{s.m_C3A[-1]:6.3f} | {s.m_C4AF[-1]:6.3f}")
+            print(log_line, flush=True)
 
-    print(f"\n Tamamlandı. Süre: {time.time() - start_wall_time:.2f} s")
+    print("-" * 110)
+    print(f"Tamamlandı. Toplam Simülasyon Süresi: {time.time() - start_wall_time:.2f} s\n")
 
-    # --- GÖRSELLEŞTİRME (İKİ AYRI PENCERE) ---
+    # --- GÖRSELLEŞTİRME ---
     z_axis = np.linspace(0, float(config['kiln']['length']), solver.state.N)
 
     # WINDOW 1: SICAKLIK PROFİLLERİ
@@ -69,32 +81,36 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.legend()
 
-    # WINDOW 2: GİRDİ VE ÜRÜNLER (KÜTLE DENGESİ)
-    plt.figure("Window 2: Material Transformation", figsize=(10, 6))
+    # WINDOW 2: ANA MALZEME DÖNÜŞÜMÜ
+    plt.figure("Window 2: Calcination & Basic Oxides", figsize=(10, 6))
+    plt.plot(z_axis, solver.state.m_CaCO3, color='gray', label='CaCO3', linewidth=1.0)
+    plt.plot(z_axis, solver.state.m_CaO, color='orange', label='Free CaO', linewidth=1.0)
+    plt.plot(z_axis, solver.state.m_SiO2, color='blue', label='SiO2', linewidth=1.0, alpha=0.6)
     
-    # Toplam kütleyi hesaplayalım (CO2 kaybını görmek için)
-    m_total = (solver.state.m_CaCO3 + solver.state.m_CaO + 
-               solver.state.m_SiO2 + solver.state.m_Al2O3 + solver.state.m_Fe2O3)
-
-    plt.stackplot(z_axis, 
-                  solver.state.m_CaO, 
-                  solver.state.m_CaCO3, 
-                  solver.state.m_SiO2 + solver.state.m_Al2O3 + solver.state.m_Fe2O3,
-                  labels=['Product (CaO)', 'Raw (CaCO3)', 'Inerts (SiO2+Al2O3+Fe2O3)'],
-                  colors=['#2ecc71', '#95a5a6', '#34495e'],
-                  alpha=0.8)
+    m_total = (solver.state.m_CaCO3 + solver.state.m_CaO + solver.state.m_SiO2 + 
+               solver.state.m_Al2O3 + solver.state.m_Fe2O3 + solver.state.m_C2S + 
+               solver.state.m_C3S + solver.state.m_C3A + solver.state.m_C4AF)
     
-    # Toplam kütle çizgisini ekle (CO2 kaybını vurgular)
-    plt.plot(z_axis, m_total, 'k:', label='Total Solid Mass (shows CO2 loss)', linewidth=1.0)
-    
-    plt.title("Mass Composition Along the Kiln")
+    plt.plot(z_axis, m_total, 'k:', label='Total Solid Mass (CO2 Loss)', linewidth=1.0)
+    plt.title("Primary Reactants and CO2 Loss Profile")
     plt.xlabel("Kiln Length (m)")
     plt.ylabel("Mass Fraction")
-    plt.ylim(0, 1.05)
-    plt.legend(loc='lower left')
+    plt.legend(loc='best')
     plt.grid(True, alpha=0.2)
 
-    print(" Pencereler açılıyor...")
+    # WINDOW 3: KLİNKER FAZLARI
+    plt.figure("Window 3: Clinker Phases (Bogue)", figsize=(10, 6))
+    plt.plot(z_axis, solver.state.m_C2S, 'c-', label='Belite (C2S)', linewidth=1.0)
+    plt.plot(z_axis, solver.state.m_C3S, 'm-', label='Alite (C3S)', linewidth=1.0)
+    plt.plot(z_axis, solver.state.m_C3A, 'y-', label='C3A', linewidth=1.0)
+    plt.plot(z_axis, solver.state.m_C4AF, 'g-', label='C4AF', linewidth=1.0)
+    plt.title("Clinker Phase Formation Along the Kiln")
+    plt.xlabel("Kiln Length (m)")
+    plt.ylabel("Mass Fraction")
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.2)
+
+    print("Görselleştirme pencereleri açılıyor...")
     plt.show()
 
 if __name__ == "__main__":
