@@ -30,10 +30,10 @@ def get_state_constraints():
 
     # Temperature Limits (Kelvin)
     x_min[IDX_T_S] = 300.0    # Solid minimum (Ambient)
-    x_max[IDX_T_S] = 1800.0   # Artırıldı: Klinkerleşme için daha yüksek pay
+   # x_max[IDX_T_S] = 1800.0   # Artırıldı: Klinkerleşme için daha yüksek pay
     
-    x_min[IDX_T_G] = 300.0    # Gas minimum
-    x_max[IDX_T_G] = 2600.0   # Artırıldı: Yanma bölgesi esnekliği
+    x_min[IDX_T_G] = 500.0    # Gas minimum
+    #x_max[IDX_T_G] = 2600.0   # Artırıldı: Yanma bölgesi esnekliği
 
     # Species Limits (Normalized concentration 0.0 - 1.0)
     x_max[IDX_CaCO3 : IDX_C4AF + 1] = 1.0

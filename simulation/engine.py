@@ -33,8 +33,8 @@ class KilnSimulation:
         self._mdot_g_base = float(thermal.get("mdot_gas_base", 2.0))
         self._mdot_g_per_fan = float(thermal.get("mdot_gas_per_fan", 0.002))
         self._T_s_min = float(thermal.get("t_solid_min", 300.0))
-        self._T_s_max = float(thermal.get("t_solid_max", 1800.0))
-        self._T_g_max = float(thermal.get("t_gas_max", 3000.0))
+        self._T_s_max = float(thermal.get("t_solid_max", 9800.0))
+        self._T_g_max = float(thermal.get("t_gas_max", 9800.0))
         self._enforce_thermal_caps = bool(thermal.get("enforce_yaml_thermal_caps", True))
         # Weak axial turbulent-like mixing along Tg smooths axial gradients (helps exit-vs-hot-end coherence).
         self._gas_axial_mix_m2_s = float(thermal.get("gas_axial_thermal_mix_m2_s", 0.0))

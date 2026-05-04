@@ -31,7 +31,7 @@ def run_digital_twin():
     # Tüm fırın boyunca başlangıç değerlerini ata
     x0 = create_zero_state()
     x0[IDX_T_S] = 300.0
-    x0[IDX_T_G] = 300.0
+    x0[IDX_T_G] = 500.0
     x0[IDX_CaCO3] = 0.8
     x0[IDX_SiO2] = 0.14
     x0[IDX_Al2O3] = 0.04

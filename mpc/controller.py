@@ -108,7 +108,7 @@ class MPCController:
         RHO_S = self.cfg['thermal']['rho_solid']
 
         T_s = ca.fmax(x[IDX_T_S], 300.0)
-        T_g = ca.fmax(x[IDX_T_G], 300.0)
+        T_g = ca.fmax(x[IDX_T_G], 500.0)
 
         # Kinetics
         k_calc = A_calc * ca.exp(-Ea_calc / (R * T_s))
@@ -141,7 +141,7 @@ class MPCController:
         # m_dot_gas * cp_g * (T_in - T_out) / Vol
         # Approximate m_dot_gas proportional to fan_rpm
         m_dot_gas = u[IDX_FAN] * 0.05 
-        T_g_inlet = 1200.0
+        T_g_inlet = 500.0
         Q_adv = m_dot_gas * CP_G * (T_g_inlet - T_g) / V_KILN
 
         # Solid Temperature

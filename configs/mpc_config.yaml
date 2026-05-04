@@ -11,8 +11,8 @@ horizon:
 
 setpoints:
   T_solid_ref: 1723.0    # ~1450°C (C3S optimum zone)
-  T_gas_max: 2200.0      # safety constraint
-  T_solid_max: 1800.0    # refractories safety margin increased
+ # T_gas_max: 2200.0      # safety constraint
+ # T_solid_max: 1800.0    # refractories safety margin increased
 
 weights:
   W_T_solid: 100.0       # main tracking objective
@@ -28,8 +28,8 @@ scaling:
 
 constraints:
   hard:
-    T_gas_max: 2200.0
-    T_solid_max: 1800.0
+    #T_gas_max: 2200.0
+    #T_solid_max: 1800.0
   soft_penalty_gain: 50.0
 
 solver:

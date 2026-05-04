@@ -51,22 +51,22 @@ thermal:
   # Boundary conditions for the discrete engine (see simulation/engine.py).
   # Gas flows from z=L -> z=0, so gas inlet temperature is applied at z=L cell.
   # Kiln inlet meal after precalciner / LP cyclones (~800–980 °C class plants).
-  t_solid_inlet: 1100.0
+  t_solid_inlet: 300.0
   # If true, only species/epsilon are pinned at z=0; Ts evolves (avoids inlet shock plateau).
   t_solid_inlet_soft_bc: true
   # Burner / hot-end gas inlet model (thermodynamically consistent).
-  t_air_in: 300.0
+  t_air_in: 500.0
   burner_efficiency: 0.20
   burner_tau_s: 7200.0
-  burner_t_gas_min: 300.0
-  burner_t_gas_max: 1920.0
+  burner_t_gas_min: 500.0
+  burner_t_gas_max: 2700.0
   # Effective gas massflow from fan (kg/s). Maps your "fan" unit to an effective mdot.
   mdot_gas_base: 20.0
   mdot_gas_per_fan: 0.05
   # Solid temperature bounds (engine clip).
   t_solid_min: 300.0
-  t_solid_max: 1985.0
-  t_gas_max: 2175.0
+  #t_solid_max: 1985.0
+  #t_gas_max: 2175.0
   enthalpy_calc: 178000.0
   enthalpy_c3s: 13000.0
   rho_solid: 2000.0

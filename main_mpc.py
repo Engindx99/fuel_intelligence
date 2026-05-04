@@ -23,7 +23,7 @@ def run_mpc_digital_twin():
     # Initial Condition
     initial_x = create_zero_state()
     initial_x[IDX_T_S] = 300.0
-    initial_x[IDX_T_G] = 300.0
+    initial_x[IDX_T_G] = 500.0
     initial_x[IDX_CaCO3] = 0.8
     initial_x[IDX_SiO2] = 0.14
     initial_x[IDX_Al2O3] = 0.04

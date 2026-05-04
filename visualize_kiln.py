@@ -19,18 +19,17 @@ def run_and_visualize():
     L            = 60.0
     N_CELLS      = 100
     DT           = 0.05  # Vektörize motor için kararlı adım
-    SIM_HOURS    = 8.0
+    SIM_HOURS    = 2.0
     TOTAL_STEPS  = int(SIM_HOURS * 3600 / DT)
     LOG_INTERVAL = 1000  # Terminal çıktısı sıklığı
     
     sim = KilnSimulation(L, N_CELLS, DT)
     
-    # Başlangıç Koşulları — (N_CELLS × N_STATES); uniform 1D vektör tüm hücreye
-    # yayınlandığı için soğuk uçta yapay "çöküş + plato" üretiyordu.
+    # Başlangıç Koşulları
     initial_x = create_zero_state(N_CELLS)
     zs = np.linspace(0.0, L, N_CELLS)
     initial_x[:, IDX_T_S] = sim._T_s_in
-    # Karşı-akım: yakıcıya doğru (z→L) daha sıcak gaz; soğuk uçta daha düşük başlangıç.
+    
     tg_cold = float(max(350.0, sim._T_amb + 80.0))
     tg_hot = float(min(1050.0, sim._T_s_in - 80.0))
     initial_x[:, IDX_T_G] = tg_cold + (tg_hot - tg_cold) * (zs / L)
@@ -43,36 +42,29 @@ def run_and_visualize():
     
     # Kontrol Girdileri (U)
     u = create_zero_control()
-    u[IDX_FUEL]    = 13.5   # kg/s (yüksek yakıtta runaway yerine daha kararlı seyir)
-    u[IDX_FAN]     = 800.0 # m3/h
-    u[IDX_FEED]    = 10.0  # kg/s
-    u[IDX_REACTOR] = 2.0   # RPM
+    u[IDX_FUEL]    = 16.0   
+    u[IDX_FAN]     = 1200.0 
+    u[IDX_FEED]    = 10.0  
+    u[IDX_REACTOR] = 2.0   
     
     # Veri Toplama Listeleri
     history_t = []
-    history_tg_exit = []
     history_tg_hotend = []
     history_ts_exit = []
-    history_tg_mean = []
     
     print(f"Simülasyon başlatılıyor: {SIM_HOURS} saatlik operasyon...", flush=True)
     start_time = time.time()
     
     try:
         for step_idx in range(TOTAL_STEPS):
-            # Vektörize motor adımı
             current_X = sim.step(u)
             
-            # Her 10 dakikada bir (600 saniye / DT) veri kaydet
+            # Her 10 dakikada bir veri kaydet
             if step_idx % int(600/DT) == 0:
                 history_t.append((step_idx * DT) / 3600.0)
                 history_ts_exit.append(current_X[-1, IDX_T_S])
-                # Gas flows from z=L -> 0, so:
-                # - "exit" gas temperature is at z=0 (cold end)
-                # - "hot-end" gas temperature is at z=L (burner end)
-                history_tg_exit.append(current_X[0, IDX_T_G])
+                # Sadece Brülör Ucu (z=L) gaz sıcaklığı kaydediliyor
                 history_tg_hotend.append(current_X[-1, IDX_T_G])
-                history_tg_mean.append(float(np.mean(current_X[:, IDX_T_G])))
                 
             if step_idx % LOG_INTERVAL == 0:
                 prog = (step_idx / TOTAL_STEPS) * 100
@@ -100,9 +92,7 @@ def run_and_visualize():
         "Outputs: kiln_temp_profile, kiln_temp_trend, kiln_chem_*, kiln_clinker_quality.png"
         + os.linesep
     )
-    with open(
-        os.path.join(_root, "plots_run_manifest.txt"), "w", encoding="utf-8"
-    ) as mf:
+    with open(os.path.join(_root, "plots_run_manifest.txt"), "w", encoding="utf-8") as mf:
         mf.write(manifest)
 
     # --- 2. GÖRSELLEŞTİRME ---
@@ -147,12 +137,10 @@ def run_and_visualize():
     plt.savefig("kiln_chem_minor.png", dpi=200)
     plt.close()
     
-    # Plot 4: Çıkış Trendleri
+    # Plot 4: Çıkış Trendleri (GÜNCELLENDİ)
     plt.figure(figsize=(10, 6))
-    plt.plot(history_t, history_tg_exit, 'r--', label='Baca Gazı (Exit Tg, z=0)')
-    plt.plot(history_t, history_tg_hotend, 'r-', alpha=0.8, label='Brülör Ucu (Tg, z=L)')
-    plt.plot(history_t, history_tg_mean, color='orange', linestyle=':', linewidth=2, alpha=0.85, label='Ortalama Tg (hacim)')
-    plt.plot(history_t, history_ts_exit, 'b--', label='Klinker (Exit Ts)')
+    plt.plot(history_t, history_tg_hotend, 'r', alpha=0.8, label='Brülör Ucu (Tg, z=L)', linewidth=1)
+    plt.plot(history_t, history_ts_exit, 'b', label='Klinker (Exit Ts)', linewidth=1)
     plt.title("Zamanla Çıkış Sıcaklık Değişimi", fontsize=12)
     plt.xlabel("Zaman [saat]")
     plt.ylabel("Sıcaklık [K]")
@@ -160,9 +148,8 @@ def run_and_visualize():
     plt.savefig("kiln_temp_trend.png", dpi=200)
     plt.close()
     
-    # Plot 5: Klinkerleşme Oranı (Litre Ağırlığı/Kalite Göstergesi)
+    # Plot 5: Klinkerleşme Oranı
     plt.figure(figsize=(10, 6))
-    # SOLID_SPECIES içindeki tüm bileşenlerin toplamına bölerek normalize et
     total_solid = np.sum(current_X[:, SOLID_SPECIES], axis=1)
     clinker_quality = np.divide(current_X[:, IDX_C3S], total_solid, 
                                 out=np.zeros_like(total_solid), 
@@ -178,7 +165,6 @@ def run_and_visualize():
     plt.close()
 
     print("Analiz grafikleri (PNG) başarıyla güncellendi.", flush=True)
-    print(f"Çalıştırma manifesti yazıldı: plots_run_manifest.txt", flush=True)
 
 if __name__ == "__main__":
     run_and_visualize()
