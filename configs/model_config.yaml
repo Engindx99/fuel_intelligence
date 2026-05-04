@@ -1,39 +1,47 @@
 # Rotary Kiln Physical Geometry
 kiln:
-  length: 60.0         # m
-  diameter: 3.5       # m
-  slope: 0.03         # m/m
-  rpm: 1.5            # 1/min (Dinamik kontrol değişkeni)
-  nodes: 100          # dz = 0.6m
-  filling_degree: 0.08 # Düşük besleme (10 kg/s) için fiziksel doluluk
+  length: 60.0
+  diameter: 3.5
+  slope: 0.03
+  rpm: 2.0             # Kontrol: Düşük RPM = Daha uzun kalış süresi = Daha iyi ısınma
+  nodes: 100
+  filling_degree: 0.10
 
 # Solid Phase (Limestone/Lime) Properties
 material:
-  feed_rate: 10.0      # kg/s
-  rho_s: 1600.0       # kg/m3
-  cp_s: 1100.0        # J/kg.K
-  dh_rxn: 1.78e6      # J/kg
-  temp_inlet: 300.0   # K
+  feed_rate: 10.0       # kg/s
+  rho_s: 1600.0
+  cp_s: 1100.0
+  temp_inlet: 300.0
   emissivity_s: 0.85
 
-# Reaction Kinetics (Solver'daki self.kin.dH ve self.kin.compute_rate için)
+# Reaction Kinetics
 kinetics:
-  k0: 1.2e7           # 1/s
-  Ea: 1.8e5           # J/mol
-  R: 8.314            # J/mol.K
-  T_min_rxn: 1073.0   # K (Kalsinasyon eşiği)
-  dH: 1.78e6          # J/kg (Endotermik enerji gereksinimi)
+  k0: 1.2e7
+  Ea: 1.8e5
+  R: 8.314
+  T_min_rxn: 1073.0    # 800°C civarı kalsinasyon başlangıcı
+  dH: 1.78e6           # Endotermik reaksiyon enerjisi
 
-# Gas Phase (Combustion Products)
+# Gas Phase (Dinamik Kontrol Blokları)
 gas:
-  flow_rate: 8.0      # kg/s (10 kg/s feed için dengelenmiş hava akışı)
-  temp_inlet: 2000.0  # K (Brülör sıcaklığı)
-  cp_g: 1200.0        # J/kg.K
-  h_gs: 22.0          # W/m2.K (Isı transfer katsayısı)
-  emissivity_g: 0.30  # Gaz yayınımı
+  # KONTROL DEĞİŞKENLERİ (Simulation tarafından okunur)
+  fuel_rate: 16    # kg/s (Isıl kazancı 50K/saat üzerine çıkarmak için artırıldı)
+  fan_rate: 850.0  # RPM (Hava debisini 8.5 kg/s seviyesinde tutacak değer)
+  
+  # FİZİKSEL HESAPLAMA PARAMETRELERİ
+  flow_rate: 8.5       # kg/s (16.0'dan düşürüldü; gazın ısıyı malzemeye bırakması için gereken süre sağlandı)
+  temp_inlet: 2000.0   # K (Yakıt artışına bağlı olarak potansiyel alev sıcaklığı)
+  cp_g: 1250.0         # Yanma gazları için güncellendi
+  h_gs: 1.0           # Konveksiyon katsayısı (Isı geçişini zorlamak için artırıldı)
+  emissivity_g: 0.30   # Radyasyon gücü (1750K hedefi için gazın radyasyon etkisi artırıldı)
 
 # Numerical & Solver Controls
 solver:
-  dt: 0.1          
-  t_final: 108000        # s
+  dt: 0.1
+  t_final: 108000      # 30 saatlik tam kapasite analiz
   tolerance: 1e-4
+  
+  # SAYISAL SINIRLAR (Clipping Engelleri)
+  max_temp_s: 1950.0   # 1600K "takılma" sorununu çözen kritik sınır
+  max_temp_g: 2700.0
