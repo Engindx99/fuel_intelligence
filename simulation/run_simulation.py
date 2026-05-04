@@ -14,115 +14,88 @@ from core.transport import TransportModel
 from core.energy import EnergyModel
 
 def main():
-    """
-    Fuel Intelligence: 18-State Rotary Kiln Digital Twin Simulation Entry Point
-    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "..", "configs", "model_config.yaml")
 
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"❌ Hata: Yapılandırma dosyası bulunamadı -> {config_path}")
-        return
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
 
-    # 2. Fizik Motorlarını ve Çözücüyü Başlat
-    try:
-        kinetics = CalcinationKinetics(config)
-        transport = TransportModel(config)
-        energy = EnergyModel(config)
-        solver = KilnSolver(config, kinetics, transport, energy)
-    except KeyError as e:
-        print(f"❌ Config dosyasında eksik parametre: {e}")
-        return
+    # 1. Fizik Motorlarını Başlat
+    kinetics = CalcinationKinetics(config)
+    transport = TransportModel(config)
+    energy = EnergyModel(config)
+    solver = KilnSolver(config, kinetics, transport, energy)
 
-    # 3. Başlangıç Şartlarını Ayarla
+    # 2. İlklendirme
+    raw_meal = {'CaCO3': 0.78, 'SiO2': 0.14, 'Al2O3': 0.05, 'Fe2O3': 0.03}
     solver.state.initialize_profiles(
         T_ambient=float(config['material']['temp_inlet']), 
-        T_gas_inlet=float(config['gas']['temp_inlet'])
+        T_gas_inlet=float(config['gas']['temp_inlet']),
+        raw_meal_comp=raw_meal
     )
-    solver.state.update_gas_density()
 
-    # 4. Simülasyon Kontrol Parametreleri
-    t = 0.0
-    t_final = float(config['solver']['t_final'])
+    # 3. Parametreler
+    t, t_final = 0.0, float(config['solver']['t_final'])
     dt = float(config['solver']['dt'])
     
+    # Girişler
     fuel_rate = float(config['gas'].get('fuel_rate', 0.65))
-    fan_rate  = float(config['gas'].get('fan_rate', 900.0))
+    fan_rate  = float(config['gas'].get('fan_rate', 1200.0))
     kiln_rpm  = float(config['kiln'].get('rpm', 1.2))
     feed_rate = float(config['material'].get('feed_rate', 10.0))
-    
-    save_interval = max(10, int(t_final / 20)) 
-    
-    # Görselleştirme için veri listeleri
-    time_history = []
-    exit_ts_history = []
-    exit_tg_history = []
 
-    print("\n" + "="*60)
-    print(f"--FUEL INTELLIGENCE-- ")
-    print("="*60 + "\n")
+    print(f" Simülasyon Başladı: {t_final/3600:.1f} saatlik operasyon...")
 
+    # 4. Simülasyon Döngüsü
     start_wall_time = time.time()
+    while t < t_final:
+        solver.solve_step(dt=dt, fuel_rate=fuel_rate, feed_rate=feed_rate, kiln_rpm=kiln_rpm, fan_rate=fan_rate)
+        t += dt
+        if int(t) % 600 == 0 and (t - dt) < int(t):
+            print(f" {t/3600:5.1f}h | Ts_out: {solver.state.Ts[-1]:6.1f}K | CaO_out: {solver.state.m_CaO[-1]:.3f}", flush=True)
 
-    try:
-        while t < t_final:
-            solver.solve_step(
-                dt=dt, 
-                fuel_rate=fuel_rate, 
-                feed_rate=feed_rate, 
-                kiln_rpm=kiln_rpm, 
-                fan_rate=fan_rate
-            )
-            t += dt
+    print(f"\n Tamamlandı. Süre: {time.time() - start_wall_time:.2f} s")
 
-            # Belirli aralıklarla veri kaydet ve ekrana bas
-            if int(t) % save_interval == 0 and (t - dt) < int(t):
-                exit_Ts = solver.state.Ts[-1]
-                exit_Tg = solver.state.Tg[0] # Gaz fırın girişinden (bacadan) çıkar
-                
-                time_history.append(t / 3600.0) # Saat cinsinden
-                exit_ts_history.append(exit_Ts)
-                exit_tg_history.append(exit_Tg)
-                
-                progress = (t / t_final) * 100
-                print(f"⏱️ {int(t):6d}s | %{progress:4.1f} | Exit Ts: {exit_Ts:6.1f} K", flush=True)
+    # --- GÖRSELLEŞTİRME (İKİ AYRI PENCERE) ---
+    z_axis = np.linspace(0, float(config['kiln']['length']), solver.state.N)
 
-        end_wall_time = time.time()
-        print(f"\n✅ Simülasyon Tamamlandı! Hesaplama Süresi: {end_wall_time - start_wall_time:.2f} s")
+    # WINDOW 1: SICAKLIK PROFİLLERİ
+    plt.figure("Window 1: Thermal Dynamics", figsize=(10, 6))
+    plt.plot(z_axis, solver.state.Ts, 'r-', label='Solid Temperature (Ts)', linewidth=1.0)
+    plt.plot(z_axis, solver.state.Tg, 'b--', label='Gas Temperature (Tg)', linewidth=1.0)
+    plt.title(f"Spatial Temperature Profile (t = {t/3600:.1f} h)")
+    plt.xlabel("Kiln Length (m)")
+    plt.ylabel("Temperature (K)")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
 
-# --- VISUALIZATION SECTION ---
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-        plt.subplots_adjust(hspace=0.3)
+    # WINDOW 2: GİRDİ VE ÜRÜNLER (KÜTLE DENGESİ)
+    plt.figure("Window 2: Material Transformation", figsize=(10, 6))
+    
+    # Toplam kütleyi hesaplayalım (CO2 kaybını görmek için)
+    m_total = (solver.state.m_CaCO3 + solver.state.m_CaO + 
+               solver.state.m_SiO2 + solver.state.m_Al2O3 + solver.state.m_Fe2O3)
 
-        # Plot 1: Temperature Time Series (Kiln Exit)
-        ax1.plot(time_history, exit_ts_history, 'r', label='Solid Discharge Temp (Ts Exit)', linewidth=1.0)
-        ax1.plot(time_history, exit_tg_history, 'b', label='Gas Exhaust Temp (Tg Exit)', linewidth=1.0)
-        ax1.set_title("Evolution of Kiln Exit Temperatures Over Time")
-        ax1.set_xlabel("Time (Hours)")
-        ax1.set_ylabel("Temperature (K)")
-        ax1.grid(True, alpha=0.3)
-        ax1.legend()
+    plt.stackplot(z_axis, 
+                  solver.state.m_CaO, 
+                  solver.state.m_CaCO3, 
+                  solver.state.m_SiO2 + solver.state.m_Al2O3 + solver.state.m_Fe2O3,
+                  labels=['Product (CaO)', 'Raw (CaCO3)', 'Inerts (SiO2+Al2O3+Fe2O3)'],
+                  colors=['#2ecc71', '#95a5a6', '#34495e'],
+                  alpha=0.8)
+    
+    # Toplam kütle çizgisini ekle (CO2 kaybını vurgular)
+    plt.plot(z_axis, m_total, 'k:', label='Total Solid Mass (shows CO2 loss)', linewidth=1.0)
+    
+    plt.title("Mass Composition Along the Kiln")
+    plt.xlabel("Kiln Length (m)")
+    plt.ylabel("Mass Fraction")
+    plt.ylim(0, 1.05)
+    plt.legend(loc='lower left')
+    plt.grid(True, alpha=0.2)
 
-        # Plot 2: Spatial Temperature Profile (Steady-State / Final Snapshot)
-        z_axis = np.linspace(0, float(config['kiln']['length']), solver.state.N)
-        ax2.plot(z_axis, solver.state.Ts, 'r-', linewidth=1.0, label='Solid Profile (Ts)')
-        ax2.plot(z_axis, solver.state.Tg, 'b-', linewidth=1.0, label='Gas Profile (Tg)')
-        ax2.set_title(f"Spatial Temperature Profile along Kiln (t = {t/3600:.1f} h)")
-        ax2.set_xlabel("Kiln Length (m)")
-        ax2.set_ylabel("Temperature (K)")
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-
-        print("📊 Generating plots...")
-        plt.show()
-
-    except Exception:
-        print("\n❌ Simülasyon sırasında kritik bir hata oluştu:")
-        import traceback
-        traceback.print_exc()
+    print(" Pencereler açılıyor...")
+    plt.show()
 
 if __name__ == "__main__":
     main()

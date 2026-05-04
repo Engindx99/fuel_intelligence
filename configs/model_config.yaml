@@ -17,8 +17,8 @@ material:
 
 # Reaction Kinetics
 kinetics:
-  k0: 1.2e7
-  Ea: 1.8e5
+  k0: 1.8e6
+  Ea: 2.2e5
   R: 8.314
   T_min_rxn: 1073.0    # 800°C civarı kalsinasyon başlangıcı
   dH: 1.78e6           # Endotermik reaksiyon enerjisi
