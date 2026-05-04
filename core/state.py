@@ -1,77 +1,49 @@
+# core/state.py - Kiln Simulation Component
 import numpy as np
-from enum import IntEnum
 
-class StateIdx(IntEnum):
-    # Enerji (2)
-    T_S = 0
-    T_G = 1
-    # Katı Bileşenler (9)
-    CaCO3 = 2
-    CaO = 3
-    SiO2 = 4
-    C2S = 5
-    C3S = 6
-    C3A = 7
-    C4AF = 8
-    Al2O3 = 9
-    Fe2O3 = 10
-    # Gaz Bileşenler (4)
-    CO2 = 11
-    O2 = 12
-    N2 = 13
-    H2O = 14
-    # Yapısal/Fiziksel (3)
-    PHI = 15
-    EPSILON = 16
-    BED_HEIGHT = 17
+class KilnState:
+    def __init__(self, n_nodes):
+        self.N = n_nodes
+        
+        # --- Sıcaklık Profilleri ---
+        self.Tg = np.zeros(n_nodes, dtype=float)
+        self.Ts = np.zeros(n_nodes, dtype=float)
+        self.Tw = np.zeros(n_nodes, dtype=float)
+        
+        # --- Kimyasal Kompozisyon ve Dönüşüm ---
+        self.X = np.zeros(n_nodes, dtype=float)
+        self.m_CaCO3 = np.zeros(n_nodes, dtype=float)
+        self.m_CaO = np.zeros(n_nodes, dtype=float)
+        
+        # --- Gaz Fazı Özellikleri ---
+        self.P_CO2 = np.zeros(n_nodes, dtype=float)
+        self.rho_g = np.zeros(n_nodes, dtype=float)
+        
+        # --- Geometrik Değişkenler ---
+        self.fill_degree = np.zeros(n_nodes, dtype=float)
+        self.v_s = np.zeros(n_nodes, dtype=float)
 
-N_STATES = len(StateIdx)
+    def initialize_profiles(self, T_ambient=300.0, T_gas_inlet=1400.0):
+        self.Ts.fill(float(T_ambient))
+        # Gaz sıcaklığı girişte yüksek, çıkışta düşük (lineer başlangıç tahmini)
+        self.Tg = np.linspace(float(T_ambient), float(T_gas_inlet), self.N)
+        self.X.fill(0.0)
+        # Yoğunluğu hemen güncelle ki sıfır kalmasın
+        self.update_gas_density()
 
-# --- PHYSICS VE ENGINE İÇİN GEREKLİ GRUPLANDIRMALAR ---
-# Eksik olan THERMAL_STATES buraya eklendi
-THERMAL_STATES = [StateIdx.T_S, StateIdx.T_G]
+    def update_gas_density(self, mw_gas=28.97e-3, pressure=101325.0):
+        """
+        Ideal Gas Law: rho = (P * MW) / (R * T)
+        """
+        R_universal = 8.314
+        # Tg'nin 0 olmasını engelle (DivisionByZero koruması)
+        safe_Tg = np.where(self.Tg < 100, 300.0, self.Tg)
+        self.rho_g = (float(pressure) * float(mw_gas)) / (R_universal * safe_Tg)
 
-SOLID_SPECIES = [
-    StateIdx.CaCO3, StateIdx.CaO, StateIdx.SiO2, 
-    StateIdx.C2S, StateIdx.C3S, StateIdx.C3A, 
-    StateIdx.C4AF, StateIdx.Al2O3, StateIdx.Fe2O3
-]
+    def get_state_vector(self):
+        return np.concatenate([self.Ts, self.Tg, self.X])
 
-GAS_SPECIES = [
-    StateIdx.CO2, StateIdx.O2, StateIdx.N2, StateIdx.H2O
-]
-
-# --- KISAYOLLAR (main.py ve diğerleri için) ---
-IDX_T_S = StateIdx.T_S
-IDX_T_G = StateIdx.T_G
-IDX_CaCO3 = StateIdx.CaCO3
-IDX_CaO = StateIdx.CaO
-IDX_SiO2 = StateIdx.SiO2
-IDX_C2S = StateIdx.C2S
-IDX_C3S = StateIdx.C3S
-IDX_C3A = StateIdx.C3A
-IDX_C4AF = StateIdx.C4AF
-IDX_Al2O3 = StateIdx.Al2O3
-IDX_Fe2O3 = StateIdx.Fe2O3
-IDX_CO2 = StateIdx.CO2
-IDX_O2 = StateIdx.O2
-IDX_N2 = StateIdx.N2
-IDX_H2O = StateIdx.H2O
-IDX_PHI = StateIdx.PHI
-IDX_EPSILON = StateIdx.EPSILON
-
-# Kontrol İndeksleri
-IDX_FUEL = 0
-IDX_FAN = 1
-IDX_REACTOR = 2
-IDX_FEED = 3
-N_CONTROLS = 4
-
-# --- YARDIMCI FONKSİYONLAR ---
-def create_zero_state(n_cells=None):
-    if n_cells is None:
-        return np.zeros(N_STATES, dtype=np.float64)
-    return np.zeros((n_cells, N_STATES), dtype=np.float64)
-
-def create_zero_control():
-    return np.zeros(N_CONTROLS, dtype=np.float64)
+    def set_state_from_vector(self, vec):
+        self.Ts = vec[0 : self.N]
+        self.Tg = vec[self.N : 2 * self.N]
+        self.X  = vec[2 * self.N : 3 * self.N]

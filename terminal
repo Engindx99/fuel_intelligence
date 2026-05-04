@@ -1,0 +1,3 @@
+python -m simulation.run_simulation
+
+python -m analysis.plots
