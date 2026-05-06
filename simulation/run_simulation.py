@@ -41,7 +41,7 @@ def main():
 
     # 3. Simulation Parameters
     t = 0.0
-    t_final = 8.0 * 3600.0  
+    t_final = 24.0 * 3600.0  
     dt = float(config['solver']['dt'])
     
     fuel_rate = float(config['gas'].get('fuel_rate', 16.0))
@@ -76,7 +76,8 @@ def main():
     z_axis = np.linspace(0, float(config['kiln']['length']), solver.state.N)
     plt.style.use('seaborn-v0_8-muted')
     s = solver.state
-    lw = 1.2
+    # Linewidth sabitlendi
+    lw = 1.0
 
     # Figure 1: Temperature Dynamics
     fig1 = plt.figure("Temperature Dynamics", figsize=(12, 7))
@@ -92,25 +93,25 @@ def main():
     # Figure 2: Integrated Chemical Inventory
     fig2 = plt.figure("Integrated Chemical Inventory", figsize=(14, 8))
     
-    # Calcination and Oxide Inputs
+    # Calcination and Oxide Inputs (Tüm linestylelar varsayılan düz çizgi yapıldı)
     m_caCO3_dyn = raw_meal['CaCO3'] * (1.0 - s.X)
     plt.plot(z_axis, m_caCO3_dyn, color='brown', label='$CaCO_3$', linewidth=lw)
     plt.plot(z_axis, s.m_SiO2, color='blue', label='$SiO_2$', linewidth=lw, alpha=0.5)
-    plt.plot(z_axis, s.m_Al2O3, color='gold', label='$Al_2O_3$', linestyle='--', linewidth=lw, alpha=0.7)
-    plt.plot(z_axis, s.m_Fe2O3, color='maroon', label='$Fe_2O_3$', linestyle='--', linewidth=lw, alpha=0.7)
+    plt.plot(z_axis, s.m_Al2O3, color='gold', label='$Al_2O_3$', linewidth=lw, alpha=0.7)
+    plt.plot(z_axis, s.m_Fe2O3, color='maroon', label='$Fe_2O_3$', linewidth=lw, alpha=0.7)
     
     # Intermediate Phases and Free Lime
-    plt.plot(z_axis, s.m_CaO, color='orange', label='Free $CaO$', linewidth=lw+0.5)
+    plt.plot(z_axis, s.m_CaO, color='orange', label='Free $CaO$', linewidth=lw)
     plt.plot(z_axis, s.m_C2S, color='cyan', label='Belite ($C_2S$)', linewidth=lw)
     
     # Major Phase Outputs
-    plt.plot(z_axis, s.m_C3S, color='#2c3e50', label='Alite ($C_3S$)', linewidth=lw+0.5)
+    plt.plot(z_axis, s.m_C3S, color='#2c3e50', label='Alite ($C_3S$)', linewidth=lw)
     plt.plot(z_axis, s.m_C3A, color='limegreen', label='Aluminate ($C_3A$)', linewidth=lw)
     plt.plot(z_axis, s.m_C4AF, color='purple', label='Ferrite ($C_4AF$)', linewidth=lw)
     
-    # Mass Balance
-    plt.plot(z_axis, s.total_mass, color='black', label='Total Solid Mass', linewidth=1.5)
-    plt.plot(z_axis, 1.0 - s.total_mass, color='gray', label='Released $CO_2$', linewidth=lw, linestyle=':')
+    # Mass Balance ( released CO2 ve total mass düz çizgi yapıldı)
+    plt.plot(z_axis, s.total_mass, color='black', label='Total Solid Mass', linewidth=lw)
+    plt.plot(z_axis, 1.0 - s.total_mass, color='gray', label='Released $CO_2$', linewidth=lw)
 
     plt.ylabel("Mass Fraction")
     plt.xlabel("Kiln Length (m)")
