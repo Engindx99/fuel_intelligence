@@ -18,7 +18,7 @@ material:
 # Reaction Kinetics
 kinetics:
   # Kalsinasyon (CaCO3 -> CaO)
-  k0: 1.8e6
+  k0: 1.1e6
   Ea: 2.2e5
   R: 8.314
   T_min_rxn: 1073.0    # 800°C civarı kalsinasyon başlangıcı
@@ -45,7 +45,7 @@ kinetics:
 
 # Gas Phase (Dinamik Kontrol Blokları)
 gas:
-  fuel_rate: 16.4      
+  fuel_rate: 16.3      
   fan_rate: 800.0      
   nominal_flow: 8.5    
   temp_inlet: 2200.0   # Alev sıcaklığı tavanı artırıldı (C3S oluşumu için yüksek radyasyon şart)

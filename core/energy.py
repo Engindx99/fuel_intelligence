@@ -1,36 +1,41 @@
 import numpy as np
 
 def safe_f(value):
+    """Liste veya tekil değer olarak gelen konfigürasyon verisini float'a çevirir."""
     if isinstance(value, list): return float(value[0])
     return float(value)
 
 class EnergyModel:
     def __init__(self, config):
-        # Temel katsayıyı config'den al
+        # Solver ve fiziksel sabitlerle tam uyum
         self.base_h_gs = safe_f(config['gas']['h_gs']) 
-        self.sigma = 5.67037e-8  # Stefan-Boltzmann
+        self.sigma = 5.67037e-8  # W/(m^2.K^4)
         self.eps_g = safe_f(config['gas'].get('emissivity_g', 0.3))
         self.eps_s = safe_f(config['material'].get('emissivity_s', 0.85))
+        
+        # Etkin emisivite (Solver'daki gri gaz/radiation varsayımıyla eşleşme)
+        self.eps_eff = (self.eps_g + self.eps_s) / 2.0
 
-    def heat_exchange(self, Tg, Ts, area, rpm=1.2):
-        area = float(area)
-        Tg = float(Tg)
-        Ts = float(Ts)
-        
-        # 1. RPM DUYARLILIĞI İÇİN KONVEKSİYON REVİZYONU
-        # RPM arttıkça yüzey tazelenmesi artar ancak bu durum 
-        # kalış süresindeki kaybı telafi etmemeli. 
-        # RPM etkisini karekök seviyesinde tutarak sönümleme etkisini azaltıyoruz.
-        h_eff = self.base_h_gs * np.sqrt(rpm / 1.2) 
-        q_conv = h_eff * area * (Tg - Ts)
-        
-        # 2. RADYASYON (T^4) REVİZYONU
-        # Mevcut çarpım (eps_g * eps_s) radyasyonu çok baskılıyor.
-        # Gaz-Katı arasındaki radyasyon için gri gaz varsayımı:
-        # q = sigma * area * (eps_g * Tg^4 - alpha_g_s * Ts^4)
-        # Basitleştirilmiş ama daha hassas bir yaklaşım:
-        eps_eff = (self.eps_g + self.eps_s) / 2.0  # Ortalama emisivite ile enerji akışını açıyoruz
-        
-        q_rad = eps_eff * self.sigma * area * (np.power(Tg, 4) - np.power(Ts, 4))
-        
-        return q_conv + q_rad
+    def calculate_convection_coeff(self, current_fan_rate, nominal_fan=850.0):
+        """
+        Gaz debisine (fan) bağlı olarak h_gs katsayısını dinamik günceller.
+        Nusselt sayısı korelasyonlarına (h ~ v^0.4) dayalı fiziksel yaklaşım.
+        """
+        fan_ratio = current_fan_rate / nominal_fan
+        return self.base_h_gs * (fan_ratio**0.4)
+
+    def calculate_radiation_flux(self, Tg, Ts, area):
+        """
+        Stefan-Boltzmann yasasına göre net radyasyon ısı akısını hesaplar.
+        """
+        return self.eps_eff * self.sigma * area * (Tg**4 - Ts**4)
+
+    def get_reaction_heat(self, rates, m_dot_s, dH_vec):
+        """
+        Fırın boyunca gerçekleşen tüm reaksiyonların toplam ısı etkisini Watt cinsinden döndürür.
+        rates: [rate_calc, rate_c2s, rate_c3s] - Reaksiyon hızları (1/s)
+        dH_vec: [dH_calc, dH_c2s, dH_c3s] - Entalpi değişimleri (J/kg)
+        """
+        # rates * dH * m_dot_s çarpımı Watt (J/s) sonucunu verir.
+        # Endotermik reaksiyonlar (ısı alan) pozitif, ekzotermik (ısı veren) negatif etki yapar.
+        return np.sum(rates * dH_vec) * m_dot_s
