@@ -1,68 +1,57 @@
-# Rotary Kiln Physical Geometry
 kiln:
   length: 60.0
   diameter: 3.5
-  slope: 0.03
-  rpm: 2.0             # Düşük RPM: Malzeme fırında daha uzun kalır, sinterleşme süresi artar.
+  slope: 0.03          
+  rpm: 2.0             
   nodes: 100
   filling_degree: 0.10
 
-# Solid Phase Properties
 material:
-  feed_rate: 10.0       # kg/s (Yaklaşık 36 t/h)
+  feed_rate: 10.0       
   rho_s: 1600.0
-  cp_s: 1150.0          # Sinterleşme bölgesinde özgül ısı hafif artar
+  cp_s: 1150.0          
   temp_inlet: 300.0
   emissivity_s: 0.85
 
-# Reaction Kinetics
 kinetics:
-  # Kalsinasyon (CaCO3 -> CaO + CO2)
-  k0: 1.5e6
-  Ea: 3.0e5
+  k0: 1.0e6
+  Ea: 2.1e5             
   R: 8.314
-  T_min_rxn: 1073.0
-  dH: 1.78e6           # Endotermik
+  T_min_rxn: 873.0      
+  dH: 1.78e6            
 
-  # Belit (C2S) Oluşumu (2CaO + SiO2 -> C2S)
   k0_c2s: 1.0e6        
   Ea_c2s: 1.8e5
-  T_min_c2s: 1273.0    
-  dH_c2s: -7.5e5       # Ekzotermik
+  T_min_c2s: 1223.0     
+  dH_c2s: -7.5e5        
 
-  # Alit (C3S) Oluşumu (C2S + CaO -> C3S)
-  k0_c3s: 1.0e6       # %40+ hedefi için güçlü ama dengeli hız
-  Ea_c3s: 2.8e5        # Yüksek aktivasyon enerjisi: Sadece sıcak bölgede oluşur
-  T_min_c3s: 1523.0    # 1250°C (Sıvı faz başlangıcı ile uyumlu)
-  dH_c3s: 5.0e4        # Hafif endotermik
+  k0_c3s: 2.0e6        
+  Ea_c3s: 2.8e5         
+  T_min_c3s: 1473.0     
+  dH_c3s: 5.0e4         
 
-  # Flux Fazları (C3A & C4AF) - Solver'daki pre_factor_c3a parametreleri ile eşleşir
   pre_factor_c3a: 0.0015
   pre_factor_c4af: 0.0010
 
-# Gas Phase & Thermal Control
 gas:
-  fuel_rate: 16.5       # Sinterleşme ısısını korumak için hafif artış
+  fuel_rate: 16.5       
   fan_rate: 850.0       
   nominal_flow: 8.5
-  temp_inlet: 2200.0    # Alev sıcaklığı (Teorik tavan)
+  temp_inlet: 2200.0    
   cp_g: 1280.0
-  h_gs: 140.0           # Konveksiyon katsayısı stabilize edildi
-  emissivity_g: 0.55    # Fiziksel gaz emisiivitesi
+  h_gs: 140.0           
+  emissivity_g: 0.55    
 
-# Numerical Controls
 solver:
-  dt: 0.05             
-  t_final: 10800        # 3 saat
+  dt: 0.05              
+  t_final: 10800        
   tolerance: 1e-4
   max_temp_s: 2000.0
   max_temp_g: 2600.0
 
-# --- MALZEME KOMPOZİSYONU ---
-# CaO ve SiO2'nin erken tükenmesini önlemek için optimize edilen oranlar.
 raw_meal_composition:
-  CaCO3: 0.770         
-  SiO2: 0.160           
+  CaCO3: 0.760          
+  SiO2: 0.170           
   Al2O3: 0.045
   Fe2O3: 0.025
 
