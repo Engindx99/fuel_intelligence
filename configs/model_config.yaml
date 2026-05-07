@@ -18,28 +18,27 @@ material:
 # Reaction Kinetics
 kinetics:
   # Kalsinasyon (CaCO3 -> CaO + CO2)
-  k0: 2.1e5
-  Ea: 2.2e5
+  k0: 1.5e6
+  Ea: 3.0e5
   R: 8.314
   T_min_rxn: 1073.0
   dH: 1.78e6           # Endotermik
 
   # Belit (C2S) Oluşumu (2CaO + SiO2 -> C2S)
-  k0_c2s: 1.2e6       # Aşırı reaktiviteyi önlemek için hafif optimize edildi
+  k0_c2s: 1.0e6        
   Ea_c2s: 1.8e5
-  T_min_c2s: 1173.0    # 900°C civarı başlangıç
+  T_min_c2s: 1273.0    
   dH_c2s: -7.5e5       # Ekzotermik
 
   # Alit (C3S) Oluşumu (C2S + CaO -> C3S)
-  k0_c3s: 2.2e6        # %40+ hedefi için güçlü ama dengeli hız
+  k0_c3s: 1.0e6       # %40+ hedefi için güçlü ama dengeli hız
   Ea_c3s: 2.8e5        # Yüksek aktivasyon enerjisi: Sadece sıcak bölgede oluşur
   T_min_c3s: 1523.0    # 1250°C (Sıvı faz başlangıcı ile uyumlu)
   dH_c3s: 5.0e4        # Hafif endotermik
 
-  # Flux Fazları (C3A & C4AF)
-  flux_phases:
-    k_c4af_pre: 0.03
-    k_c3a_pre: 0.04
+  # Flux Fazları (C3A & C4AF) - Solver'daki pre_factor_c3a parametreleri ile eşleşir
+  pre_factor_c3a: 0.0015
+  pre_factor_c4af: 0.0010
 
 # Gas Phase & Thermal Control
 gas:
@@ -48,24 +47,23 @@ gas:
   nominal_flow: 8.5
   temp_inlet: 2200.0    # Alev sıcaklığı (Teorik tavan)
   cp_g: 1280.0
-  h_gs: 350.0           # Konveksiyon katsayısı stabilize edildi
-  emissivity_g: 0.65    # Fiziksel gaz emisiivitesi (0.90 aşırıydı)
+  h_gs: 140.0           # Konveksiyon katsayısı stabilize edildi
+  emissivity_g: 0.55    # Fiziksel gaz emisiivitesi
 
 # Numerical Controls
 solver:
-  dt: 0.05            
-  t_final: 10800        # 3 saat (Fırının rejime girmesi için fazlasıyla yeterli)
+  dt: 0.05             
+  t_final: 10800        # 3 saat
   tolerance: 1e-4
   max_temp_s: 2000.0
   max_temp_g: 2600.0
 
-# --- MALZEME KOMPOZİSYONU (LSF OPTİMİZASYONU) ---
-# %40+ Alit için SiO2 %10'a çekildi, CaCO3 %83'e çıkarıldı.
-# Bu oranlar Serbest Kireç (Free Lime) dengesini koruyarak Alit oluşumunu zorlar.
+# --- MALZEME KOMPOZİSYONU ---
+# CaO ve SiO2'nin erken tükenmesini önlemek için optimize edilen oranlar.
 raw_meal_composition:
-  CaCO3: 0.80         
-  SiO2: 0.15            
-  Al2O3: 0.04
-  Fe2O3: 0.03
+  CaCO3: 0.770         
+  SiO2: 0.160           
+  Al2O3: 0.045
+  Fe2O3: 0.025
 
 fan_rate_current: 850.0
