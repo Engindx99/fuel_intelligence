@@ -9,26 +9,26 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, rho_g, dt, dz, v_s,
                      k0_vec, Ea_vec, R_const, T_min_vec):
     rates = np.zeros((3, N))
     
-    # Reaksiyon Maskeleri
+    # 1. Reaksiyon Maskeleri
     mask_calc = (Ts >= T_min_vec[0]) & (X < 1.0)
+    # SiO2 ve CaO varsa Belit (C2S) oluşabilir
     mask_c2s  = (Ts >= T_min_vec[1]) & (m_CaO > 1e-4) & (m_SiO2 > 1e-4)
-    # C3S maskesi: Ortamda yeterli Belit (m_C2S > 0.15) yoksa hızı doğal olarak keser
-    mask_c3s  = (Ts >= T_min_vec[2]) & (m_C2S > 0.05) & (m_CaO > 1e-4)
+    # C2S ve CaO varsa Alit (C3S) oluşabilir
+    mask_c3s  = (Ts >= T_min_vec[2]) & (m_C2S > 0.01) & (m_CaO > 1e-4)
 
-    # Arrhenius Hız Denklemleri
+    # 2. Kinetik Hızlar
     k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts))
     rates[0, mask_calc] = np.minimum(k_calc[mask_calc] * (1.0 - X[mask_calc]), 0.05)
 
     k_c2s = k0_vec[1] * np.exp(-Ea_vec[1] / (R_const * Ts))
     rates[1, mask_c2s] = np.minimum(k_c2s[mask_c2s] * (m_CaO[mask_c2s]**2) * m_SiO2[mask_c2s], 0.005)
 
-    # C3S Hızı: Ortamdaki C2S miktarına bağlı diferansiyel yavaşlama (Diffusion constraint)
     k_c3s = k0_vec[2] * np.exp(-Ea_vec[2] / (R_const * Ts))
-    # m_C2S azaldıkça reaksiyon hızı parabolik olarak düşer
-    c2s_concentration_factor = np.maximum(0.0, (m_C2S - 0.14) / (0.45 - 0.14))
-    rates[2, mask_c3s] = np.minimum(k_c3s[mask_c3s] * m_C2S[mask_c3s] * m_CaO[mask_c3s] * c2s_concentration_factor[mask_c3s], 0.002)
+    # Belit %5'in altına indikçe Alit oluşumu yavaşlar (Sayısal kararlılık için)
+    c2s_resistance = np.clip((m_C2S - 0.05) / (0.25 - 0.05), 0.0, 1.0)
+    rates[2, mask_c3s] = np.minimum(k_c3s[mask_c3s] * m_C2S[mask_c3s] * m_CaO[mask_c3s] * c2s_resistance[mask_c3s], 0.003)
 
-    # Gaz ve Isı Dengesi
+    # 3. Gaz ve Enerji Dengesi
     CO2_RATIO = 0.4397
     m_dot_co2 = rates[0] * m_dot_s * CO2_RATIO
     m_dot_g_local = np.full(N, m_dot_g_inlet)
@@ -80,7 +80,7 @@ class KilnSolver:
         dt_v = float(dt)
         c0 = self.cfg['raw_meal_composition']
         
-        # Girişleri Al
+        # Giriş Parametreleri
         f_rate = fuel_rate if fuel_rate is not None else self._safe_f(self.cfg['gas'].get('fuel_rate', 16.0))
         cur_fan = fan_rate if fan_rate is not None else self.cfg.get('fan_rate_current', 800.0)
         self.cfg['gas']['temp_inlet'] = self._calculate_flame_temp(f_rate, cur_fan)
@@ -96,9 +96,25 @@ class KilnSolver:
         area_gas = (np.pi * (diameter / 2)**2) * 0.90
         eps_eff = (self._safe_f(self.cfg['gas'].get('emissivity_g', 0.3)) + 0.85) / 2.0
 
+        # --- KRİTİK DEĞİŞİKLİK: ÖNCE TAŞINIM (SÜREKLİ BESLEME) ---
+        # Fırın boyunca malzemeyi kaydırıyoruz. Bu, her düğüme taze SiO2 girişi sağlar.
+        flow_factor = min(1.0, v_s * dt_v / self.dz)
+        phases = ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
+        for p in phases:
+            arr = getattr(self.state, p)
+            arr[1:] = (1 - flow_factor) * arr[1:] + flow_factor * arr[:-1]
+            
+            # FIRIN GİRİŞİ (Sınır Koşulu - Taze Hammadde)
+            if p == 'm_SiO2': arr[0] = float(c0['SiO2'])
+            elif p == 'm_Al2O3': arr[0] = float(c0['Al2O3'])
+            elif p == 'm_Fe2O3': arr[0] = float(c0['Fe2O3'])
+            elif p == 'X': arr[0] = 0.0
+            elif p == 'm_CaO': arr[0] = 0.0
+            else: arr[0] = 0.0
+
         self.state.update_gas_density()
-        
-        # 1. Numba Çekirdek
+
+        # --- REAKSİYONLARIN HESAPLANMASI ---
         dTs, dTg, rates = _numba_step_core(
             self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
             self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
@@ -109,50 +125,41 @@ class KilnSolver:
             self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min
         )
 
-        # --- DURUM GÜNCELLEME (ALT SINIR KORUMALI) ---
+        # --- DURUM GÜNCELLEME VE STOKİYOMETRİ ---
         self.state.X += rates[0] * dt_v
         self.state.Ts += dTs * dt_v
         self.state.Tg += dTg * dt_v
 
-        # Belit Oluşumu
-        self.state.m_C2S += rates[1] * dt_v 
-
-        # Alit Oluşumu ve Belit Tüketimi (Alt Sınır Gate)
-        # Belit 0.15'in altına düşmeye başladıkça tüketimi imkansızlaştırıyoruz
-        c2s_gate = np.maximum(0.0, (self.state.m_C2S - 0.15) / 0.05)
-        actual_c3s_inc = rates[2] * dt_v * np.minimum(1.0, c2s_gate)
+        # SiO2 Tüketimi (Gelen miktar kadar harcanabilir)
+        sio2_needed = (rates[1] * dt_v) * 0.349
+        actual_sio2_cons = np.minimum(self.state.m_SiO2 - 1e-6, sio2_needed)
+        self.state.m_SiO2 -= actual_sio2_cons
+        
+        # Belit Oluşumu (Tüketilen SiO2'ye orantılı)
+        c2s_formed = actual_sio2_cons / 0.349
+        actual_c3s_inc = rates[2] * dt_v
         
         self.state.m_C3S += actual_c3s_inc
-        self.state.m_C2S -= (actual_c3s_inc * 0.754)
+        # Belit Değişimi = Oluşan - (Alit'e Dönüşen)
+        self.state.m_C2S += c2s_formed - (actual_c3s_inc * 0.754)
+        
+        # CaO Dengesi: Üretilen (Kalsinasyon) - Tüketilen (C2S ve C3S oluşumu)
+        cao_prod = rates[0] * dt_v * 0.5607
+        cao_cons = (c2s_formed * 0.651) + (actual_c3s_inc * 0.737)
+        self.state.m_CaO += (cao_prod - cao_cons)
 
-        # 4. Akışkan Fazlar
+        # Emniyet Sınırları
+        self.state.m_SiO2 = np.maximum(0.0001, self.state.m_SiO2)
+        self.state.m_CaO = np.maximum(1e-5, self.state.m_CaO)
+        self.state.m_C2S = np.maximum(0.0, self.state.m_C2S)
+
+        # Flux Fazlar (C3A ve C4AF)
         sinter_mask = self.state.Ts > 1523.0
         L = 3.0 * c0['Al2O3'] + 2.25 * c0['Fe2O3']
-        flux_cfg = self.cfg.get('kinetics', {}).get('flux_phases', {'k_c4af_pre': 0.05, 'k_c3a_pre': 0.08})
-        
         c4af_inc = np.minimum((c0['Fe2O3'] * 2.85 - self.state.m_C4AF), 0.05 * L) * dt_v
         self.state.m_C4AF[sinter_mask] += c4af_inc[sinter_mask]
-        
         c3a_inc = np.minimum(((c0['Al2O3'] - (self.state.m_C4AF * 0.21)) * 2.45 - self.state.m_C3A), 0.08 * L) * dt_v
         self.state.m_C3A[sinter_mask] += c3a_inc[sinter_mask]
-
-        # 5. Tam Stokiyometrik Denge
-        produced_CaO = self.state.X * c0['CaCO3'] * 0.5607 
-        consumed_CaO = (self.state.m_C2S * 0.651) + (self.state.m_C3S * 0.737) + \
-                       (self.state.m_C3A * 0.550) + (self.state.m_C4AF * 0.420)
-        
-        self.state.m_CaO = np.maximum(1e-5, produced_CaO - consumed_CaO)
-        self.state.m_SiO2 = np.maximum(0.0, c0['SiO2'] - (self.state.m_C2S * 0.349) - (self.state.m_C3S * 0.263))
-        self.state.m_Al2O3 = np.maximum(0.0, c0['Al2O3'] - (self.state.m_C3A * 0.377) - (self.state.m_C4AF * 0.210))
-        self.state.m_Fe2O3 = np.maximum(0.0, c0['Fe2O3'] - (self.state.m_C4AF * 0.329))
-
-        # 6. Taşınım
-        flow_factor = min(1.0, v_s * dt_v / self.dz)
-        phases = ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
-        for p in phases:
-            arr = getattr(self.state, p)
-            arr[1:] = (1 - flow_factor) * arr[1:] + flow_factor * arr[:-1]
-            setattr(self.state, p, np.clip(arr, 0.0, 1.0))
 
         self.state.total_mass = 1.0 - (self.state.X * c0['CaCO3'] * 0.4397)
         self.state.Ts[0] = self._safe_f(self.cfg['material']['temp_inlet'])

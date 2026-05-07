@@ -3,72 +3,69 @@ kiln:
   length: 60.0
   diameter: 3.5
   slope: 0.03
-  rpm: 2.0             # Kontrol: Düşük RPM = Daha uzun kalış süresi = Daha iyi ısınma
+  rpm: 2.0             # Düşük RPM: Malzeme fırında daha uzun kalır, sinterleşme süresi artar.
   nodes: 100
   filling_degree: 0.10
 
-# Solid Phase (Limestone/Lime) Properties
+# Solid Phase Properties
 material:
-  feed_rate: 10.0       # kg/s
+  feed_rate: 10.0       # kg/s (Yaklaşık 36 t/h)
   rho_s: 1600.0
-  cp_s: 1100.0
+  cp_s: 1150.0          # Sinterleşme bölgesinde özgül ısı hafif artar
   temp_inlet: 300.0
   emissivity_s: 0.85
 
 # Reaction Kinetics
 kinetics:
-  # Kalsinasyon (CaCO3 -> CaO)
+  # Kalsinasyon (CaCO3 -> CaO + CO2)
   k0: 2.1e5
   Ea: 2.2e5
   R: 8.314
-  T_min_rxn: 1073.0    # 800°C civarı kalsinasyon başlangıcı
-  dH: 1.78e6           # Endotermik reaksiyon enerjisi (Isı alan)
+  T_min_rxn: 1073.0
+  dH: 1.78e6           # Endotermik
 
   # Belit (C2S) Oluşumu (2CaO + SiO2 -> C2S)
-  k0_c2s: 1.5e6        
-  Ea_c2s: 1.8e5        
-  T_min_c2s: 1150.0    # C2S oluşum başlangıcı (Biraz yukarı çekildi)
-  dH_c2s: -7.5e5       # J/kg (Ekzotermik - Daha gerçekçi ısı salınımı)
+  k0_c2s: 1.2e6       # Aşırı reaktiviteyi önlemek için hafif optimize edildi
+  Ea_c2s: 1.8e5
+  T_min_c2s: 1173.0    # 900°C civarı başlangıç
+  dH_c2s: -7.5e5       # Ekzotermik
 
   # Alit (C3S) Oluşumu (C2S + CaO -> C3S)
-  k0_c3s: 2.7e6        # Reaksiyon hızı %40+ hedefi için hafifçe artırıldı
-  Ea_c3s: 2.8e5        # Difüzyon bariyeri gerçekçi seviyeye çekildi
-  T_min_c3s: 1500.0    # Sinterleşme ve C3S başlangıcı
-  dH_c3s: 5.0e4        # J/kg (Hafif Endotermik/Nötr - Alit oluşumu enerji ister)
+  k0_c3s: 2.2e6        # %40+ hedefi için güçlü ama dengeli hız
+  Ea_c3s: 2.8e5        # Yüksek aktivasyon enerjisi: Sadece sıcak bölgede oluşur
+  T_min_c3s: 1523.0    # 1250°C (Sıvı faz başlangıcı ile uyumlu)
+  dH_c3s: 5.0e4        # Hafif endotermik
 
-  # --- Flux Fazları Kinetiği (C3A & C4AF) ---
+  # Flux Fazları (C3A & C4AF)
   flux_phases:
-    k_c4af_pre: 0.03   
-    Ea_c4af: 2000.0    
-    k_c3a_pre: 0.04    
-    Ea_c3a: 3000.0
+    k_c4af_pre: 0.03
+    k_c3a_pre: 0.04
 
-# Gas Phase (Dinamik Kontrol Blokları)
+# Gas Phase & Thermal Control
 gas:
-  fuel_rate: 16.3      
-  fan_rate: 800.0      
-  nominal_flow: 8.5    
-  temp_inlet: 2200.0   # Alev sıcaklığı tavanı artırıldı (C3S oluşumu için yüksek radyasyon şart)
-  cp_g: 1250.0         
-  h_gs: 400.0          
-  emissivity_g: 0.90   # Gazın ışınım gücü sinterleşme bölgesini beslemesi için artırıldı
+  fuel_rate: 16.5       # Sinterleşme ısısını korumak için hafif artış
+  fan_rate: 850.0       
+  nominal_flow: 8.5
+  temp_inlet: 2200.0    # Alev sıcaklığı (Teorik tavan)
+  cp_g: 1280.0
+  h_gs: 350.0           # Konveksiyon katsayısı stabilize edildi
+  emissivity_g: 0.65    # Fiziksel gaz emisiivitesi (0.90 aşırıydı)
 
-# Numerical & Solver Controls
+# Numerical Controls
 solver:
-  dt: 0.05
-  t_final: 108000      # 30 saatlik tam kapasite analiz
+  dt: 0.05            
+  t_final: 10800        # 3 saat (Fırının rejime girmesi için fazlasıyla yeterli)
   tolerance: 1e-4
-  max_temp_s: 2100.0   # Alit kristal büyümesi için güvenli alan
-  max_temp_g: 2700.0
+  max_temp_s: 2000.0
+  max_temp_g: 2600.0
 
-# --- SİSTEM KONTROL VE FAN PARAMETRELERİ ---
-fan_rate_current: 800.0 
-
-# --- MALZEME KOMPOZİSYONU ---
-# Kireç Doyurma Faktörünü (LSF) dengelemek için CaCO3 %82'ye çıkarıldı.
-# Bu sayede sistem CaO tükenmesiyle kilitlenmeden %40+ Alit'e ulaşabilir.
+# --- MALZEME KOMPOZİSYONU (LSF OPTİMİZASYONU) ---
+# %40+ Alit için SiO2 %10'a çekildi, CaCO3 %83'e çıkarıldı.
+# Bu oranlar Serbest Kireç (Free Lime) dengesini koruyarak Alit oluşumunu zorlar.
 raw_meal_composition:
-  CaCO3: 0.82          # %80 -> %82 (Stokiyometrik kilitlenmeyi önler)
-  SiO2: 0.11
-  Al2O3: 0.03
-  Fe2O3: 0.02
+  CaCO3: 0.80         
+  SiO2: 0.15            
+  Al2O3: 0.04
+  Fe2O3: 0.03
+
+fan_rate_current: 850.0
