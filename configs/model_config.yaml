@@ -18,7 +18,7 @@ material:
 # Reaction Kinetics
 kinetics:
   # Kalsinasyon (CaCO3 -> CaO)
-  k0: 1.1e6
+  k0: 2.1e5
   Ea: 2.2e5
   R: 8.314
   T_min_rxn: 1073.0    # 800°C civarı kalsinasyon başlangıcı
@@ -31,7 +31,7 @@ kinetics:
   dH_c2s: -7.5e5       # J/kg (Ekzotermik - Daha gerçekçi ısı salınımı)
 
   # Alit (C3S) Oluşumu (C2S + CaO -> C3S)
-  k0_c3s: 1.7e6        # Reaksiyon hızı %40+ hedefi için hafifçe artırıldı
+  k0_c3s: 2.7e6        # Reaksiyon hızı %40+ hedefi için hafifçe artırıldı
   Ea_c3s: 2.8e5        # Difüzyon bariyeri gerçekçi seviyeye çekildi
   T_min_c3s: 1500.0    # Sinterleşme ve C3S başlangıcı
   dH_c3s: 5.0e4        # J/kg (Hafif Endotermik/Nötr - Alit oluşumu enerji ister)
