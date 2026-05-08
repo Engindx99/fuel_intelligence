@@ -20,8 +20,8 @@ kinetics:
   T_min_rxn: 873.0      
   dH: 1.78e6            
 
-  k0_c2s: 1.0e6        
-  Ea_c2s: 1.8e5
+  k0_c2s: 1.8e5        
+  Ea_c2s: 2.2e5
   T_min_c2s: 1223.0     
   dH_c2s: -7.5e5        
 
@@ -50,9 +50,10 @@ solver:
   max_temp_g: 2600.0
 
 raw_meal_composition:
-  CaCO3: 0.760          
+  CaCO3: 0.750          
   SiO2: 0.170           
   Al2O3: 0.045
   Fe2O3: 0.025
+  # + %1 Other components
 
 fan_rate_current: 850.0
