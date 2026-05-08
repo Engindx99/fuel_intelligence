@@ -13,13 +13,16 @@ class EnergyModel:
         self.eps_g = safe_f(config['gas'].get('emissivity_g', 0.3))
         self.eps_s = safe_f(config['material'].get('emissivity_s', 0.85))
         
-        # Etkin emisivite (Solver'daki gri gaz/radiation varsayımıyla eşleşme)
-        self.eps_eff = (self.eps_g + self.eps_s) / 2.0
+        # Etkin emisivite - Doğrudan config['energy']['eps_eff'] üzerinden çekiliyor
+        if 'energy' in config and 'eps_eff' in config['energy']:
+            self.eps_eff = safe_f(config['energy']['eps_eff'])
+        else:
+            # Yedek mekanizma (Fallback)
+            self.eps_eff = (self.eps_g + self.eps_s) / 2.0
 
     def calculate_convection_coeff(self, current_fan_rate, nominal_fan=850.0):
         """
         Gaz debisine (fan) bağlı olarak h_gs katsayısını dinamik günceller.
-        Nusselt sayısı korelasyonlarına (h ~ v^0.4) dayalı fiziksel yaklaşım.
         """
         fan_ratio = current_fan_rate / nominal_fan
         return self.base_h_gs * (fan_ratio**0.4)
@@ -33,9 +36,5 @@ class EnergyModel:
     def get_reaction_heat(self, rates, m_dot_s, dH_vec):
         """
         Fırın boyunca gerçekleşen tüm reaksiyonların toplam ısı etkisini Watt cinsinden döndürür.
-        rates: [rate_calc, rate_c2s, rate_c3s] - Reaksiyon hızları (1/s)
-        dH_vec: [dH_calc, dH_c2s, dH_c3s] - Entalpi değişimleri (J/kg)
         """
-        # rates * dH * m_dot_s çarpımı Watt (J/s) sonucunu verir.
-        # Endotermik reaksiyonlar (ısı alan) pozitif, ekzotermik (ısı veren) negatif etki yapar.
         return np.sum(rates * dH_vec) * m_dot_s

@@ -1,6 +1,5 @@
 import numpy as np
 from numba import njit
-from core.state import KilnState
 
 @njit
 def get_smooth_step(T, T_min, span=50.0):
@@ -32,7 +31,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
             k_c2s = k0_vec[1] * np.exp(-Ea_vec[1] / (R_const * Ts[i]))
             rates[1, i] = min(k_c2s * m_CaO[i] * m_SiO2[i], 0.02) * f_c2s
 
-        # 3. Alit (C3S) - Numba Dostu Manuel Clip
+        # 3. Alit (C3S)
         f_c3s = get_smooth_step(Ts[i], T_min_vec[2], 75.0)
         
         # Belit Koruma (%10)
@@ -59,35 +58,47 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         acc += m_dot_co2[i]
         m_dot_g_local[i] += acc
 
+    # Isı Transferi
     q_gs = h_gs * (Tg - Ts) * exchange_area_per_dz
     q_rad_gs = sigma * eps_eff * (Tg**4 - Ts**4) * exchange_area_per_dz
-    q_rxn = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2] + rates[3]*dH_vec[3] + rates[4]*dH_vec[4]) * m_dot_s
+    q_rxn = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2] + 
+             rates[3]*dH_vec[3] + rates[4]*dH_vec[4]) * m_dot_s
     
     dTs, dTg = np.zeros(N), np.zeros(N)
+    
+    # Solid Sıcaklık Değişimi
     dTs[1:] = (v_s * (Ts[:-1] - Ts[1:]) / dz)
     dTs += (q_gs + q_rad_gs - 15.0*(Ts-Tw)*exchange_area_per_dz - q_rxn) / (effective_thermal_mass * cp_s)
     
+    # Gaz Sıcaklık Değişimi
     v_g = m_dot_g_local / (np.maximum(0.1, rho_g) * area_gas)
     dTg[:-1] = (v_g[:-1] * (Tg[1:] - Tg[:-1]) / dz)
     dTg -= (q_gs + q_rad_gs) / (np.maximum(1.0, m_dot_g_local) * cp_g)
             
-    return dTs * damping, dTg * damping * 0.8, rates
+    # Damping etkisi kaldırıldı: Doğrudan türevler döndürülüyor
+    return dTs, dTg, rates
 
 class KilnSolver:
     def __init__(self, config, kinetics, transport, energy):
-        self.cfg, self.kin, self.tra, self.en = config, kinetics, transport, energy
+        self.cfg = config
+        self.kin = kinetics
+        self.tra = transport
+        self.en = energy
+        
         nodes = int(self._safe_f(config['kiln']['nodes']))
+        from core.state import KilnState
         self.state = KilnState(nodes)
         self.dz = self._safe_f(config['kiln']['length']) / nodes
-        self.damping = 0.16 
+        self.damping = 1.0 # Damping artık 1.0 (etkisiz)
 
-    def _safe_f(self, v): return float(v[0]) if isinstance(v, list) else float(v)
+    def _safe_f(self, v): 
+        if isinstance(v, list): return float(v[0])
+        return float(v)
 
     def solve_step(self, dt, fuel_rate=None, feed_rate=None, kiln_rpm=None, fan_rate=None):
         dt_v = float(dt)
         c0 = self.cfg['raw_meal_composition']
         
-        # Giriş Değerleri
         cur_fan = fan_rate if fan_rate is not None else self.cfg.get('fan_rate_current', 850.0)
         m_dot_g_inlet = self._safe_f(self.cfg['gas'].get('nominal_flow', 8.5)) * (cur_fan / 850.0)
         h_gs = self._safe_f(self.cfg['gas'].get('h_gs', 350.0)) * ((cur_fan / 850.0)**0.4)
@@ -97,11 +108,18 @@ class KilnSolver:
         eff_mass = (m_dot_s / max(0.001, v_s)) * self.dz + 20.0
         diameter = self._safe_f(self.cfg['kiln']['diameter'])
         area_gas = (np.pi * (diameter / 2)**2) * 0.90
-        eps_eff = (self._safe_f(self.cfg['gas'].get('emissivity_g', 0.65)) + 0.85) / 2.0
+
+        if 'energy' in self.cfg and 'eps_eff' in self.cfg['energy']:
+            eps_eff = self._safe_f(self.cfg['energy']['eps_eff'])
+        elif hasattr(self.en, 'eps_eff'):
+            eps_eff = self.en.eps_eff
+        else:
+            eg = self._safe_f(self.cfg['gas'].get('emissivity_g', 0.65))
+            es = self._safe_f(self.cfg['material'].get('emissivity_s', 0.85))
+            eps_eff = (eg + es) / 2.0
 
         # --- ADIM A: TAŞINIM ---
         flow_factor = min(1.0, v_s * dt_v / self.dz)
-        # mass_rel dahil tüm parametreleri taşıyoruz
         params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X', 'total_mass']
         for p in params:
             if hasattr(self.state, p):
@@ -110,10 +128,10 @@ class KilnSolver:
                 if p == 'm_SiO2': arr[0] = float(c0['SiO2']) * 0.75
                 elif p == 'm_SiO2_locked': arr[0] = float(c0['SiO2']) * 0.25
                 elif p in ['m_Al2O3', 'm_Fe2O3']: arr[0] = float(c0[p[2:]])
-                elif p == 'total_mass': arr[0] = 1.0 # Girişte kütle tam
+                elif p == 'total_mass': arr[0] = 1.0
                 else: arr[0] = 0.0
 
-        # --- ADIM B: YUMUŞATILMIŞ SİLİS AKTİVASYONU ---
+        # --- ADIM B: SİLİS AKTİVASYONU ---
         activation_factor = np.clip((self.state.Ts - 1350.0) / 150.0, 0.0, 1.0)
         unlocked_mass = self.state.m_SiO2_locked * 0.40 * activation_factor * dt_v
         unlocked_mass = np.minimum(unlocked_mass, self.state.m_SiO2_locked)
@@ -128,18 +146,18 @@ class KilnSolver:
             self.state.rho_g, dt_v, self.dz, v_s, m_dot_s, m_dot_g_inlet,
             self._safe_f(self.cfg['material']['cp_s']), self._safe_f(self.cfg['gas']['cp_g']),
             np.array([self.kin.dH_calc, self.kin.dH_c2s, self.kin.dH_c3s, -125.0, -100.0]), 
-            area_gas, diameter * self.dz, self.damping, eff_mass, h_gs, 5.67e-8, eps_eff,
+            area_gas, diameter * self.dz, 1.0, # Damping 1.0 olarak geçildi
+            eff_mass, h_gs, 5.67e-8, eps_eff,
             self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min,
             self.cfg['kinetics'].get('pre_factor_c3a', 0.0015),
             self.cfg['kinetics'].get('pre_factor_c4af', 0.0010)
         )
 
-        # --- ADIM D: GÜNCELLEME ---
+        # --- ADIM D: GÜNCELLEME VE KÜTLE DENGESİ ---
         self.state.Ts += dTs * dt_v
         self.state.Tg += dTg * dt_v
         self.state.X += rates[0] * dt_v
 
-        # Faz Dönüşümleri
         c3a_inc = np.minimum(rates[3] * dt_v, self.state.m_Al2O3 / 0.377)
         c4af_inc = np.minimum(rates[4] * dt_v, self.state.m_Fe2O3 / 0.329)
         self.state.m_C3A += c3a_inc; self.state.m_C4AF += c4af_inc
@@ -152,17 +170,13 @@ class KilnSolver:
         self.state.m_C3S += c3s_inc
         self.state.m_C2S += (sio2_cons / 0.349) - (c3s_inc * 0.754)
         
-        # Kireç Dengesi
         cao_gain = rates[0] * dt_v * 0.561
-        cao_loss = ( (sio2_cons/0.349)*0.651 + c3s_inc*0.246 + c3a_inc*0.623 + c4af_inc*0.461 )
+        cao_loss = ((sio2_cons/0.349)*0.651 + c3s_inc*0.246 + c3a_inc*0.623 + c4af_inc*0.461)
         self.state.m_CaO += (cao_gain - cao_loss)
 
-        # --- ADIM E: DINAMIK KÜTLE DENGESI (Mass_Rel Düzelmesi) ---
-        # CO2 kaybını her node için hesaplıyoruz
         loi_factor = float(c0.get('CaCO3', 0.80)) * 0.4397
         self.state.total_mass = 1.0 - (np.minimum(self.state.X, 1.0) * loi_factor)
 
-        # Guard & Boundary
         for p in ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF']:
             setattr(self.state, p, np.maximum(1e-6, getattr(self.state, p)))
         

@@ -13,6 +13,10 @@ material:
   temp_inlet: 300.0
   emissivity_s: 0.85
 
+energy:
+  eps_eff: 0.06
+
+
 kinetics:
   k0: 1.0e6
   Ea: 2.1e5             
@@ -26,7 +30,7 @@ kinetics:
   dH_c2s: -7.5e5        
 
   k0_c3s: 2.0e6        
-  Ea_c3s: 2.8e5         
+  Ea_c3s: 2.7e5         
   T_min_c3s: 1473.0     
   dH_c3s: 5.0e4         
 
@@ -34,12 +38,12 @@ kinetics:
   pre_factor_c4af: 0.0010
 
 gas:
-  fuel_rate: 16.5       
-  fan_rate: 850.0       
+  fuel_rate: 16.0    
+  fan_rate: 800.0       
   nominal_flow: 8.5
-  temp_inlet: 2200.0    
+  temp_inlet: 2300.0 #Burner Temperature    
   cp_g: 1280.0
-  h_gs: 140.0           
+  h_gs: 8.0           
   emissivity_g: 0.55    
 
 solver:
@@ -56,4 +60,4 @@ raw_meal_composition:
   Fe2O3: 0.025
   # + %1 Other components
 
-fan_rate_current: 850.0
+fan_rate_current: 800.0
