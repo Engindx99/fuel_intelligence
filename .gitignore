@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 *.pyo
+core/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+core/__pycache__/
