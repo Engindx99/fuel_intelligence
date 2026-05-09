@@ -34,7 +34,7 @@ kinetics:
   pre_factor_c4af: 0.0010
 
 gas:
-  fuel_rate: 16.5       
+  fuel_rate: 4.16 # ton/h      
   fan_rate: 850.0       
   nominal_flow: 8.5
   temp_inlet: 2200.0    

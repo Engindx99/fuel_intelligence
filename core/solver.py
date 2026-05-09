@@ -13,8 +13,8 @@ def get_smooth_step(T, T_min, span=50.0):
 @njit
 def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m_C3A, m_C4AF,
                      rho_g, dt, dz, v_s, m_dot_s, m_dot_g_inlet, 
-                     cp_s, cp_g, dH_vec, area_gas, exchange_area_per_dz, 
-                     damping, effective_thermal_mass, h_gs, sigma, eps_eff,
+                     cp_s, cp_g, dH_vec, area_gas, q_gs_vec, q_rad_to_solid, q_rad_total_loss,
+                     damping, effective_thermal_mass, exchange_area_per_dz,
                      k0_vec, Ea_vec, R_const, T_min_vec,
                      k_flux_c3a, k_flux_c4af):
     
@@ -26,22 +26,16 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
             k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts[i]))
             rates[0, i] = min(k_calc * (1.0 - X[i]), 0.04)
 
-        # 2. Belit (C2S) - Yumuşak Başlangıç
+        # 2. Belit (C2S)
         f_c2s = get_smooth_step(Ts[i], T_min_vec[1], 50.0)
         if f_c2s > 0 and m_CaO[i] > 1e-4 and m_SiO2[i] > 1e-4:
             k_c2s = k0_vec[1] * np.exp(-Ea_vec[1] / (R_const * Ts[i]))
             rates[1, i] = min(k_c2s * m_CaO[i] * m_SiO2[i], 0.02) * f_c2s
 
-        # 3. Alit (C3S) - Numba Dostu Manuel Clip
+        # 3. Alit (C3S)
         f_c3s = get_smooth_step(Ts[i], T_min_vec[2], 75.0)
-        
-        # Belit Koruma (%10)
-        b_val = (m_C2S[i] - 0.10) / 0.05
-        belite_factor = min(max(b_val, 0.0), 1.0)
-        
-        # Kireç Sönümleme
-        c_val = (m_CaO[i] - 0.002) / 0.03
-        cao_factor = min(max(c_val, 0.0), 1.0)
+        belite_factor = min(max((m_C2S[i] - 0.10) / 0.05, 0.0), 1.0)
+        cao_factor = min(max((m_CaO[i] - 0.002) / 0.03, 0.0), 1.0)
         
         if f_c3s > 0 and m_C2S[i] > 0.01:
             k_c3s = (k0_vec[2] * 0.75) * np.exp(-Ea_vec[2] / (R_const * Ts[i]))
@@ -51,7 +45,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         if Ts[i] >= 1450.0: rates[3, i] = k_flux_c3a * m_Al2O3[i]
         if Ts[i] >= 1400.0: rates[4, i] = k_flux_c4af * m_Fe2O3[i]
 
-    # Termal ve Gaz Dinamiği
+    # Gaz Kütle Akışı (CO2 salınımı)
     m_dot_co2 = rates[0] * m_dot_s * 0.4397
     m_dot_g_local = np.full(N, m_dot_g_inlet)
     acc = 0.0
@@ -59,17 +53,18 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         acc += m_dot_co2[i]
         m_dot_g_local[i] += acc
 
-    q_gs = h_gs * (Tg - Ts) * exchange_area_per_dz
-    q_rad_gs = sigma * eps_eff * (Tg**4 - Ts**4) * exchange_area_per_dz
+    # Enerji Dengesi
     q_rxn = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2] + rates[3]*dH_vec[3] + rates[4]*dH_vec[4]) * m_dot_s
-    
     dTs, dTg = np.zeros(N), np.zeros(N)
-    dTs[1:] = (v_s * (Ts[:-1] - Ts[1:]) / dz)
-    dTs += (q_gs + q_rad_gs - 15.0*(Ts-Tw)*exchange_area_per_dz - q_rxn) / (effective_thermal_mass * cp_s)
     
+    # Katı Sıcaklığı Değişimi
+    dTs[1:] = (v_s * (Ts[:-1] - Ts[1:]) / dz)
+    dTs += (q_gs_vec + q_rad_to_solid - 15.0*(Ts-Tw)*exchange_area_per_dz - q_rxn) / (effective_thermal_mass * cp_s)
+    
+    # Gaz Sıcaklığı Değişimi
     v_g = m_dot_g_local / (np.maximum(0.1, rho_g) * area_gas)
     dTg[:-1] = (v_g[:-1] * (Tg[1:] - Tg[:-1]) / dz)
-    dTg -= (q_gs + q_rad_gs) / (np.maximum(1.0, m_dot_g_local) * cp_g)
+    dTg -= (q_gs_vec + q_rad_total_loss) / (np.maximum(1.0, m_dot_g_local) * cp_g)
             
     return dTs * damping, dTg * damping * 0.8, rates
 
@@ -87,21 +82,26 @@ class KilnSolver:
         dt_v = float(dt)
         c0 = self.cfg['raw_meal_composition']
         
-        # Giriş Değerleri
+        # Giriş Değişkenleri
+        cur_fuel = fuel_rate if fuel_rate is not None else self._safe_f(self.cfg['gas']['fuel_rate'])
         cur_fan = fan_rate if fan_rate is not None else self.cfg.get('fan_rate_current', 850.0)
+        
         m_dot_g_inlet = self._safe_f(self.cfg['gas'].get('nominal_flow', 8.5)) * (cur_fan / 850.0)
-        h_gs = self._safe_f(self.cfg['gas'].get('h_gs', 350.0)) * ((cur_fan / 850.0)**0.4)
         v_s = self.tra.calculate_solid_velocity(kiln_rpm or self._safe_f(self.cfg['kiln']['rpm']))
         m_dot_s = feed_rate or self._safe_f(self.cfg['material']['feed_rate'])
         
-        eff_mass = (m_dot_s / max(0.001, v_s)) * self.dz + 20.0
         diameter = self._safe_f(self.cfg['kiln']['diameter'])
         area_gas = (np.pi * (diameter / 2)**2) * 0.90
-        eps_eff = (self._safe_f(self.cfg['gas'].get('emissivity_g', 0.65)) + 0.85) / 2.0
+        exchange_area_dz = diameter * np.pi * self.dz
 
-        # --- ADIM A: TAŞINIM ---
+        # 1. Isı Transferi Dağılımı
+        h_gs = self.en.calculate_convection_coeff(cur_fan)
+        q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * exchange_area_dz
+        q_s, q_w, _ = self.en.calculate_radiation_distribution(self.state.Tg, self.state.Ts, self.state.Tw, exchange_area_dz)
+        q_rad_total_loss = q_s + q_w # Gazın kaybettiği (Katı + Duvar)
+
+        # 2. Taşınım (Material Flow)
         flow_factor = min(1.0, v_s * dt_v / self.dz)
-        # mass_rel dahil tüm parametreleri taşıyoruz
         params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X', 'total_mass']
         for p in params:
             if hasattr(self.state, p):
@@ -110,17 +110,17 @@ class KilnSolver:
                 if p == 'm_SiO2': arr[0] = float(c0['SiO2']) * 0.75
                 elif p == 'm_SiO2_locked': arr[0] = float(c0['SiO2']) * 0.25
                 elif p in ['m_Al2O3', 'm_Fe2O3']: arr[0] = float(c0[p[2:]])
-                elif p == 'total_mass': arr[0] = 1.0 # Girişte kütle tam
+                elif p == 'total_mass': arr[0] = 1.0
                 else: arr[0] = 0.0
 
-        # --- ADIM B: YUMUŞATILMIŞ SİLİS AKTİVASYONU ---
+        # 3. Silis Aktivasyonu
         activation_factor = np.clip((self.state.Ts - 1350.0) / 150.0, 0.0, 1.0)
-        unlocked_mass = self.state.m_SiO2_locked * 0.40 * activation_factor * dt_v
-        unlocked_mass = np.minimum(unlocked_mass, self.state.m_SiO2_locked)
+        unlocked_mass = np.minimum(self.state.m_SiO2_locked * 0.40 * activation_factor * dt_v, self.state.m_SiO2_locked)
         self.state.m_SiO2_locked -= unlocked_mass
         self.state.m_SiO2 += unlocked_mass
 
-        # --- ADIM C: REAKSİYONLAR (NUMBA) ---
+        # 4. Reaksiyonlar ve Enerji Dengesi (Numba)
+        eff_mass = (m_dot_s / max(0.001, v_s)) * self.dz + 20.0
         dTs, dTg, rates = _numba_step_core(
             self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
             self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
@@ -128,43 +128,46 @@ class KilnSolver:
             self.state.rho_g, dt_v, self.dz, v_s, m_dot_s, m_dot_g_inlet,
             self._safe_f(self.cfg['material']['cp_s']), self._safe_f(self.cfg['gas']['cp_g']),
             np.array([self.kin.dH_calc, self.kin.dH_c2s, self.kin.dH_c3s, -125.0, -100.0]), 
-            area_gas, diameter * self.dz, self.damping, eff_mass, h_gs, 5.67e-8, eps_eff,
+            area_gas, q_gs_vec, q_s, q_rad_total_loss, self.damping, eff_mass, exchange_area_dz,
             self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min,
             self.cfg['kinetics'].get('pre_factor_c3a', 0.0015),
             self.cfg['kinetics'].get('pre_factor_c4af', 0.0010)
         )
 
-        # --- ADIM D: GÜNCELLEME ---
+        # 5. Güncelleme ve Kütle Dengesi
         self.state.Ts += dTs * dt_v
         self.state.Tg += dTg * dt_v
         self.state.X += rates[0] * dt_v
 
-        # Faz Dönüşümleri
-        c3a_inc = np.minimum(rates[3] * dt_v, self.state.m_Al2O3 / 0.377)
-        c4af_inc = np.minimum(rates[4] * dt_v, self.state.m_Fe2O3 / 0.329)
-        self.state.m_C3A += c3a_inc; self.state.m_C4AF += c4af_inc
-        self.state.m_Al2O3 -= (c3a_inc * 0.377 + c4af_inc * 0.210)
-        self.state.m_Fe2O3 -= (c4af_inc * 0.329)
-        
+        # Faz kütle güncellemeleri
+        self.state.m_C3A += np.minimum(rates[3] * dt_v, self.state.m_Al2O3 / 0.377)
+        self.state.m_C4AF += np.minimum(rates[4] * dt_v, self.state.m_Fe2O3 / 0.329)
+        self.state.m_Al2O3 = np.maximum(1e-6, self.state.m_Al2O3 - (rates[3]*dt_v*0.377 + rates[4]*dt_v*0.210))
+        self.state.m_Fe2O3 = np.maximum(1e-6, self.state.m_Fe2O3 - (rates[4]*dt_v*0.329))
         sio2_cons = np.minimum(rates[1] * dt_v * 0.349, self.state.m_SiO2 * 0.98)
         self.state.m_SiO2 -= sio2_cons
         c3s_inc = np.minimum(rates[2] * dt_v, self.state.m_C2S * 0.5)
         self.state.m_C3S += c3s_inc
         self.state.m_C2S += (sio2_cons / 0.349) - (c3s_inc * 0.754)
-        
-        # Kireç Dengesi
-        cao_gain = rates[0] * dt_v * 0.561
-        cao_loss = ( (sio2_cons/0.349)*0.651 + c3s_inc*0.246 + c3a_inc*0.623 + c4af_inc*0.461 )
-        self.state.m_CaO += (cao_gain - cao_loss)
+        self.state.m_CaO += (rates[0]*dt_v*0.561) - ((sio2_cons/0.349)*0.651 + c3s_inc*0.246 + rates[3]*dt_v*0.623 + rates[4]*dt_v*0.461)
+        self.state.total_mass = 1.0 - (np.minimum(self.state.X, 1.0) * float(c0.get('CaCO3', 0.80)) * 0.4397)
 
-        # --- ADIM E: DINAMIK KÜTLE DENGESI (Mass_Rel Düzelmesi) ---
-        # CO2 kaybını her node için hesaplıyoruz
-        loi_factor = float(c0.get('CaCO3', 0.80)) * 0.4397
-        self.state.total_mass = 1.0 - (np.minimum(self.state.X, 1.0) * loi_factor)
-
-        # Guard & Boundary
+        # Guard & Boundary Conditions
         for p in ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF']:
             setattr(self.state, p, np.maximum(1e-6, getattr(self.state, p)))
         
+        # --- DINAMIK GAZ GIRIS SICAKLIGI (Alev Modeli) ---
+        lhv_fuel = 40000.0 # kJ/kg
+        fuel_kg_s = cur_fuel / 3.6 # t/h -> kg/s
+        cp_g = self._safe_f(self.cfg['gas']['cp_g'])
+        
+        # t_sec_air: Sekonder hava sıcaklığı (Soğutucudan gelen)
+        t_sec_air = 1100.0
+        if m_dot_g_inlet > 0.1:
+            delta_T_flame = (fuel_kg_s * lhv_fuel) / (m_dot_g_inlet * cp_g / 1000.0)
+            t_gas_inlet = t_sec_air + delta_T_flame
+        else:
+            t_gas_inlet = t_sec_air
+            
+        self.state.Tg[-1] = min(t_gas_inlet, 2500.0) 
         self.state.Ts[0] = self._safe_f(self.cfg['material']['temp_inlet'])
-        self.state.Tg[-1] = self._safe_f(self.cfg['gas']['temp_inlet'])

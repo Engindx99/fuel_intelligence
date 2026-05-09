@@ -44,7 +44,7 @@ def main():
     t_final = 24.0 * 3600.0  
     dt = float(config['solver']['dt'])
     
-    fuel_rate = float(config['gas'].get('fuel_rate', 16.0))
+    fuel_rate = float(config['gas'].get('fuel_rate', 4.16))
     fan_rate  = float(config['gas'].get('fan_rate', 800.0))
     kiln_rpm  = float(config['kiln'].get('rpm', 2.0))
     feed_rate = float(config['material'].get('feed_rate', 10.0))
