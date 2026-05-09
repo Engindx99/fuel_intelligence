@@ -59,7 +59,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
     dTs, dTg = np.zeros(N), np.zeros(N)
     
     # Katı Enerji Dengesi
-    dTs[1:] = (v_s * (Ts[:-1] - Ts[1:]) / dz)
+    dTs[1:] = -v_s * (Ts[1:] - Ts[:-1]) / dz
     # Mevcut energy.py'ye göre q_rad_gs_vec doğrudan eklenir
     dTs += (q_gs_vec + q_rad_gs_vec - 15.0*(Ts-Tw)*exchange_area_per_dz - q_rxn) / (effective_thermal_mass * cp_s)
     
