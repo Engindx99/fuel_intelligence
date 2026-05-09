@@ -60,7 +60,7 @@ class CalcinationKinetics:
         ])
         
         self.T_min = np.array([
-            float(config['kinetics'].get('T_min_rxn', 850.0)),
+            float(config['kinetics'].get('T_min_rxn', 800.0)),
             float(config['kinetics'].get('T_min_c2s', 1100.0)),
             float(config['kinetics'].get('T_min_c3s', 1450.0))
         ])

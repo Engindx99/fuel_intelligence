@@ -13,7 +13,7 @@ def get_smooth_step(T, T_min, span=50.0):
 @njit
 def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m_C3A, m_C4AF,
                      rho_g, dt, dz, v_s, m_dot_s, m_dot_g_inlet, 
-                     cp_s, cp_g, dH_vec, area_gas, q_gs_vec, q_rad_to_solid, q_rad_total_loss,
+                     cp_s, cp_g, dH_vec, area_gas, q_gs_vec, q_rad_gs_vec,
                      damping, effective_thermal_mass, exchange_area_per_dz,
                      k0_vec, Ea_vec, R_const, T_min_vec,
                      k_flux_c3a, k_flux_c4af):
@@ -45,7 +45,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         if Ts[i] >= 1450.0: rates[3, i] = k_flux_c3a * m_Al2O3[i]
         if Ts[i] >= 1400.0: rates[4, i] = k_flux_c4af * m_Fe2O3[i]
 
-    # Gaz Kütle Akışı (CO2 salınımı)
+    # Gaz Kütle Akış Güncellemesi (CO2 salınımı)
     m_dot_co2 = rates[0] * m_dot_s * 0.4397
     m_dot_g_local = np.full(N, m_dot_g_inlet)
     acc = 0.0
@@ -53,18 +53,20 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         acc += m_dot_co2[i]
         m_dot_g_local[i] += acc
 
-    # Enerji Dengesi
+    # Isı Dengesi
     q_rxn = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2] + rates[3]*dH_vec[3] + rates[4]*dH_vec[4]) * m_dot_s
+    
     dTs, dTg = np.zeros(N), np.zeros(N)
     
-    # Katı Sıcaklığı Değişimi
+    # Katı Enerji Dengesi
     dTs[1:] = (v_s * (Ts[:-1] - Ts[1:]) / dz)
-    dTs += (q_gs_vec + q_rad_to_solid - 15.0*(Ts-Tw)*exchange_area_per_dz - q_rxn) / (effective_thermal_mass * cp_s)
+    # Mevcut energy.py'ye göre q_rad_gs_vec doğrudan eklenir
+    dTs += (q_gs_vec + q_rad_gs_vec - 15.0*(Ts-Tw)*exchange_area_per_dz - q_rxn) / (effective_thermal_mass * cp_s)
     
-    # Gaz Sıcaklığı Değişimi
+    # Gaz Enerji Dengesi
     v_g = m_dot_g_local / (np.maximum(0.1, rho_g) * area_gas)
     dTg[:-1] = (v_g[:-1] * (Tg[1:] - Tg[:-1]) / dz)
-    dTg -= (q_gs_vec + q_rad_total_loss) / (np.maximum(1.0, m_dot_g_local) * cp_g)
+    dTg -= (q_gs_vec + q_rad_gs_vec) / (np.maximum(1.0, m_dot_g_local) * cp_g)
             
     return dTs * damping, dTg * damping * 0.8, rates
 
@@ -84,9 +86,9 @@ class KilnSolver:
         
         # Giriş Değişkenleri
         cur_fuel = fuel_rate if fuel_rate is not None else self._safe_f(self.cfg['gas']['fuel_rate'])
-        cur_fan = fan_rate if fan_rate is not None else self.cfg.get('fan_rate_current', 850.0)
+        cur_fan = fan_rate if fan_rate is not None else self.cfg.get('fan_rate_current', 800.0)
         
-        m_dot_g_inlet = self._safe_f(self.cfg['gas'].get('nominal_flow', 8.5)) * (cur_fan / 850.0)
+        m_dot_g_inlet = self._safe_f(self.cfg['gas'].get('nominal_flow', 8.5)) * (cur_fan / 800.0)
         v_s = self.tra.calculate_solid_velocity(kiln_rpm or self._safe_f(self.cfg['kiln']['rpm']))
         m_dot_s = feed_rate or self._safe_f(self.cfg['material']['feed_rate'])
         
@@ -94,13 +96,15 @@ class KilnSolver:
         area_gas = (np.pi * (diameter / 2)**2) * 0.90
         exchange_area_dz = diameter * np.pi * self.dz
 
-        # 1. Isı Transferi Dağılımı
+        # --- ENERGYMODEL ENTEGRASYONU ---
+        # 1. Konveksiyon
         h_gs = self.en.calculate_convection_coeff(cur_fan)
         q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * exchange_area_dz
-        q_s, q_w, _ = self.en.calculate_radiation_distribution(self.state.Tg, self.state.Ts, self.state.Tw, exchange_area_dz)
-        q_rad_total_loss = q_s + q_w # Gazın kaybettiği (Katı + Duvar)
+        
+        # 2. Radyasyon (energy.py içindeki sadeleşmiş metod çağrılıyor)
+        q_rad_gs_vec = self.en.calculate_radiation_flux(self.state.Tg, self.state.Ts, exchange_area_dz)
 
-        # 2. Taşınım (Material Flow)
+        # --- TAŞINIM ---
         flow_factor = min(1.0, v_s * dt_v / self.dz)
         params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X', 'total_mass']
         for p in params:
@@ -113,14 +117,15 @@ class KilnSolver:
                 elif p == 'total_mass': arr[0] = 1.0
                 else: arr[0] = 0.0
 
-        # 3. Silis Aktivasyonu
+        # --- SİLİS AKTİVASYONU ---
         activation_factor = np.clip((self.state.Ts - 1350.0) / 150.0, 0.0, 1.0)
         unlocked_mass = np.minimum(self.state.m_SiO2_locked * 0.40 * activation_factor * dt_v, self.state.m_SiO2_locked)
         self.state.m_SiO2_locked -= unlocked_mass
         self.state.m_SiO2 += unlocked_mass
 
-        # 4. Reaksiyonlar ve Enerji Dengesi (Numba)
+        # --- REAKSİYONLAR (NUMBA) ---
         eff_mass = (m_dot_s / max(0.001, v_s)) * self.dz + 20.0
+        
         dTs, dTg, rates = _numba_step_core(
             self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
             self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
@@ -128,13 +133,13 @@ class KilnSolver:
             self.state.rho_g, dt_v, self.dz, v_s, m_dot_s, m_dot_g_inlet,
             self._safe_f(self.cfg['material']['cp_s']), self._safe_f(self.cfg['gas']['cp_g']),
             np.array([self.kin.dH_calc, self.kin.dH_c2s, self.kin.dH_c3s, -125.0, -100.0]), 
-            area_gas, q_gs_vec, q_s, q_rad_total_loss, self.damping, eff_mass, exchange_area_dz,
+            area_gas, q_gs_vec, q_rad_gs_vec, self.damping, eff_mass, exchange_area_dz,
             self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min,
             self.cfg['kinetics'].get('pre_factor_c3a', 0.0015),
             self.cfg['kinetics'].get('pre_factor_c4af', 0.0010)
         )
 
-        # 5. Güncelleme ve Kütle Dengesi
+        # --- GÜNCELLEME VE KÜTLE DENGESİ ---
         self.state.Ts += dTs * dt_v
         self.state.Tg += dTg * dt_v
         self.state.X += rates[0] * dt_v
@@ -156,12 +161,10 @@ class KilnSolver:
         for p in ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF']:
             setattr(self.state, p, np.maximum(1e-6, getattr(self.state, p)))
         
-        # --- DINAMIK GAZ GIRIS SICAKLIGI (Alev Modeli) ---
+        # --- DINAMIK GAZ GIRIS SICAKLIGI ---
         lhv_fuel = 40000.0 # kJ/kg
-        fuel_kg_s = cur_fuel / 3.6 # t/h -> kg/s
+        fuel_kg_s = cur_fuel / 3.6
         cp_g = self._safe_f(self.cfg['gas']['cp_g'])
-        
-        # t_sec_air: Sekonder hava sıcaklığı (Soğutucudan gelen)
         t_sec_air = 1100.0
         if m_dot_g_inlet > 0.1:
             delta_T_flame = (fuel_kg_s * lhv_fuel) / (m_dot_g_inlet * cp_g / 1000.0)

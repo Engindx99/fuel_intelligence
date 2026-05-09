@@ -51,10 +51,10 @@ def main():
 
     # --- TERMINAL HEADERS ---
     print(f"\n[SIMULATION STARTED] Target Duration: {t_final/3600:.1f} hours")
-    print("=" * 150)
+    
     header = f"{'Time':>6} | {'Ts_Out':>7} | {'X_Calc':>6} | {'CaO':>6} | {'SiO2':>6} | {'C2S':>6} | {'C3S':>6} | {'C3A':>6} | {'C4AF':>6} | {'Mass_Rel':>8}"
     print(header)
-    print("-" * 150)
+    
 
     # 4. Main Loop
     start_wall_time = time.time()
