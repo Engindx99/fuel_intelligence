@@ -4,12 +4,14 @@ kiln:
   slope: 0.03          
   rpm: 3.0             
   nodes: 100
-  filling_degree: 0.13
+  filling_degree: 0.10
+
+# process assumption: 3.0GJ/ton raw meal 
 
 material:
-  feed_rate: 125.0 # ton/h       
+  feed_rate: 125 # kg/h       
   rho_s: 1600.0
-  cp_s: 1150.0          
+  cp_s: 1100.0          
   temp_inlet: 300.0
   emissivity_s: 0.85
 
@@ -34,13 +36,14 @@ kinetics:
   pre_factor_c4af: 0.0010
 
 gas:
-  fuel_rate: 7.5 # ton/h      
+  fuel_rate: 0.0 # ton/h      
   fan_rate: 800.0       
   nominal_flow: 52.0
-  temp_inlet: 2000.0    
+  temp_inlet: 1200   
   cp_g: 1280.0
-  h_gs: 140.0           
-  emissivity_g: 0.50    
+  h_gs: 25.0           
+  emissivity_g: 0.50  
+  lhv_fuel: 32000.0  # kJ/kg bazında alt ısıl değer 
 
 solver:
   dt: 0.05              
