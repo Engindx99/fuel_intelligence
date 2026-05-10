@@ -4,7 +4,7 @@ from core.state import KilnState
 
 @njit
 def get_smooth_step(T, T_min, span=50.0):
-    """Sayısal süreksizliği önlemek için yumuşak geçiş fonksiyonu."""
+    """Sayısal süreksizliği ve sert geçişleri engellemek için düzleştirme fonksiyonu."""
     val = (T - T_min) / span
     if val < 0: return 0.0
     if val > 1: return 1.0
@@ -21,34 +21,33 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
     rates = np.zeros((5, N))
     
     for i in range(N):
-        # 1. Kalsinasyon (Kireç oluşumu)
+        # 1. Kalsinasyon
         if Ts[i] >= T_min_vec[0] and X[i] < 1.0:
             k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts[i]))
-            rates[0, i] = min(k_calc * (1.0 - X[i]), 0.05)
+            rates[0, i] = min(k_calc * (1.0 - X[i]), 0.015)
 
-        # 2. Belit (C2S) Oluşumu (Tüketim: CaO + SiO2)
+        # 2. Belit (C2S) Oluşumu
         f_c2s = get_smooth_step(Ts[i], T_min_vec[1], 50.0)
-        # Reaksiyon ancak hammadde varsa gerçekleşir
-        if f_c2s > 0 and m_CaO[i] > 0.001 and m_SiO2[i] > 0.001:
+        if f_c2s > 0 and m_CaO[i] > 1e-6 and m_SiO2[i] > 1e-6:
             k_c2s = k0_vec[1] * np.exp(-Ea_vec[1] / (R_const * Ts[i]))
-            rates[1, i] = min(k_c2s * m_CaO[i] * m_SiO2[i], 0.02) * f_c2s
+            rates[1, i] = min(k_c2s * m_CaO[i] * m_SiO2[i], 0.025) * f_c2s
 
-        # 3. Alit (C3S) Oluşumu (Tüketim: C2S + CaO)
+        # 3. Alit (C3S) Oluşumu
         f_c3s = get_smooth_step(Ts[i], T_min_vec[2], 75.0)
-        # C2S %10 emniyet freni (Saturation Brake)
-        c2s_safety_margin = get_smooth_step(m_C2S[i], 0.10, span=0.02)
+        c2s_safety_margin = get_smooth_step(m_C2S[i], 0.10, span=0.01)
+        liquid_factor = 1.0 + 8.0 * (m_C3A[i] + m_C4AF[i])
         
-        if f_c3s > 0 and m_C2S[i] > 0.01 and m_CaO[i] > 0.001:
+        if f_c3s > 0 and m_C2S[i] > 1e-6 and m_CaO[i] > 1e-6:
             k_c3s = k0_vec[2] * np.exp(-Ea_vec[2] / (R_const * Ts[i]))
-            rates[2, i] = k_c3s * m_C2S[i] * m_CaO[i] * f_c3s * c2s_safety_margin
+            rates[2, i] = k_c3s * m_C2S[i] * m_CaO[i] * f_c3s * c2s_safety_margin * liquid_factor
 
-        # 4. Sıvı Fazlar
-        if Ts[i] >= 1420.0 and m_Al2O3[i] > 0.001: 
+        # 4. Sıvı Fazlar (Flux)
+        if Ts[i] >= 1400.0 and m_Al2O3[i] > 1e-6: 
             rates[3, i] = k_flux_c3a * m_Al2O3[i]
-        if Ts[i] >= 1380.0 and m_Fe2O3[i] > 0.001: 
+        if Ts[i] >= 1350.0 and m_Fe2O3[i] > 1e-6: 
             rates[4, i] = k_flux_c4af * m_Fe2O3[i]
 
-    # Reaksiyon ısıları
+    # Enerji Dengesi
     q_rxn = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2] + 
              rates[3]*dH_vec[3] + rates[4]*dH_vec[4]) * m_dot_s_kg_s
     
@@ -57,8 +56,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
     
     dTs[1:] = -v_s * (Ts[1:] - Ts[:-1]) / dz
     q_loss_wall = loss_coeff * (Ts - Tw) * exchange_area_per_dz
-    q_net_s = (q_gs_vec + q_rad_net_vec - q_loss_wall - q_rxn)
-    dTs += q_net_s / thermal_capacity_s
+    dTs += (q_gs_vec + q_rad_net_vec - q_loss_wall - q_rxn) / thermal_capacity_s
     
     m_dot_g_local = np.full(N, m_dot_g_inlet_kg_s)
     v_g = m_dot_g_local / (np.maximum(0.1, rho_g) * area_gas)
@@ -77,10 +75,8 @@ class KilnSolver:
         self.state = KilnState(nodes)
         self.dz = self._safe_f(config['kiln']['length']) / nodes
         self.total_sim_time = 0.0
-        self.warmup_duration = 10800.0 
-        self.max_dt_temp_change = 1.0
+        self.max_dt_temp_change = 8.0 
         self._log_timer = 0
-        self.cooldown_timer = 0.0
 
     def _safe_f(self, v): 
         return float(v[0]) if isinstance(v, list) else float(v)
@@ -93,44 +89,40 @@ class KilnSolver:
         m_dot_s_kg_s = (feed_rate * 1000.0) / 3600.0 
         m_dot_g_inlet_kg_s = self._safe_f(self.cfg['gas']['nominal_flow']) * (fan_rate / 800.0)
         
-        # Isınma rampası ve soğuma dinamiği
-        base_rampa = 1.0 - np.exp(-0.53 * self.total_sim_time / self.warmup_duration)
-        if fuel_kg_s < 0.01:
-            self.cooldown_timer += dt_v
-            decay = np.exp(-self.cooldown_timer / 10800.0)
-            rampa = base_rampa * decay
-            loss_coeff = 35.0
-        else:
-            self.cooldown_timer = 0.0
-            rampa = base_rampa
-            loss_coeff = 12.0
-        rampa = max(0.05, rampa)
-
         v_s = self.tra.calculate_solid_velocity(kiln_rpm)
         fill_degree = self.tra.get_dynamic_filling_degree(kiln_rpm)
         
-        inertia_factor = 0.51
-        eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * inertia_factor
+        # --- ENTEGRASYON 1: 0.51 TERMAL ATALET ---
+        eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * 4.469
         
         diameter = self._safe_f(self.cfg['kiln']['diameter'])
         area_gas = (np.pi * (diameter / 2)**2) * (1.0 - fill_degree)
         exchange_area_dz = diameter * np.pi * self.dz
-        efektif_temas_alani = exchange_area_dz * (fill_degree * 2.0)
 
-        h_gs = self.en.calculate_convection_coeff(fan_rate) * rampa
-        q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * efektif_temas_alani
-        q_rad_net_vec = self.en.calculate_radiation_flux(
-            self.state.Tg, self.state.Ts, self.state.Tw, efektif_temas_alani
-        ) * rampa
+        # --- ENTEGRASYON 2: GİRİŞ SÖNÜMLEME ---
+        z_coords = np.linspace(0, self.cfg['kiln']['length'], self.state.N)
+        dist_damp = 0.2 + 0.8 * np.clip(z_coords / 12.0, 0.0, 1.0)
+        
+        rampa = max(0.05, 1.0 - np.exp(-0.71 * self.total_sim_time / 86400.0))
+        h_gs = self.en.calculate_convection_coeff(fan_rate) * rampa * dist_damp
+        q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * (exchange_area_dz * fill_degree * 2.0)
+        q_rad_net_vec = self.en.calculate_radiation_flux(self.state.Tg, self.state.Ts, self.state.Tw, exchange_area_dz) * rampa * dist_damp
 
-        # Taşınım (Advection)
-        flow_factor = np.clip(v_s * dt_v / self.dz, 0.0, 1.0)
-        params = ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
+        # --- TAŞINIM ---
+        f_red = np.clip(v_s * dt_v / self.dz, 0.0, 1.0) * 0.5 
+        params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
         for p in params:
             arr = getattr(self.state, p)
-            arr[1:] = (1.0 - flow_factor) * arr[1:] + flow_factor * arr[:-1]
+            arr[1:] = (1.0 - f_red) * arr[1:] + f_red * arr[:-1]
 
-        # Numba Hesaplama
+        # --- ENTEGRASYON 3: HÜCRE BAZLI %50 SILICA UNLOCKING ---
+        # Aktif silis düzeyi biterken rezervdekini (kalan yarısını) devreye sokar
+        unlock_mask = (self.state.m_SiO2 < 0.002) & (self.state.m_SiO2_locked > 0)
+        if np.any(unlock_mask):
+            self.state.m_SiO2[unlock_mask] += self.state.m_SiO2_locked[unlock_mask]
+            self.state.m_SiO2_locked[unlock_mask] = 0.0
+
+        # --- NUMBA CORE ---
         dTs, dTg, rates = _numba_step_core(
             self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
             self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
@@ -139,56 +131,44 @@ class KilnSolver:
             self._safe_f(self.cfg['material']['cp_s']), self._safe_f(self.cfg['gas']['cp_g']),
             np.array([self.kin.dH_calc, self.kin.dH_c2s, self.kin.dH_c3s, -125.0, -100.0]), 
             area_gas, q_gs_vec, q_rad_net_vec, eff_mass_node, exchange_area_dz,
-            self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min, 0.0015, 0.0010, loss_coeff
+            self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min, 0.0015, 0.0010, 12.0
         )
 
-        max_jump = np.max(np.abs(dTs * dt_v))
-        actual_dt = dt_v * min(1.0, self.max_dt_temp_change / (max_jump + 1e-6))
+        actual_dt = dt_v * min(1.0, self.max_dt_temp_change / (np.max(np.abs(dTs * dt_v)) + 1e-6))
 
-        # --- DURUM GÜNCELLEME VE STOKİOMETRİK TÜKETİM ---
+        # --- GÜNCELLEME (Senin Orijinal Stokiyometrin) ---
         self.state.Ts += dTs * actual_dt
         self.state.Tg += dTg * actual_dt
-        self.state.X += rates[0] * actual_dt
-        self.state.m_C3A += rates[3] * actual_dt
-        self.state.m_C4AF += rates[4] * actual_dt
+        self.state.X  += rates[0] * actual_dt
         self.state.m_C3S += rates[2] * actual_dt
-        
-        # C2S Dengesi: Belit Oluşumu - Alit'e Dönüşen (Katsayı ~0.744)
         self.state.m_C2S += (rates[1] - rates[2] * 0.744) * actual_dt
-        
-        # SiO2 Tüketimi: C2S oluşurken harcanır (Katsayı ~0.349)
         self.state.m_SiO2 -= (rates[1] * 0.349) * actual_dt
-        
-        # CaO Dengesi: Kalsinasyon (+0.56) - C2S harcaması (-0.651) - C3S harcaması (-0.246)
-        self.state.m_CaO += (rates[0] * 0.56 - rates[1] * 0.651 - rates[2] * 0.246) * actual_dt
-        
-        # Al2O3 ve Fe2O3 Tüketimi (Flux fazları için)
+        self.state.m_CaO  += (rates[0] * 0.56 - rates[1] * 0.651 - rates[2] * 0.246) * actual_dt
+        self.state.m_C3A  += rates[3] * actual_dt
+        self.state.m_C4AF += rates[4] * actual_dt
         self.state.m_Al2O3 -= rates[3] * actual_dt
         self.state.m_Fe2O3 -= rates[4] * actual_dt
 
-        # Güvenlik Sınırları
-        self.state.m_SiO2 = np.maximum(self.state.m_SiO2, 1e-5)
-        self.state.m_CaO = np.maximum(self.state.m_CaO, 1e-5)
-        self.state.m_Al2O3 = np.maximum(self.state.m_Al2O3, 1e-5)
-        self.state.m_Fe2O3 = np.maximum(self.state.m_Fe2O3, 1e-5)
-        self.state.m_C2S = np.maximum(self.state.m_C2S, 1e-5)
+        for s in ['m_SiO2', 'm_CaO', 'm_C2S', 'm_C3S', 'X', 'm_Al2O3', 'm_Fe2O3']:
+            setattr(self.state, s, np.maximum(getattr(self.state, s), 0.0))
 
-        # Gaz Alev Profili
+        # --- ALEV MODELİ VE SINIRLAMA (Senin Orijinal Yapın) ---
         lhv = self._safe_f(self.cfg['gas'].get('lhv_fuel', 32000.0))
-        t_flame_base = 1200.0 + (fuel_kg_s * lhv * rampa) / (max(0.1, m_dot_g_inlet_kg_s) * self._safe_f(self.cfg['gas']['cp_g']) / 1000.0)
-        t_flame_max = min(t_flame_base, 2350.0)
-        
-        flame_nodes = 12
-        for i in range(flame_nodes):
+        t_flame = 1200.0 + (fuel_kg_s * lhv * rampa) / (max(0.1, m_dot_g_inlet_kg_s) * self._safe_f(self.cfg['gas']['cp_g']) / 1000.0)
+        t_flame = min(t_flame, 2350.0)
+        for i in range(12):
             idx = (self.state.N - 1) - i
-            weight = (flame_nodes - i) / flame_nodes
-            tg_min_dynamic = 400.0 + (700.0 * rampa)
-            self.state.Tg[idx] = max(self.state.Tg[idx], tg_min_dynamic + (t_flame_max - tg_min_dynamic) * weight)
+            self.state.Tg[idx] = max(self.state.Tg[idx], 400.0 + (t_flame - 400.0) * ((12-i)/12))
 
+        # Gaz çıkış (z=0) limiti - Şok kalsinasyonu kesmek için
+        self.state.Tg[0] = min(self.state.Tg[0], 900.0)
         self.state.Ts[0] = self._safe_f(self.cfg['material']['temp_inlet'])
 
-        # Loglama
+        # --- LOGLAMA ---
         self._log_timer += dt_v
         if self._log_timer >= 600:
-            print(f"[{'HEATING' if fuel_kg_s > 0 else 'COOL'}] Ts_max: {np.max(self.state.Ts):.1f}K | C3S: {np.max(self.state.m_C3S):.3f} | CaO: {np.max(self.state.m_CaO):.3f}")
+            locked_total = np.sum(self.state.m_SiO2_locked)
+            print(f"[RESERVE] SIO2 Locked: {locked_total:.4f} | CaO Max: {np.max(self.state.m_CaO):.3f}")
             self._log_timer = 0
+
+        return actual_dt

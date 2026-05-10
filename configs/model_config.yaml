@@ -1,3 +1,8 @@
+# ==========================================================
+# FINAL RECOVERY CONFIGURATION
+# Goal: Break the 16.28% CaO Stagnation
+# ==========================================================
+
 kiln:
   length: 60.0
   diameter: 4.2
@@ -7,55 +12,78 @@ kiln:
   filling_degree: 0.10
 
 material:
-  feed_rate: 125.0 # t/h
+  feed_rate: 125.0
   rho_s: 1600.0
   cp_s: 1100.0
   temp_inlet: 300.0
   emissivity_s: 0.85
 
 kinetics:
-  # Kalsinasyon (Endotermik)
-  k0: 1.0e6
-  Ea: 2.3e5
+  # ==========================================================
+  # CALCINATION (CaCO3 -> CaO + CO2)
+  # ==========================================================
+  k0: 3.0e5
+  Ea: 1.78e5
   R: 8.314
-  T_min_rxn: 873.0
+  T_min_rxn: 1073.0
   dH: 1.78e6
 
-  # Belit (C2S) Oluşumu (Egzotermik)
-  k0_c2s: 3.7e5
-  Ea_c2s: 2.4e5
-  T_min_c2s: 1223.0
-  dH_c2s: -7.5e5
+  # ==========================================================
+  # BELITE (C2S)
+  # 2CaO + SiO2 -> C2S
+  # ==========================================================
+  k0_c2s: 3.5e5
+  Ea_c2s: 2.45e5
+  T_min_c2s: 1220.0
+  T_opt_c2s: 1350.0
+  T_max_c2s: 1500.0
+  dH_c2s: -1.10e6
 
-  # Alit (C3S) Oluşumu (Hafif Endotermik/Nötr)
-  k0_c3s: 5.1e6
-  Ea_c3s: 2.6e5
-  T_min_c3s: 1453.0
-  dH_c3s: 5.0e4
+  # ==========================================================
+  # ALITE (C3S)
+  # CaO + C2S -> C3S
+  # (kritik faz — CaO tüketimini belirler)
+  # ==========================================================
+  k0_c3s: 1.2e5
+  Ea_c3s: 2.60e5
+  T_min_c3s: 1380.0
+  T_opt_c3s: 1450.0
+  T_max_c3s: 1550.0
+  dH_c3s: -2.0e5
 
-  pre_factor_c3a: 0.0015
-  pre_factor_c4af: 0.0010
+  # ==========================================================
+  # AUX PHASES
+  # ==========================================================
+  pre_factor_c3a: 8.0e-4
+  pre_factor_c4af: 5.0e-4
+
+  # ==========================================================
+  # NUMERICAL / SAFETY
+  # ==========================================================
+  arrhenius_clip_min: -80.0
+  arrhenius_clip_max: 45.0
+
+  max_conversion_per_step: 0.06
+  min_species_floor: 1e-12
 
 gas:
-  fuel_rate: 11.72 # t/h (Yaklaşık 3.0 GJ/t raw meal sağlar)
+  fuel_rate: 11.72       
   fan_rate: 800.0
   nominal_flow: 52.0
-  temp_inlet: 1200.0
+  temp_inlet: 1200.0    
   cp_g: 1280.0
-  h_gs: 25.0
-  emissivity_g: 0.50
-  lhv_fuel: 32000.0 # kJ/kg
-
-solver:
-  dt: 0.05
-  t_final: 10800
-  tolerance: 1e-4
+  h_gs: 30.0        
+  emissivity_g: 040
+  lhv_fuel: 32000.0
 
 raw_meal_composition:
-  # STOKİOMETRİK DÜZELTME: 
-  # Serbest CaO'yu düşürmek ve C3S'i %60 bandına çekmek için 
-  # Silis (SiO2) artırıldı, Kireç (CaCO3) hafif dengelendi.
-  CaCO3: 0.735  # %73.5 (Önceki: 0.750)
-  SiO2: 0.205   # %20.5 (Önceki: 0.170)
-  Al2O3: 0.040  # %4.0
-  Fe2O3: 0.020  # %2.0
+  
+  CaCO3: 0.730           
+  SiO2: 0.210            
+  Al2O3: 0.040           
+  Fe2O3: 0.020           
+
+solver:
+  dt: 0.05               
+  t_final: 10800
+  tolerance: 1e-4
