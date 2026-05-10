@@ -16,7 +16,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
                      cp_s, cp_g, dH_vec, area_gas, q_gs_vec, q_rad_net_vec,
                      eff_mass_node, exchange_area_per_dz,
                      k0_vec, Ea_vec, R_const, T_min_vec,
-                     k_flux_c3a, k_flux_c4af):
+                     k_flux_c3a, k_flux_c4af, loss_coeff):
     
     rates = np.zeros((5, N))
     
@@ -42,23 +42,20 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         if Ts[i] >= 1420.0: rates[3, i] = k_flux_c3a * m_Al2O3[i]
         if Ts[i] >= 1380.0: rates[4, i] = k_flux_c4af * m_Fe2O3[i]
 
-    # Reaksiyon Isıları (Watt)
     q_rxn = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2] + 
              rates[3]*dH_vec[3] + rates[4]*dH_vec[4]) * m_dot_s_kg_s
     
     dTs, dTg = np.zeros(N), np.zeros(N)
-    
-    # Isıl Atalet
     thermal_capacity_s = eff_mass_node * cp_s
     
-    # Katı Sıcaklık Değişimi
     dTs[1:] = -v_s * (Ts[1:] - Ts[:-1]) / dz
-    q_loss_wall = 12.0 * (Ts - Tw) * exchange_area_per_dz
+    
+    # Isıl kayıp katsayısı artık dışarıdan geliyor
+    q_loss_wall = loss_coeff * (Ts - Tw) * exchange_area_per_dz
     
     q_net_s = (q_gs_vec + q_rad_net_vec - q_loss_wall - q_rxn)
     dTs += q_net_s / thermal_capacity_s
     
-    # Gaz Sıcaklık Değişimi
     m_dot_g_local = np.full(N, m_dot_g_inlet_kg_s)
     v_g = m_dot_g_local / (np.maximum(0.1, rho_g) * area_gas)
     dTg[:-1] = (v_g[:-1] * (Tg[1:] - Tg[:-1]) / dz)
@@ -76,11 +73,13 @@ class KilnSolver:
         self.state = KilnState(nodes)
         self.dz = self._safe_f(config['kiln']['length']) / nodes
         
-        # --- Soft-Start ve Zaman Parametreleri ---
         self.total_sim_time = 0.0
-        self.warmup_duration = 10800.0  # 3 saatlik rampa süresi
-        self.max_dt_temp_change = 1.0    # Daha kararlı ısınma için limit 1.0 yapıldı
+        self.warmup_duration = 10800.0 
+        self.max_dt_temp_change = 1.0
         self._log_timer = 0
+        
+        # --- Cooldown State ---
+        self.cooldown_timer = 0.0
 
     def _safe_f(self, v): 
         return float(v[0]) if isinstance(v, list) else float(v)
@@ -89,20 +88,29 @@ class KilnSolver:
         dt_v = float(dt)
         self.total_sim_time += dt_v
         
-        # 1. Rampa Fonksiyonu (Üstel Artış)
-        # Başlangıçta 0.05'ten başlar, 16 saat içinde 1.0'a yaklaşır.
-        rampa = 1.0 - np.exp(-0.53 * self.total_sim_time / self.warmup_duration)
-        rampa = max(0.05, rampa)
-
-        # 2. Birim Dönüşümleri
-        m_dot_s_kg_s = (feed_rate * 1000.0) / 3600.0 
         fuel_kg_s = (fuel_rate * 1000.0) / 3600.0
+        m_dot_s_kg_s = (feed_rate * 1000.0) / 3600.0 
         m_dot_g_inlet_kg_s = self._safe_f(self.cfg['gas']['nominal_flow']) * (fan_rate / 800.0)
         
+        # 1. Dinamik Rampa ve Cooldown (Sönümlenme)
+        base_rampa = 1.0 - np.exp(-0.53 * self.total_sim_time / self.warmup_duration)
+        
+        if fuel_kg_s < 0.01: # Yakıt kesildiyse
+            self.cooldown_timer += dt_v
+            # 3 saatlik (10800s) sönümlenme eğrisi
+            decay = np.exp(-self.cooldown_timer / 10800.0)
+            rampa = base_rampa * decay
+            loss_coeff = 35.0  # Soğuma fazında kabuk kayıplarını artırıyoruz
+        else:
+            self.cooldown_timer = 0.0
+            rampa = base_rampa
+            loss_coeff = 12.0  # Normal çalışma şartı kayıpları
+            
+        rampa = max(0.05, rampa)
+
         v_s = self.tra.calculate_solid_velocity(kiln_rpm)
         fill_degree = self.tra.get_dynamic_filling_degree(kiln_rpm)
         
-        # 3. Isıl Atalet (Refrakter etkisini simüle etmek için yüksek tutuldu)
         inertia_factor = 0.51
         eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * inertia_factor
         
@@ -111,26 +119,22 @@ class KilnSolver:
         exchange_area_dz = diameter * np.pi * self.dz
         efektif_temas_alani = exchange_area_dz * (fill_degree * 2.0)
 
-        # 4. Isı Akıları (Rampa Uygulanmış)
+        # 2. Isı Akıları (Rampa/Decay Uygulanmış)
         h_gs = self.en.calculate_convection_coeff(fan_rate) * rampa
         q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * efektif_temas_alani
         
-        # Radyasyon akısı da rampa ile yavaşça devreye girer
         q_rad_net_vec = self.en.calculate_radiation_flux(
-            self.state.Tg, 
-            self.state.Ts, 
-            self.state.Tw, 
-            efektif_temas_alani
+            self.state.Tg, self.state.Ts, self.state.Tw, efektif_temas_alani
         ) * rampa
 
-        # 5. Taşınım (Kütle İlerlemesi)
+        # 3. Taşınım
         flow_factor = np.clip(v_s * dt_v / self.dz, 0.0, 1.0)
         params = ['m_SiO2', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
         for p in params:
             arr = getattr(self.state, p)
             arr[1:] = (1.0 - flow_factor) * arr[1:] + flow_factor * arr[:-1]
 
-        # 6. Numba Çekirdek Çözücü
+        # 4. Numba Çekirdek Çözücü
         dTs, dTg, rates = _numba_step_core(
             self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
             self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
@@ -139,27 +143,23 @@ class KilnSolver:
             self._safe_f(self.cfg['material']['cp_s']), self._safe_f(self.cfg['gas']['cp_g']),
             np.array([self.kin.dH_calc, self.kin.dH_c2s, self.kin.dH_c3s, -125.0, -100.0]), 
             area_gas, q_gs_vec, q_rad_net_vec, eff_mass_node, exchange_area_dz,
-            self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min, 0.0015, 0.0010
+            self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min, 0.0015, 0.0010, loss_coeff
         )
 
-        # 7. Zaman Adımı ve Güncelleme
         max_jump = np.max(np.abs(dTs * dt_v))
         actual_dt = dt_v * min(1.0, self.max_dt_temp_change / (max_jump + 1e-6))
 
         self.state.Ts += dTs * actual_dt
         self.state.Tg += dTg * actual_dt
         self.state.X += rates[0] * actual_dt
-
-        # 8. Kimyasal Faz Güncellemeleri
         self.state.m_C3A += rates[3] * actual_dt
         self.state.m_C4AF += rates[4] * actual_dt
         self.state.m_C3S += rates[2] * actual_dt
         self.state.m_C2S += (rates[1] - rates[2]*0.75) * actual_dt
         self.state.m_CaO += (rates[0]*0.56 - rates[1]*0.65 - rates[2]*0.24) * actual_dt
         
-        # 9. Alev ve Sınır Şartları (Rampa Destekli)
+        # 5. Alev Şartları (Yakıt Kesintisi Duyarlı)
         lhv = self._safe_f(self.cfg['gas'].get('lhv_fuel', 32000.0))
-        # Alev gücü de rampa ile kademeli artar
         t_flame_base = 1200.0 + (fuel_kg_s * lhv * rampa) / (max(0.1, m_dot_g_inlet_kg_s) * self._safe_f(self.cfg['gas']['cp_g']) / 1000.0)
         t_flame_max = min(t_flame_base, 2350.0)
         
@@ -167,7 +167,6 @@ class KilnSolver:
         for i in range(flame_nodes):
             idx = (self.state.N - 1) - i
             weight = (flame_nodes - i) / flame_nodes
-            # Taban sıcaklık (Tg_min) rampa ile 400K'dan 1100K'ya yükselir
             tg_min_dynamic = 400.0 + (700.0 * rampa)
             self.state.Tg[idx] = max(self.state.Tg[idx], tg_min_dynamic + (t_flame_max - tg_min_dynamic) * weight)
 
@@ -176,6 +175,6 @@ class KilnSolver:
         # Loglama
         self._log_timer += dt_v
         if self._log_timer >= 600:
-            ton_load = (eff_mass_node * self.state.N / inertia_factor) / 1000.0
-            print(f"[PHYSICS] Hold-up: {ton_load:.1f} Ton | Rampa: %{rampa*100:.1f} | v_s: {v_s:.4f} m/s")
+            status = "COOLDOWN" if fuel_kg_s < 0.01 else "HEATING"
+            print(f"[{status}] Rampa: %{rampa*100:.1f} | Ts_max: {np.max(self.state.Ts):.1f}K")
             self._log_timer = 0

@@ -9,7 +9,7 @@ kiln:
 # process assumption: 3.0GJ/ton raw meal 
 
 material:
-  feed_rate: 125 # kg/h       
+  feed_rate: 125 # t/h       
   rho_s: 1600.0
   cp_s: 1100.0          
   temp_inlet: 300.0
@@ -36,7 +36,7 @@ kinetics:
   pre_factor_c4af: 0.0010
 
 gas:
-  fuel_rate: 0.0 # ton/h      
+  fuel_rate: 6.0 # ton/h      
   fan_rate: 800.0       
   nominal_flow: 52.0
   temp_inlet: 1200   
