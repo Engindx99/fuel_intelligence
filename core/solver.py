@@ -24,7 +24,6 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         # 1. Kalsinasyon (Kütle kaybının kaynağı)
         if Ts[i] >= T_min_vec[0] and X[i] < 1.0:
             k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts[i]))
-            # Hız sınırı dikey düşüşü engellemek için 0.010'da tutuldu
             rates[0, i] = min(k_calc * (1.0 - X[i]), 0.010)
 
         # 2. Belit (C2S) Oluşumu
@@ -36,7 +35,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
         # 3. Alit (C3S) Oluşumu
         f_c3s = get_smooth_step(Ts[i], T_min_vec[2], 75.0)
         c2s_safety_margin = get_smooth_step(m_C2S[i], 0.15, span=0.01)
-        liquid_factor = 1.0 + 8.0 * (m_C3A[i] + m_C4AF[i])
+        liquid_factor = 1.0 + 10.0 * (m_C3A[i] + m_C4AF[i])
         
         if f_c3s > 0 and m_C2S[i] > 1e-6 and m_CaO[i] > 1e-6:
             k_c3s = k0_vec[2] * np.exp(-Ea_vec[2] / (R_const * Ts[i]))
@@ -90,11 +89,12 @@ class KilnSolver:
         m_dot_s_kg_s = (feed_rate * 1000.0) / 3600.0 
         m_dot_g_inlet_kg_s = self._safe_f(self.cfg['gas']['nominal_flow']) * (fan_rate / 800.0)
         
+        # --- Dinamik Taşınım Parametreleri ---
         v_s = self.tra.calculate_solid_velocity(kiln_rpm)
         fill_degree = self.tra.get_dynamic_filling_degree(kiln_rpm)
         
-        # Termal Atalet
-        eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * 4.469
+        # Termal Atalet (Hıza bağlı kütle birikimi)
+        eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * 3.439
         
         diameter = self._safe_f(self.cfg['kiln']['diameter'])
         area_gas = (np.pi * (diameter / 2)**2) * (1.0 - fill_degree)
@@ -106,10 +106,12 @@ class KilnSolver:
         
         rampa = max(0.05, 1.0 - np.exp(-0.71 * self.total_sim_time / 86400.0))
         h_gs = self.en.calculate_convection_coeff(fan_rate) * rampa * dist_damp
+        
+        # Isı transferinde fill_degree entegrasyonu
         q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * (exchange_area_dz * fill_degree * 2.0)
         q_rad_net_vec = self.en.calculate_radiation_flux(self.state.Tg, self.state.Ts, self.state.Tw, exchange_area_dz) * rampa * dist_damp
 
-        # Taşınım (Upwind Advection)
+        # Taşınım (Upwind Advection) - v_s ile tam bağlı
         f_red = np.clip(v_s * dt_v / self.dz, 0.0, 1.0) * 0.5 
         params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X', 'total_solid_mass', 'm_co2_released']
         for p in params:
@@ -138,14 +140,11 @@ class KilnSolver:
         actual_dt = dt_v * min(1.0, self.max_dt_temp_change / (np.max(np.abs(dTs * dt_v)) + 1e-6))
 
         # --- GÜNCELLEME VE KÜTLE KAYBI ENTEGRASYONU ---
-        co2_fraction = 0.44  # CaCO3 -> CaO + CO2 kütle oranı (44/100)
-        
-        # 1. Gaz çıkışını hesapla ve katı kütlesinden düş
+        co2_fraction = 0.44  
         delta_co2 = (rates[0] * co2_fraction) * actual_dt
         self.state.m_co2_released += delta_co2
-        self.state.total_solid_mass -= delta_co2 # Toplam kütle artık 1.0'ın altına inecek
+        self.state.total_solid_mass -= delta_co2 
 
-        # 2. Stokiyometrik Faz Dönüşümleri
         self.state.Ts += dTs * actual_dt
         self.state.Tg += dTg * actual_dt
         self.state.X  += rates[0] * actual_dt

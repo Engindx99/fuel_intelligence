@@ -7,7 +7,7 @@ kiln:
   length: 60.0
   diameter: 4.2
   slope: 0.03
-  rpm: 3.0
+  rpm: 2.0
   nodes: 100
   filling_degree: 0.10
 
@@ -44,7 +44,7 @@ kinetics:
   # CaO + C2S -> C3S
   # (kritik faz — CaO tüketimini belirler)
   # ==========================================================
-  k0_c3s: 1.2e5
+  k0_c3s: 2.3e5
   Ea_c3s: 2.60e5
   T_min_c3s: 1380.0
   T_opt_c3s: 1450.0
