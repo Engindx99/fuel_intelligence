@@ -23,13 +23,23 @@ class KilnState:
         self.m_C3A  = np.zeros(n_nodes, dtype=float) 
         self.m_C4AF = np.zeros(n_nodes, dtype=float) 
         
+        # --- Kütle ve Gaz Takibi ---
+        self.m_co2_released = np.zeros(n_nodes, dtype=float) 
+        self.total_solid_mass = np.ones(n_nodes, dtype=float) 
+
         # --- Fiziksel Parametreler ---
         self.rho_g = np.zeros(n_nodes, dtype=float)
         self.v_s = np.zeros(n_nodes, dtype=float)
-        
-        # --- EKSİK OLAN DEĞİŞKEN ---
-        # run_simulation.py loglama için bu değişkeni bekliyor
-        self.total_mass = np.ones(n_nodes, dtype=float) 
+
+    # --- GERİYE DÖNÜK UYUMLULUK (BACKWARD COMPATIBILITY) ---
+    @property
+    def total_mass(self):
+        """run_simulation.py içindeki eski çağrıları karşılamak için."""
+        return self.total_solid_mass
+
+    @total_mass.setter
+    def total_mass(self, value):
+        self.total_solid_mass = value
 
     def initialize_profiles(self, T_ambient=300.0, T_gas_inlet=2200.0, raw_meal_comp=None):
         self.Ts.fill(float(T_ambient))
@@ -37,9 +47,10 @@ class KilnState:
         self.Tg = np.linspace(float(T_ambient + 500.0), float(T_gas_inlet), self.N)
         
         self.X.fill(0.0)
+        self.m_co2_released.fill(0.0)
         
         if raw_meal_comp is None:
-            raw_meal_comp = {'CaCO3': 0.77, 'SiO2': 0.16, 'Al2O3': 0.045, 'Fe2O3': 0.025}
+            raw_meal_comp = {'CaCO3': 0.730, 'SiO2': 0.210, 'Al2O3': 0.040, 'Fe2O3': 0.020}
 
         sio2_total = float(raw_meal_comp['SiO2'])
         self.m_SiO2.fill(sio2_total * 0.50)
@@ -51,11 +62,10 @@ class KilnState:
         self.m_CaO.fill(1e-6)
         self.m_C2S.fill(0.0)   
         self.m_C3S.fill(0.0)
-        self.m_C3A.fill(0.0)
         self.m_C4AF.fill(0.0)
+        self.m_C3A.fill(0.0)
         
-        # Kütle takibi için başlangıçta toplam kütleyi 1.0 (veya toplam oksitler) olarak set et
-        self.total_mass.fill(1.0) 
+        self.total_solid_mass.fill(1.0) 
 
         self.update_gas_density()
 

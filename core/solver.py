@@ -21,10 +21,11 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
     rates = np.zeros((5, N))
     
     for i in range(N):
-        # 1. Kalsinasyon
+        # 1. Kalsinasyon (Kütle kaybının kaynağı)
         if Ts[i] >= T_min_vec[0] and X[i] < 1.0:
             k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts[i]))
-            rates[0, i] = min(k_calc * (1.0 - X[i]), 0.015)
+            # Hız sınırı dikey düşüşü engellemek için 0.010'da tutuldu
+            rates[0, i] = min(k_calc * (1.0 - X[i]), 0.010)
 
         # 2. Belit (C2S) Oluşumu
         f_c2s = get_smooth_step(Ts[i], T_min_vec[1], 50.0)
@@ -34,7 +35,7 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
 
         # 3. Alit (C3S) Oluşumu
         f_c3s = get_smooth_step(Ts[i], T_min_vec[2], 75.0)
-        c2s_safety_margin = get_smooth_step(m_C2S[i], 0.10, span=0.01)
+        c2s_safety_margin = get_smooth_step(m_C2S[i], 0.15, span=0.01)
         liquid_factor = 1.0 + 8.0 * (m_C3A[i] + m_C4AF[i])
         
         if f_c3s > 0 and m_C2S[i] > 1e-6 and m_CaO[i] > 1e-6:
@@ -92,14 +93,14 @@ class KilnSolver:
         v_s = self.tra.calculate_solid_velocity(kiln_rpm)
         fill_degree = self.tra.get_dynamic_filling_degree(kiln_rpm)
         
-        # --- ENTEGRASYON 1: 0.51 TERMAL ATALET ---
+        # Termal Atalet
         eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * 4.469
         
         diameter = self._safe_f(self.cfg['kiln']['diameter'])
         area_gas = (np.pi * (diameter / 2)**2) * (1.0 - fill_degree)
         exchange_area_dz = diameter * np.pi * self.dz
 
-        # --- ENTEGRASYON 2: GİRİŞ SÖNÜMLEME ---
+        # Sönümleme ve Isı Transfer Katsayıları
         z_coords = np.linspace(0, self.cfg['kiln']['length'], self.state.N)
         dist_damp = 0.2 + 0.8 * np.clip(z_coords / 12.0, 0.0, 1.0)
         
@@ -108,21 +109,21 @@ class KilnSolver:
         q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * (exchange_area_dz * fill_degree * 2.0)
         q_rad_net_vec = self.en.calculate_radiation_flux(self.state.Tg, self.state.Ts, self.state.Tw, exchange_area_dz) * rampa * dist_damp
 
-        # --- TAŞINIM ---
+        # Taşınım (Upwind Advection)
         f_red = np.clip(v_s * dt_v / self.dz, 0.0, 1.0) * 0.5 
-        params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X']
+        params = ['m_SiO2', 'm_SiO2_locked', 'm_Al2O3', 'm_Fe2O3', 'm_CaO', 'm_C2S', 'm_C3S', 'm_C3A', 'm_C4AF', 'X', 'total_solid_mass', 'm_co2_released']
         for p in params:
-            arr = getattr(self.state, p)
-            arr[1:] = (1.0 - f_red) * arr[1:] + f_red * arr[:-1]
+            if hasattr(self.state, p):
+                arr = getattr(self.state, p)
+                arr[1:] = (1.0 - f_red) * arr[1:] + f_red * arr[:-1]
 
-        # --- ENTEGRASYON 3: HÜCRE BAZLI %50 SILICA UNLOCKING ---
-        # Aktif silis düzeyi biterken rezervdekini (kalan yarısını) devreye sokar
+        # Silica Unlocking
         unlock_mask = (self.state.m_SiO2 < 0.002) & (self.state.m_SiO2_locked > 0)
         if np.any(unlock_mask):
             self.state.m_SiO2[unlock_mask] += self.state.m_SiO2_locked[unlock_mask]
             self.state.m_SiO2_locked[unlock_mask] = 0.0
 
-        # --- NUMBA CORE ---
+        # Numba Core Çağrısı
         dTs, dTg, rates = _numba_step_core(
             self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
             self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
@@ -136,7 +137,15 @@ class KilnSolver:
 
         actual_dt = dt_v * min(1.0, self.max_dt_temp_change / (np.max(np.abs(dTs * dt_v)) + 1e-6))
 
-        # --- GÜNCELLEME (Senin Orijinal Stokiyometrin) ---
+        # --- GÜNCELLEME VE KÜTLE KAYBI ENTEGRASYONU ---
+        co2_fraction = 0.44  # CaCO3 -> CaO + CO2 kütle oranı (44/100)
+        
+        # 1. Gaz çıkışını hesapla ve katı kütlesinden düş
+        delta_co2 = (rates[0] * co2_fraction) * actual_dt
+        self.state.m_co2_released += delta_co2
+        self.state.total_solid_mass -= delta_co2 # Toplam kütle artık 1.0'ın altına inecek
+
+        # 2. Stokiyometrik Faz Dönüşümleri
         self.state.Ts += dTs * actual_dt
         self.state.Tg += dTg * actual_dt
         self.state.X  += rates[0] * actual_dt
@@ -149,10 +158,12 @@ class KilnSolver:
         self.state.m_Al2O3 -= rates[3] * actual_dt
         self.state.m_Fe2O3 -= rates[4] * actual_dt
 
-        for s in ['m_SiO2', 'm_CaO', 'm_C2S', 'm_C3S', 'X', 'm_Al2O3', 'm_Fe2O3']:
-            setattr(self.state, s, np.maximum(getattr(self.state, s), 0.0))
+        # Negatif değer koruması
+        for s in ['m_SiO2', 'm_CaO', 'm_C2S', 'm_C3S', 'X', 'm_Al2O3', 'm_Fe2O3', 'total_solid_mass']:
+            if hasattr(self.state, s):
+                setattr(self.state, s, np.maximum(getattr(self.state, s), 0.0))
 
-        # --- ALEV MODELİ VE SINIRLAMA (Senin Orijinal Yapın) ---
+        # Alev Modeli ve Sınır Şartları
         lhv = self._safe_f(self.cfg['gas'].get('lhv_fuel', 32000.0))
         t_flame = 1200.0 + (fuel_kg_s * lhv * rampa) / (max(0.1, m_dot_g_inlet_kg_s) * self._safe_f(self.cfg['gas']['cp_g']) / 1000.0)
         t_flame = min(t_flame, 2350.0)
@@ -160,15 +171,14 @@ class KilnSolver:
             idx = (self.state.N - 1) - i
             self.state.Tg[idx] = max(self.state.Tg[idx], 400.0 + (t_flame - 400.0) * ((12-i)/12))
 
-        # Gaz çıkış (z=0) limiti - Şok kalsinasyonu kesmek için
         self.state.Tg[0] = min(self.state.Tg[0], 900.0)
         self.state.Ts[0] = self._safe_f(self.cfg['material']['temp_inlet'])
 
-        # --- LOGLAMA ---
+        # Loglama
         self._log_timer += dt_v
         if self._log_timer >= 600:
-            locked_total = np.sum(self.state.m_SiO2_locked)
-            print(f"[RESERVE] SIO2 Locked: {locked_total:.4f} | CaO Max: {np.max(self.state.m_CaO):.3f}")
+            avg_mass = np.mean(self.state.total_solid_mass)
+            print(f"[MASS] Avg Total Mass: {avg_mass:.4f} | Released CO2: {np.max(self.state.m_co2_released):.4f}")
             self._log_timer = 0
 
         return actual_dt
