@@ -25,7 +25,7 @@ def compute_clinker_kinetics_numba(Ts, X, m_CaO, m_SiO2, m_C2S, m_C3A, m_C4AF,
             rates[1, i] = np.minimum(k_c2s * m_CaO[i] * m_SiO2[i] * lock_c2s, 0.02)
 
         # 3. ALİT (C3S) OLUŞUMU (CaO Tüketimi için Kritik)
-        if Ts[i] >= T_min_vec[2] and m_CaO[i] > 1e-6 and m_C2S[i] > 0.15:
+        if Ts[i] >= T_min_vec[2] and m_CaO[i] > 1e-6 and m_C2S[i] > 0.14:
             # %92 Kalsinasyon şartı (Soft-lock)
             lock_c3s = 1.0 / (1.0 + np.exp(-15.0 * (X[i] - 0.92)))
             liquid_effect = (m_C3A[i] + m_C4AF[i] + 0.05) * 8.0

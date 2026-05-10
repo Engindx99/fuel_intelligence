@@ -21,10 +21,11 @@ def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m
     rates = np.zeros((5, N))
     
     for i in range(N):
-        # 1. Kalsinasyon (Kütle kaybının kaynağı)
-        if Ts[i] >= T_min_vec[0] and X[i] < 1.0:
+        # 1. Kalsinasyon (Kütle kaybının kaynağı) - Sayısal yumuşatma eklendi
+        f_calc = get_smooth_step(Ts[i], T_min_vec[0], 40.0)
+        if f_calc > 0 and X[i] < 1.0:
             k_calc = k0_vec[0] * np.exp(-Ea_vec[0] / (R_const * Ts[i]))
-            rates[0, i] = min(k_calc * (1.0 - X[i]), 0.010)
+            rates[0, i] = min(k_calc * (1.0 - X[i]) * f_calc, 0.010)
 
         # 2. Belit (C2S) Oluşumu
         f_c2s = get_smooth_step(Ts[i], T_min_vec[1], 50.0)
@@ -75,7 +76,8 @@ class KilnSolver:
         self.state = KilnState(nodes)
         self.dz = self._safe_f(config['kiln']['length']) / nodes
         self.total_sim_time = 0.0
-        self.max_dt_temp_change = 8.0 
+        # Daha sıkı sıcaklık değişim limiti (Osilasyon önleme)
+        self.max_dt_temp_change = 3.0 
         self._log_timer = 0
 
     def _safe_f(self, v): 
@@ -94,7 +96,7 @@ class KilnSolver:
         fill_degree = self.tra.get_dynamic_filling_degree(kiln_rpm)
         
         # Termal Atalet (Hıza bağlı kütle birikimi)
-        eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz) * 3.439
+        eff_mass_node = ((m_dot_s_kg_s / max(1e-4, v_s)) * self.dz)
         
         diameter = self._safe_f(self.cfg['kiln']['diameter'])
         area_gas = (np.pi * (diameter / 2)**2) * (1.0 - fill_degree)
@@ -104,7 +106,7 @@ class KilnSolver:
         z_coords = np.linspace(0, self.cfg['kiln']['length'], self.state.N)
         dist_damp = 0.2 + 0.8 * np.clip(z_coords / 12.0, 0.0, 1.0)
         
-        rampa = max(0.05, 1.0 - np.exp(-0.71 * self.total_sim_time / 86400.0))
+        rampa = max(0.05, 1.0 - np.exp(-1.34 * self.total_sim_time / 86400.0))
         h_gs = self.en.calculate_convection_coeff(fan_rate) * rampa * dist_damp
         
         # Isı transferinde fill_degree entegrasyonu
@@ -137,7 +139,11 @@ class KilnSolver:
             self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min, 0.0015, 0.0010, 12.0
         )
 
-        actual_dt = dt_v * min(1.0, self.max_dt_temp_change / (np.max(np.abs(dTs * dt_v)) + 1e-6))
+        # Reaksiyon hızı ve sıcaklık değişimine göre adaptif zaman adımı kontrolü
+        max_conv_change = 0.01 # Bir adımda maksimum %1 reaksiyon değişimi
+        actual_dt_reac = dt_v * min(1.0, max_conv_change / (np.max(np.abs(rates[0] * dt_v)) + 1e-6))
+        actual_dt_temp = dt_v * min(1.0, self.max_dt_temp_change / (np.max(np.abs(dTs * dt_v)) + 1e-6))
+        actual_dt = min(actual_dt_reac, actual_dt_temp)
 
         # --- GÜNCELLEME VE KÜTLE KAYBI ENTEGRASYONU ---
         co2_fraction = 0.44  
