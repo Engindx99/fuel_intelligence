@@ -45,7 +45,7 @@ def main():
 
     # 3. Simülasyon Parametreleri
     t = 0.0
-    t_final = 24.0 * 3600.0  
+    t_final = 30.0 * 3600.0  
     dt = float(config['solver']['dt'])
     
     fuel_rate = float(config['gas'].get('fuel_rate', 4.16))

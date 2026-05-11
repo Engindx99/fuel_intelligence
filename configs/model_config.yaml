@@ -32,8 +32,8 @@ kinetics:
   # BELITE (C2S)
   # 2CaO + SiO2 -> C2S
   # ==========================================================
-  k0_c2s: 3.5e5
-  Ea_c2s: 2.0e5
+  k0_c2s: 2.1e5
+  Ea_c2s: 2.3e5
   T_min_c2s: 1220.0
   T_opt_c2s: 1350.0
   T_max_c2s: 1500.0
@@ -71,7 +71,7 @@ gas:
   nominal_flow: 52.0
   temp_inlet: 1200.0    
   cp_g: 1280.0
-  h_gs: 40.0        
+  h_gs: 140.0        
   emissivity_g: 0.55
   lhv_fuel: 32000.0
 
