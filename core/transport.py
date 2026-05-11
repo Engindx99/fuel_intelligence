@@ -17,39 +17,39 @@ class TransportModel:
 
     def calculate_solid_velocity(self, current_rpm=None):
         """
-        Malzemenin fırın ekseni boyunca ilerleme hızını (m/s) hesaplar.
-        Sullivan (USBM) formülü temel alınmıştır.
+        Sullivan formülüyle hız hesaplama.
+        Saturasyonu aşmak için malzemenin fırında kalma süresini (residence time) 
+        optimize eden hız limitleri uygulandı.
         """
         if current_rpm is None:
             current_rpm = float(self._safe_f(self.cfg['kiln']['rpm']))
         
-        # v_s_min_sec = (k * RPM * D * S) / 60
-        # Katsayı 1.77: Endüstriyel standart döner fırın ilerleme katsayısı.
-        v_s_min_sec = (1.77 * current_rpm * self.D * self.S) / 60.0
+        # Sullivan katsayısı (1.77) üzerinden ham hız
+        v_s_raw = (1.77 * max(0.1, current_rpm) * self.D * self.S) / 60.0
         
-        # GÜNCELLEME: ALT LİMİT DÜZELTMESİ
-        # 0.018 değeri malzemeyi ~55 dakikada fırından çıkarıyordu (çok hızlı).
-        # Alt limiti 0.005'e çekerek, düşük RPM'lerde malzemenin fırında 
-        # 2 saati aşkın süre kalmasına ve Belit'in Alit'e dönüşmesine izin veriyoruz.
-        return max(0.005, v_s_min_sec)
+        # ANALİZ: 1063K saturasyonu, malzemenin kalsinasyon bölgesinden 
+        # "enerjisini tam almadan" kaçtığını gösteriyor olabilir.
+        # Üst limiti 0.015'e çekerek aşırı hızlı akışı frenliyoruz.
+        return np.clip(v_s_raw, 0.007, 0.015)
 
     def get_dynamic_filling_degree(self, current_rpm):
         """
-        Fırın doluluk oranı (Filling Degree / Bed Depth).
-        RPM azaldıkça yatak derinliği artar, bu da termal ataleti yükseltir.
+        Fırın doluluk oranı. 
+        Saturasyonu kırmak için yatak derinliği (doluluk) optimize edildi.
         """
         if current_rpm is None:
             current_rpm = float(self._safe_f(self.cfg['kiln']['rpm']))
             
-        # Nominal %11 doluluk hedefi
-        base_fill = 0.11 
+        # Baz doluluk oranı %12 (İdeal ısı transfer alanı sağlar)
+        base_fill = 0.12 
         
-        # RPM etkisi: RPM düştükçe yatak derinliği doğrusal olmayan şekilde artar.
-        # Bu değer solver.py içinde ısı transfer alanını (q_gs_vec) etkiler.
-        dynamic_fill = base_fill * (3.0 / max(0.5, current_rpm))**0.6
+        # RPM etkisi: RPM düştükçe yatak derinleşir (Atalet artar).
+        # Saturasyon varsa, yatağın çok derinleşip ısıyı çekirdeğe iletememesinden kaçınmalıyız.
+        # Bu yüzden üst limit %15'e çekildi.
+        nominal_rpm = 3.5
+        dynamic_fill = base_fill * (nominal_rpm / max(0.5, current_rpm))**0.4
         
-        # İşletme limitleri: %5 ile %18 arası (Fiziksel kararlılık için)
-        return np.clip(dynamic_fill, 0.05, 0.18)
+        return np.clip(dynamic_fill, 0.08, 0.15)
 
     def calculate_residence_time(self, current_rpm):
         """
