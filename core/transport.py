@@ -24,12 +24,14 @@ class TransportModel:
             current_rpm = float(self._safe_f(self.cfg['kiln']['rpm']))
         
         # v_s_min_sec = (k * RPM * D * S) / 60
-        # Katsayı 1.77: Malzemenin fırında ~60-70 dakika kalmasını sağlar (3 RPM için).
+        # Katsayı 1.77: Endüstriyel standart döner fırın ilerleme katsayısı.
         v_s_min_sec = (1.77 * current_rpm * self.D * self.S) / 60.0
         
-        # ALT LİMİT KORUMASI: 0.020 çok hızlıydı ve %1 fCaO'ya izin vermiyordu.
-        # 0.012'ye çekerek malzemenin fırın sonunda daha fazla "pişmesine" izin veriyoruz.
-        return max(0.018, v_s_min_sec)
+        # GÜNCELLEME: ALT LİMİT DÜZELTMESİ
+        # 0.018 değeri malzemeyi ~55 dakikada fırından çıkarıyordu (çok hızlı).
+        # Alt limiti 0.005'e çekerek, düşük RPM'lerde malzemenin fırında 
+        # 2 saati aşkın süre kalmasına ve Belit'in Alit'e dönüşmesine izin veriyoruz.
+        return max(0.005, v_s_min_sec)
 
     def get_dynamic_filling_degree(self, current_rpm):
         """
@@ -46,7 +48,7 @@ class TransportModel:
         # Bu değer solver.py içinde ısı transfer alanını (q_gs_vec) etkiler.
         dynamic_fill = base_fill * (3.0 / max(0.5, current_rpm))**0.6
         
-        # İşletme limitleri: %5 ile %18 arası
+        # İşletme limitleri: %5 ile %18 arası (Fiziksel kararlılık için)
         return np.clip(dynamic_fill, 0.05, 0.18)
 
     def calculate_residence_time(self, current_rpm):
