@@ -21,6 +21,7 @@ material:
 kinetics:
   # ==========================================================
   # CALCINATION (CaCO3 -> CaO + CO2)
+  # Ayrışma bölgesi: 800°C - 1000°C
   # ==========================================================
   k0: 3.0e5
   Ea: 1.95e5
@@ -29,25 +30,25 @@ kinetics:
   dH: 1.78e6
 
   # ==========================================================
-  # BELITE (C2S)
-  # 2CaO + SiO2 -> C2S
+  # BELITE (C2S) - 2CaO + SiO2 -> C2S
+  # Belit Oluşum Bölgesi: 1000°C - 1300°C
   # ==========================================================
-  k0_c2s: 2.1e5
-  Ea_c2s: 2.3e5
-  T_min_c2s: 1220.0
-  T_opt_c2s: 1350.0
-  T_max_c2s: 1500.0
+  k0_c2s: 2.5e5
+  Ea_c2s: 2.2e5
+  T_min_c2s: 1220.0  # ~947°C (Başlangıç)
+  T_opt_c2s: 1550.0  # ~1277°C (Zirve - Alit öncesi maksimum birikim)
+  T_max_c2s: 1750.0  # ~1477°C
   dH_c2s: -1.10e6
 
   # ==========================================================
-  # ALITE (C3S)
-  # CaO + C2S -> C3S
+  # ALITE (C3S) - CaO + C2S -> C3S
+  # Alit oluşumu Belit'in zirve yaptığı yerden sonra baskınlaşmalı.
   # ==========================================================
-  k0_c3s: 2.3e5
-  Ea_c3s: 3.0e5
-  T_min_c3s: 1380.0
-  T_opt_c3s: 1450.0
-  T_max_c3s: 1550.0
+  k0_c3s: 2.0e5
+  Ea_c3s: 2.4e5     # Daha yüksek bariyer, Belit'e zaman tanır
+  T_min_c3s: 1523.0  # ~1250°C (Belit zirveye yaklaşırken Alit uyanır)
+  T_opt_c3s: 1723.0  # ~1450°C (Burning Zone - En hızlı Alit oluşumu)
+  T_max_c3s: 1850.0  # Klinkerleşme sonu
   dH_c3s: -6.0e5
 
   # ==========================================================
