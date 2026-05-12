@@ -1,6 +1,5 @@
 import numpy as np
 from core.state import KilnState
-from core.kinetics import compute_clinker_kinetics_numba
 
 
 class KilnSolver:
@@ -8,10 +7,7 @@ class KilnSolver:
     def __init__(self, config, kinetics_fn, transport, energy):
 
         self.cfg = config
-
-        # kinetics FUNCTION (numba dispatcher)
         self.kin = kinetics_fn
-
         self.tra = transport
         self.en = energy
 
@@ -59,9 +55,9 @@ class KilnSolver:
         ], dtype=np.float64)
 
         T_min_vec = np.array([
-            k["T_min_rxn"],
-            k["T_min_c2s"],
-            k["T_min_c3s"],
+            float(k["T_min_rxn"]),
+            float(k["T_min_c2s"]),
+            float(k["T_min_c3s"]),
             1350.0,
             1350.0
         ], dtype=np.float64)
@@ -110,33 +106,34 @@ class KilnSolver:
             * (fan_rate / 800.0)
         )
 
-        self.state.update_gas_density()
+        self.state.rho_g = np.maximum(self.state.rho_g, 0.1)
 
-        # ------------------------------------------------------
+        # ======================================================
         # ADVECTION (SOLID)
-        # ------------------------------------------------------
+        # ======================================================
 
-        cfl = np.clip(v_s * dt / self.dz, 0.0, 0.40)
+        cfl = np.clip(v_s * dt / self.dz, 0.0, 0.2)
 
         fields = [
-            "m_CaCO3", "m_CaO", "m_SiO2",
-            "m_Al2O3", "m_Fe2O3",
-            "m_C2S", "m_C3S", "m_C3A", "m_C4AF",
-            "Ts"
+            "CaCO3", "CaO", "SiO2",
+            "Al2O3", "Fe2O3",
+            "C2S", "C3S", "C3A", "C4AF"
         ]
 
         for f in fields:
             arr = getattr(self.state, f)
             arr[1:] = (1 - cfl) * arr[1:] + cfl * arr[:-1]
 
-        # ------------------------------------------------------
-        # GAS FLOW (COUNTER CURRENT)
-        # ------------------------------------------------------
+        self.state.Ts[1:] = (1 - cfl) * self.state.Ts[1:] + cfl * self.state.Ts[:-1]
+
+        # ======================================================
+        # GAS FLOW
+        # ======================================================
 
         gas_cfl = np.clip(
             (m_dot_g / (np.maximum(0.1, self.state.rho_g) * area_gas))
             * dt / self.dz,
-            0.0, 0.40
+            0.0, 0.2
         )
 
         self.state.Tg[:-1] = (
@@ -144,22 +141,21 @@ class KilnSolver:
             + gas_cfl[:-1] * self.state.Tg[1:]
         )
 
-        # burner boundary
         self.state.Tg[-1] = (
             400.0
             + (1 - np.exp(-self.total_sim_time / 28800.0)) * 1600.0
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # WALL
-        # ------------------------------------------------------
+        # ======================================================
 
         Tw_target = 0.55 * self.state.Tg + 0.45 * self.state.Ts
         self.state.Tw += (Tw_target - self.state.Tw) * 0.015 * dt
 
-        # ------------------------------------------------------
+        # ======================================================
         # HEAT TRANSFER
-        # ------------------------------------------------------
+        # ======================================================
 
         h_gs = self.en.calculate_convection_coeff(fan_rate)
 
@@ -177,43 +173,35 @@ class KilnSolver:
             exchange_area
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # KINETICS
-        # ------------------------------------------------------
+        # ======================================================
 
         k0_vec, Ea_vec, T_min_vec, pre_factors = self._get_kinetics_params()
 
         rates = self.kin(
-            self.state.Ts,
-            self.state.m_CaCO3,
-            self.state.m_CaO,
-            self.state.m_SiO2,
-            self.state.m_C2S,
-            self.state.m_Al2O3,
-            self.state.m_Fe2O3,
-            self.state.m_C3A,
-            self.state.m_C4AF,
-            k0_vec,
-            Ea_vec,
-            self.cfg["kinetics"]["R"],
-            T_min_vec,
-            pre_factors,
-            dt
-        )
+        self.state.Ts,
+        self.state.CaCO3,
+        self.state.CaO,
+        self.state.SiO2,
+        self.state.C2S,
+        self.state.Al2O3,
+        self.state.Fe2O3,
+        self.state.C3A,
+        self.state.C4AF,
+        k0_vec,
+        Ea_vec,
+        self.cfg["kinetics"]["R"],
+        T_min_vec,
+        pre_factors, 
+        dt
+    )
 
-        # ------------------------------------------------------
-        # ENERGY FROM REACTIONS
-        # ------------------------------------------------------
+        # ======================================================
+        # ENERGY (STABLE SIMPLE MODEL)
+        # ======================================================
 
-        dH = self.en.get_reaction_heat(
-            rates,
-            m_dot_s,
-            np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
-        )
-
-        # ------------------------------------------------------
-        # ENERGY BALANCE
-        # ------------------------------------------------------
+        dH = np.sum(rates) * m_dot_s
 
         eff_mass = np.maximum(
             5.0,
@@ -233,67 +221,57 @@ class KilnSolver:
         self.state.Ts = np.clip(self.state.Ts, 300, 1900)
         self.state.Tg = np.clip(self.state.Tg, 300, 2400)
 
-        # ------------------------------------------------------
+        # ======================================================
         # CHEMISTRY UPDATE
-        # ------------------------------------------------------
+        # ======================================================
 
         r = rates * dt
 
-        # CaCO3 -> CaO
-        r0 = np.minimum(r[0], self.state.m_CaCO3)
-        self.state.m_CaCO3 -= r0
-        self.state.m_CaO += r0 * 0.56
+        r0 = np.minimum(r[0], self.state.CaCO3)
+        self.state.CaCO3 -= r0
+        self.state.CaO += r0 * 0.56
 
-        # C2S
-        r1 = np.minimum(r[1], self.state.m_CaO / 2.0)
-        r1 = np.minimum(r1, self.state.m_SiO2)
+        r1 = np.minimum(r[1], self.state.CaO / 2.0)
+        r1 = np.minimum(r1, self.state.SiO2)
 
-        self.state.m_CaO -= 2 * r1
-        self.state.m_SiO2 -= r1
-        self.state.m_C2S += r1
+        self.state.CaO -= 2 * r1
+        self.state.SiO2 -= r1
+        self.state.C2S += r1
 
-        # C3S
-        r2 = np.minimum(r[2], self.state.m_C2S)
-        r2 = np.minimum(r2, self.state.m_CaO)
+        r2 = np.minimum(r[2], self.state.C2S)
+        r2 = np.minimum(r2, self.state.CaO)
 
-        self.state.m_C2S -= r2
-        self.state.m_CaO -= r2
-        self.state.m_C3S += r2
+        self.state.C2S -= r2
+        self.state.CaO -= r2
+        self.state.C3S += r2
 
-        # C3A / C4AF
-        r3 = np.minimum(r[3], self.state.m_Al2O3)
-        r4 = np.minimum(r[4], self.state.m_Fe2O3)
+        r3 = np.minimum(r[3], self.state.Al2O3)
+        r4 = np.minimum(r[4], self.state.Fe2O3)
 
-        self.state.m_Al2O3 -= r3
-        self.state.m_Fe2O3 -= r4
+        self.state.Al2O3 -= r3
+        self.state.Fe2O3 -= r4
 
-        self.state.m_C3A += r3
-        self.state.m_C4AF += r4
-
-        # ------------------------------------------------------
+        # ======================================================
         # FEED
-        # ------------------------------------------------------
+        # ======================================================
 
-        feed = min(1.0, dt * 0.25)
+        feed = dt * m_dot_s / max(self.state.N, 1)
         raw = self.cfg["raw_meal_composition"]
 
         self.state.Ts[0] = self._safe_f(self.cfg["material"]["temp_inlet"])
 
-        self.state.m_CaCO3[0] += raw["CaCO3"] * feed
-        self.state.m_SiO2[0] += raw["SiO2"] * feed
-        self.state.m_Al2O3[0] += raw["Al2O3"] * feed
-        self.state.m_Fe2O3[0] += raw["Fe2O3"] * feed
+        self.state.CaCO3[0] += raw["CaCO3"] * feed
+        self.state.SiO2[0] += raw["SiO2"] * feed
+        self.state.Al2O3[0] += raw["Al2O3"] * feed
+        self.state.Fe2O3[0] += raw["Fe2O3"] * feed
 
-        # ------------------------------------------------------
         # CLEAN
-        # ------------------------------------------------------
-
         for arr in [
-            self.state.m_CaCO3, self.state.m_CaO,
-            self.state.m_SiO2, self.state.m_Al2O3,
-            self.state.m_Fe2O3,
-            self.state.m_C2S, self.state.m_C3S,
-            self.state.m_C3A, self.state.m_C4AF
+            self.state.CaCO3, self.state.CaO,
+            self.state.SiO2, self.state.Al2O3,
+            self.state.Fe2O3,
+            self.state.C2S, self.state.C3S,
+            self.state.C3A, self.state.C4AF
         ]:
             np.maximum(arr, 0.0, out=arr)
 

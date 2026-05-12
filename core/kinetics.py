@@ -3,15 +3,11 @@ from numba import njit
 
 @njit
 def compute_clinker_kinetics_numba(
-    Ts,
-    m_CaCO3,
-    m_CaO,
-    m_SiO2,
-    m_C2S,
-    m_Al2O3,
-    m_Fe2O3,
-    m_C3A,
-    m_C4AF,
+    T,
+    CaCO3, CaO, SiO2,
+    C2S,
+    Al2O3, Fe2O3,
+    C3A, C4AF,
     k0_vec,
     Ea_vec,
     R,
@@ -19,39 +15,35 @@ def compute_clinker_kinetics_numba(
     pre_factors,
     dt
 ):
-    N = len(Ts)
-    rates = np.zeros((5, N), dtype=np.float64)
+
+    N = len(T)
+    r = np.zeros((5, N))
 
     for i in range(N):
 
-        T = max(300.0, Ts[i])
+        Ti = max(300.0, T[i])
 
-        # 1 Calcination
-        if T >= T_min_vec[0] and m_CaCO3[i] > 1e-9:
-            k = k0_vec[0] * np.exp(-Ea_vec[0] / (R * T))
-            r = k * m_CaCO3[i]
-            rates[0, i] = min(r, m_CaCO3[i] / dt)
+        # CaCO3 -> CaO
+        if Ti > T_min_vec[0]:
+            k1 = k0_vec[0] * np.exp(-Ea_vec[0] / (R * Ti))
+            r[0, i] = k1 * CaCO3[i]
 
-        # 2 Belite
-        if T >= T_min_vec[1]:
-            if m_CaO[i] > 1e-9 and m_SiO2[i] > 1e-9:
-                k = k0_vec[1] * np.exp(-Ea_vec[1] / (R * T))
-                r = k * m_CaO[i] * m_SiO2[i]
-                rates[1, i] = min(r, m_CaO[i] / (2*dt), m_SiO2[i]/dt)
+        # CaO + SiO2 -> C2S
+        if Ti > T_min_vec[1]:
+            lim = min(CaO[i], SiO2[i])
+            r[1, i] = k0_vec[1] * lim
 
-        # 3 Alite
-        if T >= T_min_vec[2]:
-            if m_CaO[i] > 1e-9 and m_C2S[i] > 1e-9:
-                k = k0_vec[2] * np.exp(-Ea_vec[2] / (R * T))
-                r = k * m_CaO[i] * m_C2S[i]
-                rates[2, i] = min(r, m_CaO[i]/dt, m_C2S[i]/dt)
+        # C2S + CaO -> C3S
+        if Ti > T_min_vec[2]:
+            lim = min(C2S[i], CaO[i])
+            r[2, i] = k0_vec[2] * lim
 
-        # 4 C3A
-        if T >= 1350.0 and m_Al2O3[i] > 1e-9:
-            rates[3, i] = min(pre_factors[0] * m_Al2O3[i], m_Al2O3[i]/dt)
+        # C3A formation
+        if Ti > T_min_vec[3]:
+            r[3, i] = k0_vec[3] * Al2O3[i]
 
-        # 5 C4AF
-        if T >= 1350.0 and m_Fe2O3[i] > 1e-9:
-            rates[4, i] = min(pre_factors[1] * m_Fe2O3[i], m_Fe2O3[i]/dt)
+        # C4AF formation
+        if Ti > T_min_vec[4]:
+            r[4, i] = k0_vec[4] * Fe2O3[i]
 
-    return rates
+    return r

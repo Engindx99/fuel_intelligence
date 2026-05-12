@@ -25,7 +25,7 @@ sys.path.append(
 from core.solver import KilnSolver
 from core.transport import TransportModel
 from core.energy import EnergyModel
-from core.kinetics import compute_clinker_kinetics_numba
+from core.kinetics import compute_clinker_kinetics_numba as kinetics
 
 
 # ==============================================================
@@ -53,9 +53,6 @@ def main():
     transport = TransportModel(config)
     energy = EnergyModel(config)
 
-    # kinetics artık class değil -> direkt function kullanılıyor
-    kinetics = compute_clinker_kinetics_numba
-
     solver = KilnSolver(config, kinetics, transport, energy)
 
     # ==========================================================
@@ -81,7 +78,7 @@ def main():
     # ==========================================================
 
     t = 0.0
-    t_final = 30.0 * 3600.0
+    t_final = 20.0 * 3600.0
     dt = float(config["solver"]["dt"])
 
     fuel_rate = float(config["gas"].get("fuel_rate", 4.0))
@@ -107,7 +104,7 @@ def main():
 
     # ==========================================================
     # MAIN LOOP
-    # ==========================================================
+    # ==============================================================
 
     while t < t_final:
 
@@ -129,11 +126,11 @@ def main():
                 f"{t/3600:7.2f} | "
                 f"{s.Ts[-1]:8.1f} | "
                 f"{s.Tg[-1]:8.1f} | "
-                f"{s.m_CaCO3[-1]:8.4f} | "
-                f"{s.m_CaO[-1]:8.4f} | "
-                f"{s.m_C2S[-1]:8.4f} | "
-                f"{s.m_C3S[-1]:8.4f} | "
-                f"{np.mean(s.total_mass):8.4f}"
+                f"{s.CaCO3[-1]:8.4f} | "
+                f"{s.CaO[-1]:8.4f} | "
+                f"{s.C2S[-1]:8.4f} | "
+                f"{s.C3S[-1]:8.4f} | "
+                f"{np.mean(s.CaCO3 + s.CaO + s.C2S + s.C3S):8.4f}"
             )
 
             last_log = t
@@ -143,7 +140,7 @@ def main():
 
     # ==========================================================
     # VISUALIZATION
-    # ==========================================================
+    # ==============================================================
 
     s = solver.state
 
@@ -162,11 +159,10 @@ def main():
     plt.grid(alpha=0.2)
 
     plt.figure("Chemistry", figsize=(14, 8))
-    plt.plot(z, s.m_CaCO3, label="CaCO3")
-    plt.plot(z, s.m_CaO, label="CaO")
-    plt.plot(z, s.m_C2S, label="C2S")
-    plt.plot(z, s.m_C3S, label="C3S")
-    plt.plot(z, s.total_mass, label="Mass", linewidth=2)
+    plt.plot(z, s.CaCO3, label="CaCO3")
+    plt.plot(z, s.CaO, label="CaO")
+    plt.plot(z, s.C2S, label="C2S")
+    plt.plot(z, s.C3S, label="C3S")
     plt.legend(ncol=2)
     plt.grid(alpha=0.2)
 
