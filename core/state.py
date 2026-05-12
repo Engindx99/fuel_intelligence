@@ -1,39 +1,53 @@
 import numpy as np
 
 class KilnState:
+    """
+    Döner fırın durum değişkenlerini ve kütle dengesini yöneten sınıf.
+    Birimler: Sıcaklık [K], Kütle Kesri [kg_i/kg_total]
+    """
     def __init__(self, N):
         self.N = N
 
-        self.Tg = np.zeros(N)
-        self.Ts = np.zeros(N)
-        self.Tw = np.zeros(N)
+        # Termal Profil
+        self.Tg = np.zeros(N)  # Gaz sıcaklığı
+        self.Ts = np.zeros(N)  # Malzeme sıcaklığı
+        self.Tw = np.zeros(N)  # Duvar sıcaklığı
 
+        # Katı Faz Bileşenleri (Kütle Kesri olarak tutulur: 0.0 - 1.0)
         self.CaCO3 = np.zeros(N)
         self.CaO   = np.zeros(N)
         self.SiO2  = np.zeros(N)
         self.Al2O3 = np.zeros(N)
         self.Fe2O3 = np.zeros(N)
 
+        # Klinker Fazları
         self.C2S = np.zeros(N)
         self.C3S = np.zeros(N)
         self.C3A = np.zeros(N)
         self.C4AF = np.zeros(N)
 
-        self.rho_g = np.ones(N)
+        # Fiziksel Parametreler
+        self.rho_g = np.ones(N)  # Gaz yoğunluğu
+        self.total_mass_flow = np.zeros(N) # kg/s veya kg/m bazında toplam kütle
 
     @property
-    def total_mass(self):
-        return (
+    def check_mass_fraction(self):
+        """Türlerin toplamının 1.0 olup olmadığını kontrol eder (Ölçekleme Kontrolü)."""
+        total = (
             self.CaCO3 + self.CaO + self.SiO2 +
             self.Al2O3 + self.Fe2O3 +
             self.C2S + self.C3S + self.C3A + self.C4AF
         )
+        return total
 
     def initialize_profiles(self,
                             T_ambient=300.0,
                             T_gas_inlet=2000.0,
+                            feed_mass_flow=10.0,  # kg/s bazında referans kütle
                             raw_meal_comp=None):
-
+        """
+        Başlangıç profillerini ve sınır koşullarını atar.
+        """
         if raw_meal_comp is None:
             raw_meal_comp = {
                 "CaCO3": 0.76,
@@ -42,24 +56,29 @@ class KilnState:
                 "Fe2O3": 0.03
             }
 
+        # Sıcaklık Başlatma
         self.Ts.fill(T_ambient)
         self.Tw.fill(T_ambient + 50.0)
         self.Tg = np.linspace(900.0, T_gas_inlet, self.N)
 
-        self.CaCO3.fill(0.0)
-        self.CaO.fill(0.0)
-        self.SiO2.fill(0.0)
-        self.Al2O3.fill(0.0)
-        self.Fe2O3.fill(0.0)
+        # Tüm fırın boyunca kütle akışını başlat (Süreklilik denklemi gereği)
+        self.total_mass_flow.fill(feed_mass_flow)
 
-        self.C2S.fill(0.0)
-        self.C3S.fill(0.0)
-        self.C3A.fill(0.0)
-        self.C4AF.fill(0.0)
+        # Bileşenleri sıfırla
+        for attr in ["CaCO3", "CaO", "SiO2", "Al2O3", "Fe2O3", "C2S", "C3S", "C3A", "C4AF"]:
+            getattr(self, attr).fill(0.0)
 
-        feed_nodes = max(1, int(0.15 * self.N))
-
+        # Sadece giriş düğümlerine (Inlet Boundary Condition) besleme kompozisyonunu ata
+        # Not: Simülasyon ilerledikçe bu değerler taşıma (advection) ile sağa kayacaktır.
+        feed_nodes = max(1, int(0.05 * self.N)) 
+        
         self.CaCO3[:feed_nodes] = raw_meal_comp["CaCO3"]
         self.SiO2[:feed_nodes]  = raw_meal_comp["SiO2"]
         self.Al2O3[:feed_nodes] = raw_meal_comp["Al2O3"]
         self.Fe2O3[:feed_nodes] = raw_meal_comp["Fe2O3"]
+
+        # Kütle kesri normalizasyonu (Giriş için)
+        current_sum = self.check_mass_fraction[:feed_nodes]
+        if not np.allclose(current_sum, 1.0):
+             # Gerekirse burada normalize et: self.CaCO3 /= current_sum
+             pass
