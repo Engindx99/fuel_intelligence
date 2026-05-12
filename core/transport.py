@@ -1,150 +1,59 @@
 import numpy as np
 
-
 class TransportModel:
-
     def __init__(self, config):
-
         self.cfg = config
-
-        self.L = float(
-            self._safe_f(
-                config["kiln"]["length"]
-            )
-        )
-
-        self.D = float(
-            self._safe_f(
-                config["kiln"]["diameter"]
-            )
-        )
-
-        self.S = float(
-            self._safe_f(
-                config["kiln"]["slope"]
-            )
-        )
-
-    # ==============================================================
-    # SAFE FLOAT
-    # ==============================================================
+        self.L = self._safe_f(config["kiln"]["length"])
+        self.D = self._safe_f(config["kiln"]["diameter"])
+        self.S = self._safe_f(config["kiln"]["slope"])
 
     def _safe_f(self, value):
-
         if isinstance(value, list):
             return float(value[0])
-
         return float(value)
 
-    # ==============================================================
-    # SOLID VELOCITY
-    # ==============================================================
-
-    def calculate_solid_velocity(
-        self,
-        current_rpm=None,
-        fill_degree=0.12
-    ):
+    def get_dynamic_filling_degree(self, current_rpm, feed_rate=None):
         """
-        Rotary kiln axial solid transport velocity.
-
-        Sullivan-type correlation with filling correction.
+        Fırın doluluk oranını (filling degree) hesaplar. 
+        Solver'da hız hesaplamasından önce çağrılmalıdır.
         """
+        rpm = max(0.5, float(current_rpm))
+        base_fill = 0.12 # Nominal doluluk oranı [%]
 
-        if current_rpm is None:
+        # RPM arttıkça doluluk oranı azalır (hız arttığı için)
+        dynamic_fill = base_fill * (3.5 / rpm) ** 0.35
 
-            current_rpm = float(
-                self._safe_f(
-                    self.cfg["kiln"]["rpm"]
-                )
-            )
+        if feed_rate is not None:
+            # Besleme hızı arttıkça yatak derinleşir
+            feed_factor = (feed_rate / 125.0) ** 0.15
+            dynamic_fill *= feed_factor
 
-        rpm = max(0.1, current_rpm)
+        return np.clip(dynamic_fill, 0.06, 0.18)
 
-        # Sullivan correlation
-        v_base = (
-            1.77
-            * rpm
-            * self.D
-            * self.S
-        ) / 60.0
+    def calculate_solid_velocity(self, current_rpm, fill_degree=None):
+        """
+        Sullivan tipi korelasyon ile eksenel katı hızını [m/s] hesaplar.
+        """
+        rpm = max(0.1, float(current_rpm))
+        
+        # Sullivan korelasyonu (Temel hız)
+        # v_base = (1.77 * rpm * D * S) / 60 [m/s]
+        v_base = (1.77 * rpm * self.D * self.S) / 60.0
 
-        # Deeper bed -> slower transport
-        fill_correction = (
-            0.12
-            / max(fill_degree, 0.05)
-        ) ** 0.5
-
-        v_s = (
-            v_base
-            * fill_correction
-        )
+        # Eğer doluluk oranı verilmişse, yatak derinliği düzeltmesi uygula
+        # Daha derin yatak (yüksek fill_degree) sürtünme ve içsel akış nedeniyle hızı bir miktar düşürür
+        if fill_degree is not None:
+            fill_correction = (0.12 / max(fill_degree, 0.05)) ** 0.5
+            v_s = v_base * fill_correction
+        else:
+            v_s = v_base
 
         return max(0.002, v_s)
 
-    # ==============================================================
-    # FILLING DEGREE
-    # ==============================================================
-
-    def get_dynamic_filling_degree(
-        self,
-        current_rpm,
-        feed_rate=None
-    ):
+    def calculate_residence_time(self, current_rpm, fill_degree=0.12):
         """
-        Approximate kiln filling fraction.
+        Ortalama kalış süresi [dakika].
         """
-
-        if current_rpm is None:
-
-            current_rpm = float(
-                self._safe_f(
-                    self.cfg["kiln"]["rpm"]
-                )
-            )
-
-        rpm = max(0.5, current_rpm)
-
-        base_fill = 0.12
-
-        dynamic_fill = (
-            base_fill
-            * (3.5 / rpm) ** 0.35
-        )
-
-        # Optional throughput correction
-        if feed_rate is not None:
-
-            feed_factor = (
-                feed_rate / 125.0
-            ) ** 0.15
-
-            dynamic_fill *= feed_factor
-
-        return np.clip(
-            dynamic_fill,
-            0.06,
-            0.18
-        )
-
-    # ==============================================================
-    # RESIDENCE TIME
-    # ==============================================================
-
-    def calculate_residence_time(
-        self,
-        current_rpm,
-        fill_degree=0.12
-    ):
-        """
-        Mean solids residence time [min].
-        """
-
-        v_s = self.calculate_solid_velocity(
-            current_rpm,
-            fill_degree
-        )
-
+        v_s = self.calculate_solid_velocity(current_rpm, fill_degree)
         time_sec = self.L / v_s
-
         return time_sec / 60.0

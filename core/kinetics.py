@@ -11,50 +11,62 @@ def compute_clinker_kinetics_numba(
     k0_vec,
     Ea_vec,
     R,
-    T_min_vec,
-    pre_factors,
+    activations,
     dt
 ):
+    """
+    Klinkerleşme kinetiği hesaplaması - Fiziksel Koruma Entegre Edildi.
+    """
 
     N = len(T)
-    r = np.zeros((6, N)) # CO2 için ekstra bir satır eklendi (index 5)
+    # Reaksiyon hızları matrisi: 5 ana reaksiyon + 1 CO2
+    r = np.zeros((6, N)) 
 
     for i in range(N):
         Ti = max(300.0, T[i])
 
+        # --- FİZİKSEL EŞİK KONTROLLERİ ---
+        # 600K-800K gibi düşük sıcaklıklarda reaksiyonları tamamen kapatmak için
+        # sadece sigmoid'e güvenmek yerine sert kesiciler (cut-off) ekliyoruz.
+        
         # 1. KALSİNASYON: CaCO3 -> CaO + CO2
-        # MW: CaCO3=100.09, CaO=56.08, CO2=44.01
-        if Ti > T_min_vec[0]:
+        # Genellikle > 850-900 K civarında başlar.
+        if Ti > 850.0:
             k1 = k0_vec[0] * np.exp(-Ea_vec[0] / (R * Ti))
-            r0 = k1 * CaCO3[i]
+            r0 = k1 * CaCO3[i] * activations[0, i]
             r[0, i] = r0
-            # Açığa çıkan CO2 miktarı (Kütle korunumu)
             r[5, i] = r0 * (44.01 / 100.09) 
+        else:
+            r[0, i] = 0.0
 
         # 2. C2S OLUŞUMU: 2*CaO + SiO2 -> C2S
-        # MW: 2*CaO=112.16, SiO2=60.08, C2S=172.24
-        if Ti > T_min_vec[1]:
+        # Genellikle > 1000 K civarında başlar.
+        if Ti > 1000.0:
             k2 = k0_vec[1] * np.exp(-Ea_vec[1] / (R * Ti))
-            # Stokiyometrik kısıt: 1 kg SiO2 tüketmek için 1.866 kg CaO gerekir
-            lim = min(SiO2[i], CaO[i] / 1.866)
-            r[1, i] = k2 * lim
+            lim_c2s = min(SiO2[i], CaO[i] / 1.866)
+            r[1, i] = k2 * lim_c2s * activations[1, i]
+        else:
+            r[1, i] = 0.0
 
         # 3. C3S OLUŞUMU: C2S + CaO -> C3S
-        # MW: C2S=172.24, CaO=56.08, C3S=228.32
-        if Ti > T_min_vec[2]:
+        # Sıvı faz gerektirir, > 1450 K civarında kritiktir.
+        if Ti > 1300.0:
             k3 = k0_vec[2] * np.exp(-Ea_vec[2] / (R * Ti))
-            # Stokiyometrik kısıt: 1 kg C2S için 0.325 kg CaO gerekir
-            lim = min(C2S[i], CaO[i] / 0.325)
-            r[2, i] = k3 * lim
+            lim_c3s = min(C2S[i], CaO[i] / 0.325)
+            r[2, i] = k3 * lim_c3s * activations[2, i]
+        else:
+            r[2, i] = 0.0
 
-        # 4. C3A OLUŞUMU (Sıvı faz)
-        if Ti > T_min_vec[3]:
+        # 4 & 5. C3A ve C4AF OLUŞUMU (Sıvı faz)
+        # > 1300 K civarında erime ile başlar.
+        if Ti > 1250.0:
             k4 = k0_vec[3] * np.exp(-Ea_vec[3] / (R * Ti))
-            r[3, i] = k4 * Al2O3[i]
+            r[3, i] = k4 * Al2O3[i] * activations[3, i]
 
-        # 5. C4AF OLUŞUMU (Sıvı faz)
-        if Ti > T_min_vec[4]:
             k5 = k0_vec[4] * np.exp(-Ea_vec[4] / (R * Ti))
-            r[4, i] = k5 * Fe2O3[i]
+            r[4, i] = k5 * Fe2O3[i] * activations[4, i]
+        else:
+            r[3, i] = 0.0
+            r[4, i] = 0.0
 
     return r

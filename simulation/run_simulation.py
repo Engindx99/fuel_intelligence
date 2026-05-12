@@ -67,45 +67,50 @@ def main():
     ambient_temp = float(config["material"].get("temp_inlet", 300.0))
     gas_inlet_temp = float(config["gas"].get("temp_inlet", 2200.0))
 
+    # Solver'ın state nesnesini kullanarak başlangıç profillerini kuruyoruz
     solver.state.initialize_profiles(
         T_ambient=ambient_temp,
         T_gas_inlet=gas_inlet_temp,
         raw_meal_comp=raw_meal
     )
     
-    # t=0'da fırın hammadde dolu varsayımı
+    # t=0'da fırın hammadde dolu varsayımı (Sayısal şokları önlemek için tüm düğümler doldurulur)
+    # Katı akışı z=0 -> z=L yönündedir.
     solver.state.CaCO3[:] = raw_meal["CaCO3"]
     solver.state.SiO2[:]  = raw_meal["SiO2"]
     solver.state.Al2O3[:] = raw_meal["Al2O3"]
     solver.state.Fe2O3[:] = raw_meal["Fe2O3"]
+    
+    # Gaz sıcaklığı fırın boyunca soğuyarak ilerlemeli (Başlangıç tahmini)
+    # Brülör z=L (indeks -1), Baca z=0 (indeks 0)
+    solver.state.Tg = np.linspace(800.0, gas_inlet_temp, solver.state.N)
 
     # ==========================================================
-    # SIMULATION PARAMETERS
+    # SIMULATION PARAMETERS (Hour Based Integration)
     # ==========================================================
 
     t = 0.0
-    t_final = 30.0 * 3600.0
+    sim_hours = float(config["solver"].get("simulation_hours", 30.0))
+    t_final = sim_hours * 3600.0
     dt = float(config["solver"]["dt"])
 
-    fuel_rate = float(config["gas"].get("fuel_rate", 4.0))
+    fuel_rate = float(config["gas"].get("fuel_rate", 11.72))
     fan_rate = float(config["gas"].get("fan_rate", 800.0))
     kiln_rpm = float(config["kiln"].get("rpm", 2.0))
     feed_rate = float(config["material"].get("feed_rate", 125.0))
 
     print("\n[ROTARY KILN DIGITAL TWIN]")
-    print(f"Simulation Duration : {t_final/3600:.1f} h")
+    print(f"Simulation Duration : {sim_hours} h ({t_final} s)")
     print(f"Nodes               : {solver.state.N}")
     print(f"Time Step           : {dt:.3f} s")
-    print("-" * 195)
+    
 
-    # Başlık Düzeni: CO2 eklendi
+    # Başlık Düzeni: Tg_out yerine rampa etkisini görebileceğimiz Tg_Burn eklendi.
     print(
-        f"{'Time':>7} | {'Ts_out':>8} | {'Tg_out':>8} | "
+        f"{'Time':>7} | {'Ts_Clnk':>8} | {'Tg_Burn':>8} | "
         f"{'CaCO3':>8} | {'CaO':>8} | {'SiO2':>8} | {'Al2O3':>8} | {'Fe2O3':>8} | "
         f"{'C2S':>8} | {'C3S':>8} | {'C3A':>8} | {'C4AF':>8} | {'CO2':>8} | {'Mass':>8}"
     )
-
-    print("-" * 195)
 
     start_wall_time = time.time()
     last_log = -1e9
@@ -114,49 +119,54 @@ def main():
     # MAIN LOOP
     # ==============================================================
 
-    while t < t_final:
+    try:
+        while t < t_final:
 
-        actual_dt = solver.solve_step(
-            dt=dt,
-            fuel_rate=fuel_rate,
-            feed_rate=feed_rate,
-            kiln_rpm=kiln_rpm,
-            fan_rate=fan_rate
-        )
-
-        t += actual_dt
-
-        if (t - last_log) >= 600.0:
-
-            s = solver.state
-            
-            # Katı Faz Kütle Dengesi (CO2 gaz olarak ayrıldığı için toplama dahil edilmez)
-            # Ancak sistem takibi için loglara eklenmiştir.
-            solid_mass = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 + 
-                          s.C2S + s.C3S + s.C3A + s.C4AF)
-
-            # Loglama satırı: CO2 kütle kolonundan hemen önceye eklendi
-            print(
-                f"{t/3600:7.2f} | "
-                f"{s.Ts[-1]:8.1f} | "
-                f"{s.Tg[-1]:8.1f} | "
-                f"{s.CaCO3[-1]:8.4f} | "
-                f"{s.CaO[-1]:8.4f} | "
-                f"{s.SiO2[-1]:8.4f} | "
-                f"{s.Al2O3[-1]:8.4f} | "
-                f"{s.Fe2O3[-1]:8.4f} | "
-                f"{s.C2S[-1]:8.4f} | "
-                f"{s.C3S[-1]:8.4f} | "
-                f"{s.C3A[-1]:8.4f} | "
-                f"{s.C4AF[-1]:8.4f} | "
-                f"{s.CO2[-1]:8.4f} | " 
-                f"{solid_mass[-1]:8.4f}"
+            actual_dt = solver.solve_step(
+                dt=dt,
+                fuel_rate=fuel_rate,
+                feed_rate=feed_rate,
+                kiln_rpm=kiln_rpm,
+                fan_rate=fan_rate
             )
 
-            last_log = t
+            t += actual_dt
 
-    print("-" * 195)
-    print(f"Completed in {time.time() - start_wall_time:.2f} s\n")
+            # Her 10 dakikada bir (600s) log bas
+            if (t - last_log) >= 600.0:
+
+                s = solver.state
+                
+                # Katı Faz Kütle Dengesi (Katı bileşenlerin toplamı)
+                solid_mass_profile = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 + 
+                                     s.C2S + s.C3S + s.C3A + s.C4AF)
+
+                # Loglama Güncellemesi: 
+                # s.Ts[-1] -> Klinker çıkış sıcaklığı (Burning zone sonu)
+                # s.Tg[-1] -> Brülörün olduğu hücredeki gaz sıcaklığı (Rampayı izlemek için)
+                print(
+                    f"{t/3600:7.2f} | "
+                    f"{s.Ts[1]:8.1f} | "
+                    f"{s.Tg[-1]:8.1f} | " 
+                    f"{s.CaCO3[-1]:8.4f} | "
+                    f"{s.CaO[-1]:8.4f} | "
+                    f"{s.SiO2[-1]:8.4f} | "
+                    f"{s.Al2O3[-1]:8.4f} | "
+                    f"{s.Fe2O3[-1]:8.4f} | "
+                    f"{s.C2S[-1]:8.4f} | "
+                    f"{s.C3S[-1]:8.4f} | "
+                    f"{s.C3A[-1]:8.4f} | "
+                    f"{s.C4AF[-1]:8.4f} | "
+                    f"{s.CO2[-1]:8.4f} | " 
+                    f"{solid_mass_profile[-1]:8.4f}"
+                )
+
+                last_log = t
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Simulation stopped by user.")
+
+    print(f"\nCompleted in {time.time() - start_wall_time:.2f} s\n")
 
     # ==========================================================
     # VISUALIZATION
@@ -168,29 +178,42 @@ def main():
 
     plt.style.use("seaborn-v0_8-muted")
 
+    # 1. Termal Profil: Ts ve Tg Birlikte
     plt.figure("Thermal Profile", figsize=(13, 7))
-    plt.plot(z, s.Ts, label="Solid")
-    plt.plot(z, s.Tg, label="Gas")
-    plt.plot(z, s.Tw, label="Wall")
-    plt.xlabel("Kiln Length (m)")
+    plt.plot(z, s.Ts, label="Solid Temperature (Ts)", color='blue', linestyle='-', linewidth=1.2)
+    plt.plot(z, s.Tg, label="Gas Temperature (Tg)", color='red', linestyle='-', linewidth=1.2)
+    plt.plot(z, s.Tw, label="Wall Temperature (Tw)", color='black', linestyle='--', linewidth=0.8, alpha=0.5)
+    
+    plt.title(f"Thermal Profiles Along Kiln (Time: {t/3600:.2f} h)")
+    plt.xlabel("Kiln Length (m) [0: Material Inlet, L: Clinker Outlet / Burner]")
     plt.ylabel("Temperature (K)")
-    plt.legend()
-    plt.grid(alpha=0.2)
+    plt.legend(loc='best')
+    plt.grid(alpha=0.3)
 
-    plt.figure("Chemistry", figsize=(14, 8))
-    plt.plot(z, s.CaCO3, label="CaCO3", linewidth=2)
-    plt.plot(z, s.CaO, label="CaO", linestyle="--")
-    plt.plot(z, s.CO2, label="CO2 (Gas Out)", alpha=0.5)
-    plt.plot(z, s.SiO2, label="SiO2")
-    plt.plot(z, s.C2S, label="C2S")
-    plt.plot(z, s.C3S, label="C3S")
-    plt.plot(z, s.C3A, label="C3A", linestyle=":")
-    plt.plot(z, s.C4AF, label="C4AF", linestyle=":")
-    plt.legend(ncol=4)
-    plt.grid(alpha=0.2)
+    # 2. Kimya Profili: Tüm bileşenler
+    plt.figure("Chemistry Profile", figsize=(14, 8))
+    
+    plt.plot(z, s.CaCO3, label="CaCO3", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.CaO, label="CaO", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.SiO2, label="SiO2", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.Al2O3, label="Al2O3", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.Fe2O3, label="Fe2O3", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.C2S, label="C2S (Belite)", linestyle='-', linewidth=1.5)
+    plt.plot(z, s.C3S, label="C3S (Alite)", linestyle='-', linewidth=1.5)
+    plt.plot(z, s.C3A, label="C3A", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.C4AF, label="C4AF", linestyle='-', linewidth=1.0)
+    
+    # CO2'yi gaz fazına geçtiği için ayrı bir görselleştirme ile takip ediyoruz
+    plt.plot(z, s.CO2, label="CO2 (Solid-Tracked Fraction)", color='gray', linestyle=':', linewidth=1.0, alpha=0.6)
 
+    plt.title(f"Chemical Composition Along Kiln (Time: {t/3600:.2f} h)")
+    plt.xlabel("Kiln Length (m)")
+    plt.ylabel("Mass Fraction")
+    plt.legend(ncol=3, loc='upper right', fontsize='small')
+    plt.grid(alpha=0.3)
+
+    plt.tight_layout()
     plt.show()
-
 
 if __name__ == "__main__":
     main()

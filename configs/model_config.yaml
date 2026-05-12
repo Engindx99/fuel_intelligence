@@ -1,6 +1,6 @@
 # ==========================================================
-# FINAL RECOVERY CONFIGURATION
-# Goal: Break the 16.28% CaO Stagnation
+# UPDATED CONFIGURATION (Sigmoid Activation Compatible)
+# Goal: Physically Smooth Phase Transitions
 # ==========================================================
 
 kiln:
@@ -19,51 +19,38 @@ material:
   emissivity_s: 0.85
 
 kinetics:
-  # ==========================================================
-  # CALCINATION (CaCO3 -> CaO + CO2)
-  # Ayrışma bölgesi: 800°C - 1000°C
-  # ==========================================================
-  k0: 1.0e5
-  Ea: 2.18e5
   R: 8.314
-  T_min_rxn: 1073.0
-  dH: 1.78e6
+  
+  # 1. CALCINATION (CaCO3 -> CaO + CO2)
+  # Center: 1173K (~900°C)
+  k0: 1.0e5
+  Ea: 2.28e5
+  T_center_calc: 1173.0 
+  sharpness_calc: 0.04
 
-  # ==========================================================
-  # BELITE (C2S) - 2CaO + SiO2 -> C2S
-  # Belit Oluşum Bölgesi: 1000°C - 1300°C
-  # ==========================================================
-  k0_c2s: 1.0e5
-  Ea_c2s: 2.2e5
-  T_min_c2s: 1220.0  # ~947°C (Başlangıç)
-  T_opt_c2s: 1550.0  # ~1277°C (Zirve - Alit öncesi maksimum birikim)
-  T_max_c2s: 1750.0  # ~1477°C
-  dH_c2s: -1.10e6
+  # 2. BELITE (C2S) - 2CaO + SiO2 -> C2S
+  # Center: 1220K (~947°C) - Kalsinasyon devam ederken başlar
+  k0_c2s: 0.74e5
+  Ea_c2s: 2.3e5
+  T_center_c2s: 1220.0
+  sharpness_c2s: 0.03
 
-  # ==========================================================
-  # ALITE (C3S) - CaO + C2S -> C3S
-  # Alit oluşumu Belit'in zirve yaptığı yerden sonra baskınlaşmalı.
-  # ==========================================================
-  k0_c3s: 2.0e5
-  Ea_c3s: 2.4e5     # Daha yüksek bariyer, Belit'e zaman tanır
-  T_min_c3s: 1523.0  # ~1250°C (Belit zirveye yaklaşırken Alit uyanır)
-  T_opt_c3s: 1723.0  # ~1450°C (Burning Zone - En hızlı Alit oluşumu)
-  T_max_c3s: 1850.0  # Klinkerleşme sonu
-  dH_c3s: -6.0e5
+  # 3. ALITE (C3S) - CaO + C2S -> C3S
+  # Center: 1450K - Sıvı fazın oluşumuyla hızlanır
+  k0_c3s: 1.8e6
+  Ea_c3s: 2.4e5
+  T_center_c3s: 1450.0 # solver.py'deki 1450 değeriyle senkronize
+  sharpness_c3s: 0.05
 
-  # ==========================================================
-  # AUX PHASES
-  # ==========================================================
+  # 4. AUX PHASES (C3A & C4AF) - Liquid Phase Transition
+  # Center: 1350K (~1077°C)
   pre_factor_c3a: 8.0e-4
   pre_factor_c4af: 5.0e-4
+  T_center_liquid: 1350.0
+  sharpness_liquid: 0.03
 
-  # ==========================================================
-  # NUMERICAL / SAFETY
-  # ==========================================================
-  arrhenius_clip_min: -80.0
+  # Numerical Safety
   arrhenius_clip_max: 45.0
-
-  max_conversion_per_step: 0.06
   min_species_floor: 1e-12
 
 gas:
@@ -77,7 +64,6 @@ gas:
   lhv_fuel: 32000.0
 
 raw_meal_composition:
-  
   CaCO3: 0.730           
   SiO2: 0.210            
   Al2O3: 0.040           
@@ -85,5 +71,5 @@ raw_meal_composition:
 
 solver:
   dt: 0.05               
-  t_final: 10800
+  simulation_hours: 30
   tolerance: 1e-4
