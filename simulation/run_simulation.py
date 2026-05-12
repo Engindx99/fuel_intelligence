@@ -84,7 +84,7 @@ def main():
     # ==========================================================
 
     t = 0.0
-    t_final = 20.0 * 3600.0
+    t_final = 30.0 * 3600.0
     dt = float(config["solver"]["dt"])
 
     fuel_rate = float(config["gas"].get("fuel_rate", 4.0))
@@ -96,16 +96,16 @@ def main():
     print(f"Simulation Duration : {t_final/3600:.1f} h")
     print(f"Nodes               : {solver.state.N}")
     print(f"Time Step           : {dt:.3f} s")
-    print("-" * 185)
+    print("-" * 195)
 
-    # Başlık Düzeni: CaCO3 -> CaO -> SiO2 -> Al2O3 -> Fe2O3 -> C2S -> C3S -> C3A -> C4AF -> Mass
+    # Başlık Düzeni: CO2 eklendi
     print(
         f"{'Time':>7} | {'Ts_out':>8} | {'Tg_out':>8} | "
         f"{'CaCO3':>8} | {'CaO':>8} | {'SiO2':>8} | {'Al2O3':>8} | {'Fe2O3':>8} | "
-        f"{'C2S':>8} | {'C3S':>8} | {'C3A':>8} | {'C4AF':>8} | {'Mass':>8}"
+        f"{'C2S':>8} | {'C3S':>8} | {'C3A':>8} | {'C4AF':>8} | {'CO2':>8} | {'Mass':>8}"
     )
 
-    print("-" * 185)
+    print("-" * 195)
 
     start_wall_time = time.time()
     last_log = -1e9
@@ -130,11 +130,12 @@ def main():
 
             s = solver.state
             
-            # Kütle Dengesi
-            current_mass = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 + 
-                            s.C2S + s.C3S + s.C3A + s.C4AF)
+            # Katı Faz Kütle Dengesi (CO2 gaz olarak ayrıldığı için toplama dahil edilmez)
+            # Ancak sistem takibi için loglara eklenmiştir.
+            solid_mass = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 + 
+                          s.C2S + s.C3S + s.C3A + s.C4AF)
 
-            # Loglama satırı: Sıvı fazlar (C3A, C4AF) kütle kolonundan hemen önceye eklendi
+            # Loglama satırı: CO2 kütle kolonundan hemen önceye eklendi
             print(
                 f"{t/3600:7.2f} | "
                 f"{s.Ts[-1]:8.1f} | "
@@ -148,12 +149,13 @@ def main():
                 f"{s.C3S[-1]:8.4f} | "
                 f"{s.C3A[-1]:8.4f} | "
                 f"{s.C4AF[-1]:8.4f} | "
-                f"{current_mass[-1]:8.4f}"
+                f"{s.CO2[-1]:8.4f} | " 
+                f"{solid_mass[-1]:8.4f}"
             )
 
             last_log = t
 
-    print("-" * 185)
+    print("-" * 195)
     print(f"Completed in {time.time() - start_wall_time:.2f} s\n")
 
     # ==========================================================
@@ -178,6 +180,7 @@ def main():
     plt.figure("Chemistry", figsize=(14, 8))
     plt.plot(z, s.CaCO3, label="CaCO3", linewidth=2)
     plt.plot(z, s.CaO, label="CaO", linestyle="--")
+    plt.plot(z, s.CO2, label="CO2 (Gas Out)", alpha=0.5)
     plt.plot(z, s.SiO2, label="SiO2")
     plt.plot(z, s.C2S, label="C2S")
     plt.plot(z, s.C3S, label="C3S")
