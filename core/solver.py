@@ -1,205 +1,302 @@
 import numpy as np
-from numba import njit
 from core.state import KilnState
+from core.kinetics import compute_clinker_kinetics_numba
 
-@njit
-def _numba_step_core(N, Ts, Tg, Tw, X, m_CaO, m_SiO2, m_C2S, m_Al2O3, m_Fe2O3, m_C3A, m_C4AF,
-                     rho_g, dt, dz, v_s, m_dot_s_kg_s, m_dot_g_inlet_kg_s, 
-                     cp_s, cp_g, dH_vec, area_gas, q_gs_vec, q_rad_net_vec,
-                     eff_mass_node, exchange_area_per_dz,
-                     k0_vec, Ea_vec, R_const, T_min_vec,
-                     pre_factors, loss_coeff, 
-                     clip_min, clip_max, burning_zone_factor,
-                     q_rxn_prev):
-    
-    rates = np.zeros((5, N))
-    x_coords = np.linspace(0, 1, N)
-    
-    # Isı transferi boost faktörleri
-    dynamic_boost = 1.0 + 0.4 / (1.0 + np.exp(-25 * (x_coords - 0.82)))
-    rad_multiplier = 1.05
-    
-    for i in range(N):
-        T_eval = max(300.0, Ts[i])
-        
-        # 1. KALSİNASYON (Endotermik)
-        if x_coords[i] >= 0.20:
-            if T_eval >= T_min_vec[0] and X[i] < 1.0:
-                arg = -Ea_vec[0] / (R_const * T_eval)
-                rates[0, i] = k0_vec[0] * np.exp(max(clip_min, min(clip_max, arg))) * (1.0 - X[i]) 
-
-        # 2. BELİT (C2S) OLUŞUMU - Difüzyon Kontrollü
-        # Katı-katı reaksiyonu olduğu için oluşan Belit tabakası difüzyon direnci yaratır.
-        if x_coords[i] >= 0.40 and T_eval >= T_min_vec[1]:
-            # Ginstling-Brounshtein tipi difüzyon direnci (m_C2S arttıkça hız düşer)
-            diffusion_inhibition = np.exp(-4.5 * m_C2S[i])
-            # Hammadde mevcudiyet doygunluğu
-            chemical_driving_force = m_CaO[i] * m_SiO2[i]
-            
-            k_c2s = k0_vec[1] * np.exp(max(clip_min, min(clip_max, -Ea_vec[1]/(R_const*T_eval))))
-            rates[1, i] = k_c2s * chemical_driving_force * diffusion_inhibition
-
-        # 3. ALİT (C3S) OLUŞUMU - Sıvı Faz Hareketliliği Kontrollü
-        # Alit oluşumu için C3A ve C4AF kaynaklı sıvı faz (melt) elzemdir.
-        if x_coords[i] >= 0.65 and T_eval >= T_min_vec[2]:
-            liquid_content = m_C3A[i] + m_C4AF[i]
-            # Sıvı faz eşiği: Sıvı faz %5'in altındaysa reaksiyon kinetiği çok yavaştır.
-            # Bu "yapay" değil, kimyasal bir difüzyon kısıtıdır.
-            liquid_mobility = 1.0 / (1.0 + np.exp(-30.0 * (liquid_content - 0.05)))
-            
-            # Reaksiyon hızı Belit ve CaO konsantrasyonuna bağlıdır.
-            k_c3s = k0_vec[2] * np.exp(max(clip_min, min(clip_max, -Ea_vec[2]/(R_const*T_eval))))
-            rates[2, i] = k_c3s * m_C2S[i] * m_CaO[i] * liquid_mobility * burning_zone_factor
-
-        # 4. YARDIMCI FAZLAR (C3A & C4AF) - Flux/Sıvı Faz Oluşumu
-        if x_coords[i] >= 0.55:
-            if T_eval >= 1250.0 and m_Al2O3[i] > 1e-6:
-                rates[3, i] = pre_factors[0] * m_Al2O3[i]
-            if T_eval >= 1200.0 and m_Fe2O3[i] > 1e-6:
-                rates[4, i] = pre_factors[1] * m_Fe2O3[i]
-
-    # Enerji Dengesi (EMA ile kararlılık sağlanıyor)
-    q_rxn_instant = (rates[0]*dH_vec[0] + rates[1]*dH_vec[1] + rates[2]*dH_vec[2]) * m_dot_s_kg_s
-    q_rxn = 0.80 * q_rxn_prev + 0.20 * q_rxn_instant
-
-    thermal_capacity_s = np.maximum(10.0, eff_mass_node * cp_s) 
-    dTs, dTg = np.zeros(N), np.zeros(N)
-    
-    # Katı Sıcaklık Değişimi (Advection + Heat Transfer - Reaction)
-    dTs[1:] = -v_s * (Ts[1:] - Ts[:-1]) / dz
-    q_loss_wall = loss_coeff * (Ts - Tw) * exchange_area_per_dz
-    rad_amp = np.where(Ts > 1450.0, 1.0 + (Ts - 1450.0) / 400.0, 1.0)
-    
-    net_heat_to_s = (dynamic_boost * (q_gs_vec + q_rad_net_vec * rad_multiplier * rad_amp)) - q_loss_wall - q_rxn
-    dTs += np.clip(net_heat_to_s / thermal_capacity_s, -4000.0, 4000.0) 
-    
-    # Gaz Sıcaklık Değişimi
-    m_dot_g_local = np.maximum(0.5, m_dot_g_inlet_kg_s)
-    v_g = m_dot_g_local / (np.maximum(0.1, rho_g) * area_gas)
-    dTg[:-1] = (v_g[:-1] * (Tg[1:] - Tg[:-1]) / dz)
-    dTg += np.clip(-(q_gs_vec + q_rad_net_vec) / (m_dot_g_local * cp_g), -7000.0, 7000.0)
-            
-    return dTs, dTg, rates, q_rxn
 
 class KilnSolver:
-    def __init__(self, config, kinetics, transport, energy):
+
+    def __init__(self, config, kinetics_fn, transport, energy):
+
         self.cfg = config
-        self.kin = kinetics
+
+        # kinetics FUNCTION (numba dispatcher)
+        self.kin = kinetics_fn
+
         self.tra = transport
         self.en = energy
-        nodes = int(self._safe_f(config['kiln']['nodes']))
+
+        nodes = int(self._safe_f(config["kiln"]["nodes"]))
         self.state = KilnState(nodes)
-        self.dz = self._safe_f(config['kiln']['length']) / nodes
+
+        self.dz = self._safe_f(config["kiln"]["length"]) / nodes
         self.total_sim_time = 0.0
-        self.q_rxn_ema = np.zeros(nodes)
-        self.m_CaO_pool = np.zeros(nodes)
-        
-        # Başlangıç Koşulları
-        self.state.Tg = np.full(nodes, 400.0)
-        self.state.Ts = np.full(nodes, 300.0)
-        self.state.Tw = np.full(nodes, 300.0)
 
-    def _safe_f(self, v): 
-        return float(v[0]) if isinstance(v, list) else float(v)
-
-    def solve_step(self, dt, fuel_rate, feed_rate, kiln_rpm, fan_rate):
-        dt_v = min(float(dt), 0.10) # Sayısal kararlılık için CFL kısıtı
-        sim_hour = self.total_sim_time / 3600.0 
-        
-        # Termal Rampa (Kararlı rejime geçiş)
-        ramp_factor = 1.0 - np.exp(-sim_hour / 10.0) 
-        nodes = self.state.N
-        x = np.linspace(0, 1, nodes)
-        target_Tg = 450 + 1850 * np.exp(-(x-1.0)**2 / 0.12)
-        target_Tw = 350 + 900 * x 
-
-        self.state.Tg = 400.0 * (1 - ramp_factor) + target_Tg * ramp_factor
-        self.state.Tw = 300.0 * (1 - ramp_factor) + target_Tw * ramp_factor
-
-        # --- ADVECTION (Kütle Taşınımı) ---
-        v_s = self.tra.calculate_solid_velocity(kiln_rpm)
-        f_red = np.clip(v_s * dt_v / self.dz, 0.0, 0.45)
-        params = ['m_CaO', 'm_C2S', 'm_C3S', 'X', 'm_Al2O3', 'm_Fe2O3', 'm_C3A', 'm_C4AF', 'm_SiO2']
-        for p in params:
-            arr = getattr(self.state, p)
-            arr[1:] = (1.0 - f_red) * arr[1:] + f_red * arr[:-1]
-        
-        self.m_CaO_pool[1:] = (1.0 - f_red) * self.m_CaO_pool[1:] + f_red * self.m_CaO_pool[:-1]
-        self.q_rxn_ema[1:] = (1.0 - f_red) * self.q_rxn_ema[1:] + f_red * self.q_rxn_ema[:-1]
-
-        # --- PHYSICS & REACTION CORE ---
-        m_dot_s_kg_s = (feed_rate * 1000.0) / 3600.0 
-        m_dot_g_inlet_kg_s = self._safe_f(self.cfg['gas']['nominal_flow']) * (fan_rate / 800.0)
-        
-        fill_degree = self.tra.get_dynamic_filling_degree(kiln_rpm)
-        diameter = self._safe_f(self.cfg['kiln']['diameter'])
-        area_gas = (np.pi * (diameter / 2)**2) * (1.0 - fill_degree)
-        exchange_area_dz = diameter * np.pi * self.dz
-        
-        h_gs = self.en.calculate_convection_coeff(fan_rate)
-        q_gs_vec = h_gs * (self.state.Tg - self.state.Ts) * exchange_area_dz
-        q_rad_net_vec = self.en.calculate_radiation_flux(self.state.Tg, self.state.Ts, self.state.Tw, exchange_area_dz)
-
-        # Numba Call
-        dTs, dTg, rates, self.q_rxn_ema = _numba_step_core(
-            self.state.N, self.state.Ts, self.state.Tg, self.state.Tw,
-            self.state.X, self.state.m_CaO, self.state.m_SiO2, self.state.m_C2S,
-            self.state.m_Al2O3, self.state.m_Fe2O3, self.state.m_C3A, self.state.m_C4AF,
-            self.state.rho_g, dt_v, self.dz, v_s, m_dot_s_kg_s, m_dot_g_inlet_kg_s,
-            self._safe_f(self.cfg['material']['cp_s']), self._safe_f(self.cfg['gas']['cp_g']),
-            self.kin.get_enthalpy_vector(), area_gas, q_gs_vec, q_rad_net_vec, 
-            max(0.5, (m_dot_s_kg_s / max(1e-4, v_s)) * self.dz), exchange_area_dz,
-            self.kin.k0, self.kin.Ea, self.kin.R, self.kin.T_min,
-            self.kin.pre_factors, 0.05, -80.0, 25.0, self.kin.burning_zone_factor,
-            self.q_rxn_ema
+        self.state.initialize_profiles(
+            T_ambient=300.0,
+            T_gas_inlet=2000.0,
+            raw_meal_comp=config["raw_meal_composition"]
         )
 
-        self.state.Ts += dTs * dt_v
-        self.state.Ts = np.clip(self.state.Ts, 300.0, 1900.0)
+    # ==========================================================
+    # UTIL
+    # ==========================================================
 
-        # --- KİMYASAL STOK GÜNCELLEMELERİ ---
-        delta_X = rates[0] * dt_v
-        self.state.X = np.clip(self.state.X + delta_X, 0.0, 1.0)
-        
-        caco3_frac = self._safe_f(self.cfg['raw_meal_composition']['CaCO3'])
-        produced_CaO = delta_X * caco3_frac * 0.56 
-        self.m_CaO_pool += produced_CaO
+    def _safe_f(self, v):
+        return float(v[0]) if isinstance(v, list) else float(v)
 
-        # Flux fazları (Sıvı Faz oluşumu)
-        r_c3a = rates[3] * dt_v
-        r_c4af = rates[4] * dt_v
-        self.state.m_C3A += r_c3a
-        self.state.m_C4AF += r_c4af
-        self.state.m_Al2O3 = np.maximum(0.0, self.state.m_Al2O3 - r_c3a)
-        self.state.m_Fe2O3 = np.maximum(0.0, self.state.m_Fe2O3 - r_c4af)
+    # ==========================================================
+    # KINETICS PARAMS
+    # ==========================================================
 
-        # Klinkere Dönüşüm (Kimyasal Sınırlandırmalı)
-        # CaO Pool'dan ana kütleye geçiş (Dissolution hızı)
-        release_rate = self.m_CaO_pool * 0.5
-        self.state.m_CaO += release_rate
-        self.m_CaO_pool -= release_rate
+    def _get_kinetics_params(self):
 
-        # Reaksiyon miktarları
-        r_c2s = rates[1] * dt_v
-        r_c3s = rates[2] * dt_v
+        k = self.cfg["kinetics"]
 
-        # Kütle Korunumu: Stokiyometrik Limitler
-        # C2S oluşumu için SiO2 ve CaO kısıtı
-        r_c2s_final = np.minimum(r_c2s, self.state.m_SiO2 / 0.28)
-        r_c2s_final = np.minimum(r_c2s_final, self.state.m_CaO / 0.65)
+        k0_vec = np.array([
+            k["k0"],
+            k["k0_c2s"],
+            k["k0_c3s"],
+            k["pre_factor_c3a"],
+            k["pre_factor_c4af"]
+        ], dtype=np.float64)
 
-        # C3S (Alit) oluşumu için Belit ve CaO kısıtı
-        r_c3s_final = np.minimum(r_c3s, self.state.m_C2S / 0.75)
-        r_c3s_final = np.minimum(r_c3s_final, self.state.m_CaO / 0.25)
+        Ea_vec = np.array([
+            k["Ea"],
+            k["Ea_c2s"],
+            k["Ea_c3s"],
+            0.0,
+            0.0
+        ], dtype=np.float64)
 
-        # Kütlelerin nihai güncellenmesi
-        self.state.m_C3S += r_c3s_final
-        self.state.m_C2S += (r_c2s_final - (r_c3s_final * 0.75))
-        self.state.m_SiO2 = np.maximum(0.0, self.state.m_SiO2 - (r_c2s_final * 0.28))
-        self.state.m_CaO = np.maximum(1e-8, self.state.m_CaO - (r_c2s_final * 0.65) - (r_c3s_final * 0.25))
-        
-        # Inlet Boundary
-        self.state.Ts[0] = self._safe_f(self.cfg['material']['temp_inlet'])
-        self.total_sim_time += dt_v
-        
-        return dt_v
+        T_min_vec = np.array([
+            k["T_min_rxn"],
+            k["T_min_c2s"],
+            k["T_min_c3s"],
+            1350.0,
+            1350.0
+        ], dtype=np.float64)
+
+        pre_factors = np.array([
+            1.0,
+            1.0,
+            1.0,
+            k["pre_factor_c3a"],
+            k["pre_factor_c4af"]
+        ], dtype=np.float64)
+
+        return k0_vec, Ea_vec, T_min_vec, pre_factors
+
+    # ==========================================================
+    # MAIN STEP
+    # ==========================================================
+
+    def solve_step(self, dt, fuel_rate, feed_rate, kiln_rpm, fan_rate):
+
+        dt = min(float(dt), 0.25)
+
+        cp_s = self._safe_f(self.cfg["material"]["cp_s"])
+        cp_g = self._safe_f(self.cfg["gas"]["cp_g"])
+        diameter = self._safe_f(self.cfg["kiln"]["diameter"])
+
+        # ------------------------------------------------------
+        # FLOW
+        # ------------------------------------------------------
+
+        v_s = self.tra.calculate_solid_velocity(kiln_rpm)
+        fill = self.tra.get_dynamic_filling_degree(kiln_rpm)
+
+        area_total = np.pi * (diameter * 0.5) ** 2
+        area_gas = area_total * (1.0 - fill)
+        exchange_area = np.pi * diameter * self.dz
+
+        # ------------------------------------------------------
+        # MASS FLOW
+        # ------------------------------------------------------
+
+        m_dot_s = (feed_rate * 1000.0) / 3600.0
+
+        m_dot_g = (
+            self._safe_f(self.cfg["gas"]["nominal_flow"])
+            * (fan_rate / 800.0)
+        )
+
+        self.state.update_gas_density()
+
+        # ------------------------------------------------------
+        # ADVECTION (SOLID)
+        # ------------------------------------------------------
+
+        cfl = np.clip(v_s * dt / self.dz, 0.0, 0.40)
+
+        fields = [
+            "m_CaCO3", "m_CaO", "m_SiO2",
+            "m_Al2O3", "m_Fe2O3",
+            "m_C2S", "m_C3S", "m_C3A", "m_C4AF",
+            "Ts"
+        ]
+
+        for f in fields:
+            arr = getattr(self.state, f)
+            arr[1:] = (1 - cfl) * arr[1:] + cfl * arr[:-1]
+
+        # ------------------------------------------------------
+        # GAS FLOW (COUNTER CURRENT)
+        # ------------------------------------------------------
+
+        gas_cfl = np.clip(
+            (m_dot_g / (np.maximum(0.1, self.state.rho_g) * area_gas))
+            * dt / self.dz,
+            0.0, 0.40
+        )
+
+        self.state.Tg[:-1] = (
+            (1 - gas_cfl[:-1]) * self.state.Tg[:-1]
+            + gas_cfl[:-1] * self.state.Tg[1:]
+        )
+
+        # burner boundary
+        self.state.Tg[-1] = (
+            400.0
+            + (1 - np.exp(-self.total_sim_time / 28800.0)) * 1600.0
+        )
+
+        # ------------------------------------------------------
+        # WALL
+        # ------------------------------------------------------
+
+        Tw_target = 0.55 * self.state.Tg + 0.45 * self.state.Ts
+        self.state.Tw += (Tw_target - self.state.Tw) * 0.015 * dt
+
+        # ------------------------------------------------------
+        # HEAT TRANSFER
+        # ------------------------------------------------------
+
+        h_gs = self.en.calculate_convection_coeff(fan_rate)
+
+        q_conv = self.en.calculate_convective_flux(
+            self.state.Tg,
+            self.state.Ts,
+            exchange_area,
+            h_gs
+        )
+
+        q_rad = self.en.calculate_radiation_flux(
+            self.state.Tg,
+            self.state.Ts,
+            self.state.Tw,
+            exchange_area
+        )
+
+        # ------------------------------------------------------
+        # KINETICS
+        # ------------------------------------------------------
+
+        k0_vec, Ea_vec, T_min_vec, pre_factors = self._get_kinetics_params()
+
+        rates = self.kin(
+            self.state.Ts,
+            self.state.m_CaCO3,
+            self.state.m_CaO,
+            self.state.m_SiO2,
+            self.state.m_C2S,
+            self.state.m_Al2O3,
+            self.state.m_Fe2O3,
+            self.state.m_C3A,
+            self.state.m_C4AF,
+            k0_vec,
+            Ea_vec,
+            self.cfg["kinetics"]["R"],
+            T_min_vec,
+            pre_factors,
+            dt
+        )
+
+        # ------------------------------------------------------
+        # ENERGY FROM REACTIONS
+        # ------------------------------------------------------
+
+        dH = self.en.get_reaction_heat(
+            rates,
+            m_dot_s,
+            np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
+        )
+
+        # ------------------------------------------------------
+        # ENERGY BALANCE
+        # ------------------------------------------------------
+
+        eff_mass = np.maximum(
+            5.0,
+            (m_dot_s / max(v_s, 1e-4)) * self.dz
+        )
+
+        Cp = eff_mass * cp_s
+
+        q_net = q_conv + q_rad - dH
+
+        dTs = q_net / np.maximum(100.0, Cp)
+        dTg = -(q_conv + q_rad) / np.maximum(1.0, m_dot_g * cp_g)
+
+        self.state.Ts += np.clip(dTs, -250, 250) * dt
+        self.state.Tg += np.clip(dTg, -400, 400) * dt
+
+        self.state.Ts = np.clip(self.state.Ts, 300, 1900)
+        self.state.Tg = np.clip(self.state.Tg, 300, 2400)
+
+        # ------------------------------------------------------
+        # CHEMISTRY UPDATE
+        # ------------------------------------------------------
+
+        r = rates * dt
+
+        # CaCO3 -> CaO
+        r0 = np.minimum(r[0], self.state.m_CaCO3)
+        self.state.m_CaCO3 -= r0
+        self.state.m_CaO += r0 * 0.56
+
+        # C2S
+        r1 = np.minimum(r[1], self.state.m_CaO / 2.0)
+        r1 = np.minimum(r1, self.state.m_SiO2)
+
+        self.state.m_CaO -= 2 * r1
+        self.state.m_SiO2 -= r1
+        self.state.m_C2S += r1
+
+        # C3S
+        r2 = np.minimum(r[2], self.state.m_C2S)
+        r2 = np.minimum(r2, self.state.m_CaO)
+
+        self.state.m_C2S -= r2
+        self.state.m_CaO -= r2
+        self.state.m_C3S += r2
+
+        # C3A / C4AF
+        r3 = np.minimum(r[3], self.state.m_Al2O3)
+        r4 = np.minimum(r[4], self.state.m_Fe2O3)
+
+        self.state.m_Al2O3 -= r3
+        self.state.m_Fe2O3 -= r4
+
+        self.state.m_C3A += r3
+        self.state.m_C4AF += r4
+
+        # ------------------------------------------------------
+        # FEED
+        # ------------------------------------------------------
+
+        feed = min(1.0, dt * 0.25)
+        raw = self.cfg["raw_meal_composition"]
+
+        self.state.Ts[0] = self._safe_f(self.cfg["material"]["temp_inlet"])
+
+        self.state.m_CaCO3[0] += raw["CaCO3"] * feed
+        self.state.m_SiO2[0] += raw["SiO2"] * feed
+        self.state.m_Al2O3[0] += raw["Al2O3"] * feed
+        self.state.m_Fe2O3[0] += raw["Fe2O3"] * feed
+
+        # ------------------------------------------------------
+        # CLEAN
+        # ------------------------------------------------------
+
+        for arr in [
+            self.state.m_CaCO3, self.state.m_CaO,
+            self.state.m_SiO2, self.state.m_Al2O3,
+            self.state.m_Fe2O3,
+            self.state.m_C2S, self.state.m_C3S,
+            self.state.m_C3A, self.state.m_C4AF
+        ]:
+            np.maximum(arr, 0.0, out=arr)
+
+        self.total_sim_time += dt
+
+        return dt
