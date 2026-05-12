@@ -61,7 +61,7 @@ gas:
   cp_g: 1280.0
   h_gs: 140.0        
   emissivity_g: 0.55
-  lhv_fuel: 32000.0
+  lhv_fuel: 3.2e7
 
 raw_meal_composition:
   CaCO3: 0.730           
