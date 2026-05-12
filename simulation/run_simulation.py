@@ -61,7 +61,7 @@ def main():
 
     raw_meal = config.get(
         "raw_meal_composition",
-        {"CaCO3": 0.82, "SiO2": 0.13, "Al2O3": 0.03, "Fe2O3": 0.02}
+        {"CaCO3": 0.81, "SiO2": 0.13, "Al2O3": 0.04, "Fe2O3": 0.02}
     )
 
     ambient_temp = float(config["material"].get("temp_inlet", 300.0))
@@ -72,6 +72,12 @@ def main():
         T_gas_inlet=gas_inlet_temp,
         raw_meal_comp=raw_meal
     )
+    
+    # t=0'da fırın hammadde dolu varsayımı
+    solver.state.CaCO3[:] = raw_meal["CaCO3"]
+    solver.state.SiO2[:]  = raw_meal["SiO2"]
+    solver.state.Al2O3[:] = raw_meal["Al2O3"]
+    solver.state.Fe2O3[:] = raw_meal["Fe2O3"]
 
     # ==========================================================
     # SIMULATION PARAMETERS
@@ -90,14 +96,16 @@ def main():
     print(f"Simulation Duration : {t_final/3600:.1f} h")
     print(f"Nodes               : {solver.state.N}")
     print(f"Time Step           : {dt:.3f} s")
-    print("-" * 120)
+    print("-" * 185)
 
+    # Başlık Düzeni: CaCO3 -> CaO -> SiO2 -> Al2O3 -> Fe2O3 -> C2S -> C3S -> C3A -> C4AF -> Mass
     print(
         f"{'Time':>7} | {'Ts_out':>8} | {'Tg_out':>8} | "
-        f"{'CaCO3':>8} | {'CaO':>8} | {'C2S':>8} | {'C3S':>8} | {'Mass':>8}"
+        f"{'CaCO3':>8} | {'CaO':>8} | {'SiO2':>8} | {'Al2O3':>8} | {'Fe2O3':>8} | "
+        f"{'C2S':>8} | {'C3S':>8} | {'C3A':>8} | {'C4AF':>8} | {'Mass':>8}"
     )
 
-    print("-" * 120)
+    print("-" * 185)
 
     start_wall_time = time.time()
     last_log = -1e9
@@ -121,21 +129,31 @@ def main():
         if (t - last_log) >= 600.0:
 
             s = solver.state
+            
+            # Kütle Dengesi
+            current_mass = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 + 
+                            s.C2S + s.C3S + s.C3A + s.C4AF)
 
+            # Loglama satırı: Sıvı fazlar (C3A, C4AF) kütle kolonundan hemen önceye eklendi
             print(
                 f"{t/3600:7.2f} | "
                 f"{s.Ts[-1]:8.1f} | "
                 f"{s.Tg[-1]:8.1f} | "
                 f"{s.CaCO3[-1]:8.4f} | "
                 f"{s.CaO[-1]:8.4f} | "
+                f"{s.SiO2[-1]:8.4f} | "
+                f"{s.Al2O3[-1]:8.4f} | "
+                f"{s.Fe2O3[-1]:8.4f} | "
                 f"{s.C2S[-1]:8.4f} | "
                 f"{s.C3S[-1]:8.4f} | "
-                f"{np.mean(s.CaCO3 + s.CaO + s.C2S + s.C3S):8.4f}"
+                f"{s.C3A[-1]:8.4f} | "
+                f"{s.C4AF[-1]:8.4f} | "
+                f"{current_mass[-1]:8.4f}"
             )
 
             last_log = t
 
-    print("-" * 120)
+    print("-" * 185)
     print(f"Completed in {time.time() - start_wall_time:.2f} s\n")
 
     # ==========================================================
@@ -143,7 +161,6 @@ def main():
     # ==============================================================
 
     s = solver.state
-
     kiln_length = float(config["kiln"]["length"])
     z = np.linspace(0, kiln_length, s.N)
 
@@ -159,11 +176,14 @@ def main():
     plt.grid(alpha=0.2)
 
     plt.figure("Chemistry", figsize=(14, 8))
-    plt.plot(z, s.CaCO3, label="CaCO3")
-    plt.plot(z, s.CaO, label="CaO")
+    plt.plot(z, s.CaCO3, label="CaCO3", linewidth=2)
+    plt.plot(z, s.CaO, label="CaO", linestyle="--")
+    plt.plot(z, s.SiO2, label="SiO2")
     plt.plot(z, s.C2S, label="C2S")
     plt.plot(z, s.C3S, label="C3S")
-    plt.legend(ncol=2)
+    plt.plot(z, s.C3A, label="C3A", linestyle=":")
+    plt.plot(z, s.C4AF, label="C4AF", linestyle=":")
+    plt.legend(ncol=4)
     plt.grid(alpha=0.2)
 
     plt.show()

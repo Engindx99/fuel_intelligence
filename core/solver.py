@@ -95,21 +95,35 @@ class KilnSolver:
         # ======================================================
         r = rates * dt
         
-        # Kalsinasyon: CaCO3 -> CaO + CO2 (Mass loss)
+        # 1. Kalsinasyon: CaCO3 -> CaO + CO2 (Mass loss)
         r0 = np.minimum(r[0], self.state.CaCO3)
         self.state.CaCO3 -= r0
-        self.state.CaO += r0 * (56.08 / 100.09) # Mol ağırlığı ölçeklemesi
+        self.state.CaO += r0 * (56.08 / 100.09) 
 
-        # Klinkerleşme reaksiyonları (Basit kütle dengesi)
-        r1 = np.minimum(r[1], np.minimum(self.state.CaO / 2.0, self.state.SiO2))
-        self.state.CaO -= 2 * r1
+        # 2. C2S Oluşumu: 2*CaO + SiO2 -> C2S
+        # (2*56.08) CaO + (60.08) SiO2 -> (172.24) C2S
+        r1_potential = np.minimum(r[1], self.state.SiO2)
+        r1 = np.minimum(r1_potential, self.state.CaO / (112.16 / 60.08))
+        self.state.CaO -= r1 * (112.16 / 60.08)
         self.state.SiO2 -= r1
-        self.state.C2S += r1
+        self.state.C2S += r1 * (172.24 / 60.08)
 
-        r2 = np.minimum(r[2], np.minimum(self.state.C2S, self.state.CaO))
+        # 3. C3S Oluşumu: C2S + CaO -> C3S
+        # (172.24) C2S + (56.08) CaO -> (228.32) C3S
+        r2_potential = np.minimum(r[2], self.state.C2S)
+        r2 = np.minimum(r2_potential, self.state.CaO / (56.08 / 172.24))
         self.state.C2S -= r2
-        self.state.CaO -= r2
-        self.state.C3S += r2
+        self.state.CaO -= r2 * (56.08 / 172.24)
+        self.state.C3S += r2 * (228.32 / 172.24)
+
+        # 4. Sıvı Faz Reaksiyonları (C3A ve C4AF)
+        # Basit kütle korunumu ile Al2O3 ve Fe2O3 tüketimi
+        r3 = np.minimum(r[3], self.state.Al2O3)
+        r4 = np.minimum(r[4], self.state.Fe2O3)
+        self.state.Al2O3 -= r3
+        self.state.Fe2O3 -= r4
+        self.state.C3A += r3 * 1.5 # Yaklaşık stokiyometri
+        self.state.C4AF += r4 * 2.0
 
         # ======================================================
         # FEED (Boundary Condition - NOT Accumulation)
@@ -126,12 +140,14 @@ class KilnSolver:
         self.state.CaO[0] = 0.0
         self.state.C2S[0] = 0.0
         self.state.C3S[0] = 0.0
+        self.state.C3A[0] = 0.0
+        self.state.C4AF[0] = 0.0
         
         self.state.Ts[0] = self._safe_f(self.cfg["material"]["temp_inlet"])
 
         # Temizlik ve simülasyon zamanı
         for arr in [self.state.CaCO3, self.state.CaO, self.state.SiO2, self.state.Al2O3, 
-                    self.state.Fe2O3, self.state.C2S, self.state.C3S]:
+                    self.state.Fe2O3, self.state.C2S, self.state.C3S, self.state.C3A, self.state.C4AF]:
             np.maximum(arr, 0.0, out=arr)
 
         self.total_sim_time += dt
