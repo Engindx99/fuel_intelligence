@@ -12,14 +12,13 @@ def _physics_step_core(
     k0_v, Ea_v, R_gas, enthalpies, fuel_source
 ):
     nodes = Ts.shape[0]
-    # Diferansiyel denklemin sertliğini (stiffness) kırmak için sub-stepping yüksek tutuldu
+    # Diferansiyel denklemin sertliğini (stiffness) kırmak için sub-stepping
     sub_steps = 50 
     dt_sub = dt / sub_steps
 
     for _ in range(sub_steps):
         # 1. ADVEKSİYON (Upwind Fark Şeması)
-        # Kararlılık için CFL sınırını %1 ile kısıtlıyoruz (Sayısal gürültüyü önler)
-        # image_9b1c89.png'deki yumuşak geçişi bu düşük CFL sağlar.
+        # Kararlılık için CFL sınırını %1 ile kısıtlıyoruz
         cfl_s = np.minimum(v_s * dt_sub / dz, 0.01)
 
         for i in range(nodes - 1, 0, -1):
@@ -27,6 +26,8 @@ def _physics_step_core(
             CaCO3[i] = (1 - cfl_s) * CaCO3[i] + cfl_s * CaCO3[i-1]
             CaO[i]   = (1 - cfl_s) * CaO[i]   + cfl_s * CaO[i-1]
             SiO2[i]  = (1 - cfl_s) * SiO2[i]  + cfl_s * SiO2[i-1]
+            C2S[i]   = (1 - cfl_s) * C2S[i]   + cfl_s * C2S[i-1]
+            C3S[i]   = (1 - cfl_s) * C3S[i]   + cfl_s * C3S[i-1]
 
         # Gaz Fazı Adveksiyonu (Karşıt Akış)
         for i in range(nodes - 1):
@@ -37,54 +38,64 @@ def _physics_step_core(
         for i in range(nodes):
             T_s_curr = np.maximum(Ts[i], 300.0)
             T_g_curr = np.maximum(Tg[i], 300.0)
+            inv_rt = 1.0 / (R_gas * T_s_curr)
             
-            # --- Kalsinasyon Kinetiği (Fiziksel Limitli) ---
-            # image_9b1c89.png'de 1.17s ile 2.00s arasındaki kütle değişimini kontrol eden kısım
+            # --- Kalsinasyon Kinetiği (r0) ---
             r0 = 0.0
             if T_s_curr > 850.0 and CaCO3[i] > 1e-4:
-                inv_rt = 1.0 / (R_gas * T_s_curr)
                 e_calc = -Ea_v[0] * inv_rt
-                k_chem = k0_v[0] * np.exp(np.maximum(e_calc, -60.0))
-                
-                # FİZİKSEL FREN: Reaksiyon hızı saniyede toplam kütlenin %0.5'ini geçemez.
-                # Bu kısıt, kalsinasyonun fırın boyunca daha dengeli yayılmasını sağlar.
-                r_limit = 0.005 
-                r0 = np.minimum(k_chem * CaCO3[i], r_limit)
+                k_calc = k0_v[0] * np.exp(np.maximum(e_calc, -60.0))
+                r_limit_calc = 0.005 
+                r0 = np.minimum(k_calc * CaCO3[i], r_limit_calc)
+
+            # --- Belit (C2S) Oluşumu (r1: 2CaO + SiO2 -> C2S) ---
+            r1 = 0.0
+            if T_s_curr > 1000.0 and CaO[i] > 1e-4 and SiO2[i] > 1e-4:
+                e_c2s = -Ea_v[1] * inv_rt
+                k_c2s = k0_v[1] * np.exp(np.maximum(e_c2s, -60.0))
+                r1 = np.minimum(k_c2s * CaO[i] * SiO2[i], 0.002)
+
+            # --- Alit (C3S) Oluşumu (r2: C2S + CaO -> C3S) ---
+            r2 = 0.0
+            if T_s_curr > 1300.0 and C2S[i] > 1e-4 and CaO[i] > 1e-4:
+                e_c3s = -Ea_v[2] * inv_rt
+                k_c3s = k0_v[2] * np.exp(np.maximum(e_c3s, -60.0))
+                r2 = np.minimum(k_c3s * C2S[i] * CaO[i], 0.001)
 
             # Isı Transfer Terimleri
-            # Konveksiyon (Gaz -> Katı)
             q_conv = h_conv * (T_g_curr - T_s_curr) * exchange_area
-            
-            # Radyasyon Kaybı (Fırın dış yüzeyine olan kayıp)
-            # Bu terim sıcaklık tırmanışını fiziksel olarak dengeler.
             q_loss = 5.67e-8 * 0.9 * exchange_area * (T_s_curr**4 - 320.0**4) * 0.1
             
-            # Reaksiyon Isısı (Endotermik)
-            q_rxn = (r0 * enthalpies[0]) * m_dot_s_in
+            # Reaksiyon Isısı
+            q_rxn = (r0 * enthalpies[0] + r1 * enthalpies[1] + r2 * enthalpies[2]) * m_dot_s_in
             
-            # Termal Kütleler (Paydanın sıfır olmaması için stabilite tabanı yükseltildi)
+            # Termal Kütleler
             m_cp_s = np.maximum(area_solid * dz * rho_s * cp_s, 1000.0)
-            m_cp_g = np.maximum(area_gas * dz * 1.2 * cp_g, 100.0)
+            m_cp_g = np.maximum(area_gas * dz * 1.2 * cp_g, 500.0)
 
-            # Değişim Miktarları
             dT_s = ((q_conv - q_rxn - q_loss) / m_cp_s) * dt_sub
             dT_g = ((fuel_source[i] - q_conv) / m_cp_g) * dt_sub
 
-            # Dinamik Emniyet Limitleyicisi (Sub-step başına max 0.2K değişim)
-            # image_9b1c89.png'deki Ts ve Tg_Burn sütunlarındaki düzenli artışı bu limit sağlar.
+            # Dinamik Emniyet
             safe_limit = 0.2 * dt_sub
             dT_s = np.maximum(np.minimum(dT_s, safe_limit), -safe_limit)
-            dT_g = np.maximum(np.minimum(dT_g, safe_limit * 3), -safe_limit * 3)
+            dT_g = np.maximum(np.minimum(dT_g, safe_limit * 2), -safe_limit * 2)
 
             Ts[i] += dT_s
             Tg[i] += dT_g
 
-            # Kütle Güncelleme (Stokiyometri)
-            r0_dt = r0 * dt_sub
+            # 3. KÜTLE GÜNCELLEME
+            r0_dt, r1_dt, r2_dt = r0 * dt_sub, r1 * dt_sub, r2 * dt_sub
             if r0_dt > CaCO3[i]: r0_dt = CaCO3[i]
             CaCO3[i] -= r0_dt
             CaO[i]   += r0_dt * 0.56
             CO2[i]   += r0_dt * 0.44
+
+            if CaO[i] > (r1_dt * 0.65 + r2_dt * 0.25) and SiO2[i] > (r1_dt * 0.35):
+                CaO[i]  -= (r1_dt * 0.65 + r2_dt * 0.25)
+                SiO2[i] -= (r1_dt * 0.35)
+                C2S[i]  += (r1_dt - r2_dt)
+                C3S[i]  += r2_dt
 
     return Ts, Tg, CaCO3, CaO, SiO2, C2S, C3S, CO2
 
@@ -92,14 +103,12 @@ def _physics_step_core(
 # STATE VE SOLVER SINIFLARI
 # ==============================================================
 class KilnState:
-    """Fırın içindeki tüm fiziksel değişkenlerin durumunu tutar."""
     def __init__(self, N):
         self.N = N  
         self.Ts = np.full(N, 300.0, dtype=np.float64)
         self.Tg = np.full(N, 1000.0, dtype=np.float64)
         self.Tw = np.full(N, 450.0, dtype=np.float64)
         
-        # Bileşen Kütle Oranları
         self.CaCO3 = np.zeros(N, dtype=np.float64)
         self.CaO   = np.zeros(N, dtype=np.float64)
         self.SiO2  = np.zeros(N, dtype=np.float64)
@@ -112,60 +121,68 @@ class KilnState:
         self.CO2   = np.zeros(N, dtype=np.float64)
 
     def initialize_profiles(self, config):
-        """Dışarıdan çağrılan başlangıç değer atamaları için placeholder."""
-        pass
+        feed = config.get("feed", {})
+        self.CaCO3.fill(feed.get("CaCO3", 0.82))
+        self.SiO2.fill(feed.get("SiO2", 0.14))
+        self.Al2O3.fill(feed.get("Al2O3", 0.02))
+        self.Fe2O3.fill(feed.get("Fe2O3", 0.02))
+        self.Ts.fill(300.0)
+        self.Tg.fill(300.0)
 
 class KilnSolver:
-    """Fizik motorunu ve simülasyon adımlarını yöneten ana sınıf."""
     def __init__(self, config, kinetics_fn, transport, energy):
         self.cfg = config
         self.tra = transport
         self.en = energy
-        
-        # Konfigürasyondan düğüm sayısı ve uzunluk bilgisini al
         self.nodes = int(self._extract_val(config["kiln"]["nodes"]))
         self.state = KilnState(self.nodes)
-        self.dz = self._extract_val(config["kiln"]["length"]) / self.nodes
+        self.length = self._extract_val(config["kiln"]["length"])
+        self.dz = self.length / self.nodes
+        self.elapsed_time = 0.0
 
     def _extract_val(self, x):
-        """Yaml verisinden skaler değer ayıklar."""
         if isinstance(x, list): return float(x[0])
         return float(x)
 
+    def _calculate_ramped_flame(self, current_time):
+        """Saf rampa çarpanı (Enerji içermez)."""
+        # 0'dan 1'e giden zamana bağlı katsayı
+        return 1.0 - np.exp(-current_time / 7.8e5)
+
     def solve_step(self, dt, fuel_rate, feed_rate, kiln_rpm, fan_rate):
-        """Tek bir zaman adımı (dt) boyunca fiziği ilerletir."""
         s = self.state
         k = self.cfg["kinetics"]
+        self.elapsed_time += dt
         
-        # Vektörize edilmiş kinetik parametreler
         k0_v = np.array([k["k0"], k["k0_c2s"], k["k0_c3s"]], dtype=np.float64)
         Ea_v = np.array([k["Ea"], k["Ea_c2s"], k["Ea_c3s"]], dtype=np.float64)
-        # Kalsinasyon, C2S oluşumu ve C3S oluşumu entalpileri
         enthalpies = np.array([1780e3, -590e3, 500e3], dtype=np.float64)
         
-        # Geometrik ve Akış Hesaplamaları
         d = self._extract_val(self.cfg["kiln"]["diameter"])
         area_total = np.pi * (d / 2)**2
         fill = self.tra.get_dynamic_filling_degree(kiln_rpm, feed_rate)
         
-        # Çekirdek (Numba) fonksiyonunu çağır
+        # Isıl yükü burada hesaplayıp rampa ile çarpıyoruz
+        ramp = self._calculate_ramped_flame(self.elapsed_time)
+        # Toplam enerji (J/s) -> Düğümlere homojen dağılım
+        total_q_fuel = fuel_rate * 32000e3 * ramp
+        fuel_source_dist = np.full(self.nodes, total_q_fuel / self.nodes)
+        
         res = _physics_step_core(
             s.Ts, s.Tg, s.CaCO3, s.CaO, s.SiO2, s.C2S, s.C3S, 
             s.Al2O3, s.Fe2O3, s.C3A, s.C4AF, s.CO2,
             dt, self.dz, 
             self.tra.calculate_solid_velocity(kiln_rpm),
-            np.full(self.nodes, 6.5), # Ortalama gaz hızı (m/s)
-            (feed_rate * 1000.0) / 3600.0, # kg/s cinsinden besleme
+            np.full(self.nodes, 6.5 + (fan_rate / 200.0)),
+            (feed_rate * 1000.0) / 3600.0,
             area_total * fill, area_total * (1.0 - fill),
             self._extract_val(self.cfg["material"]["rho_s"]),
             self._extract_val(self.cfg["material"]["cp_s"]),
-            self._extract_val(self.cfg["gas"]["cp_g"]),
-            np.pi * d * self.dz, 18.0 + 0.05 * fan_rate, # h_conv
+            1600.0, 
+            np.pi * d * self.dz, 18.0 + 0.05 * fan_rate,
             k0_v, Ea_v, 8.314, enthalpies,
-            self.en.calculate_combustion_source(fuel_rate, self.nodes)
+            fuel_source_dist
         )
         
-        # Sonuçları state nesnesine geri yaz
         (s.Ts, s.Tg, s.CaCO3, s.CaO, s.SiO2, s.C2S, s.C3S, s.CO2) = res
-        
         return dt

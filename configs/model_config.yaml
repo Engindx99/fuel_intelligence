@@ -57,7 +57,7 @@ gas:
   fuel_rate: 11.72 # ton/h       
   fan_rate: 800.0
   nominal_flow: 52.0
-  temp_inlet: 2200.0    
+  temp_inlet: 300.0    
   cp_g: 1280.0
   h_gs: 140.0        
   emissivity_g: 0.55

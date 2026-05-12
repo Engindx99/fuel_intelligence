@@ -76,8 +76,8 @@ def main():
     
     # Gaz sıcaklığı başlangıç tahmini: Brülör tarafı (z=L, -1) sıcak, baca (z=0, 0) tarafı soğuk.
     # Solver içinde gaz denklemi sağdan sola (N-1 -> 0) çözüldüğü için bu gradyan kritiktir.
-    gas_inlet_temp = float(config["gas"].get("temp_inlet", 2200.0))
-    solver.state.Tg = np.linspace(800.0, gas_inlet_temp, solver.state.N)
+    gas_inlet_temp = float(config["gas"].get("temp_inlet", 300.0))
+    solver.state.Tg = np.linspace(300.0, gas_inlet_temp, solver.state.N)
 
     # ==========================================================
     # SIMULATION PARAMETERS (Hour Based Integration)
