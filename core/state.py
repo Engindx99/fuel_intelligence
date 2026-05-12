@@ -1,20 +1,15 @@
 import numpy as np
 
 class KilnState:
-    """
-    Döner fırın durum değişkenlerini ve kütle dengesini yöneten sınıf.
-    Birimler: Sıcaklık [K], Kütle Kesri [kg_i / kg_total_solid]
-    """
     def __init__(self, N):
         self.N = N
 
         # --- Termal Profil ---
-        self.Tg = np.zeros(N, dtype=np.float64)  # Gaz sıcaklığı
-        self.Ts = np.zeros(N, dtype=np.float64)  # Malzeme (katı) sıcaklığı
-        self.Tw = np.zeros(N, dtype=np.float64)  # Fırın iç duvar sıcaklığı
+        self.Tg = np.zeros(N, dtype=np.float64)  
+        self.Ts = np.zeros(N, dtype=np.float64)  
+        self.Tw = np.zeros(N, dtype=np.float64)  
 
-        # --- Katı Faz Bileşenleri (Kütle Kesri: 0.0 - 1.0) ---
-        # Bu değerler katı kütlesi içindeki oranları temsil eder.
+        # --- Katı Faz Bileşenleri (Kütle Kesri) ---
         self.CaCO3 = np.zeros(N, dtype=np.float64)
         self.CaO   = np.zeros(N, dtype=np.float64)
         self.SiO2  = np.zeros(N, dtype=np.float64)
@@ -27,69 +22,58 @@ class KilnState:
         self.C3A = np.zeros(N, dtype=np.float64)
         self.C4AF = np.zeros(N, dtype=np.float64)
 
-        # --- Gaz Fazı Ürünleri ---
-        # CO2 burada gaz fazındaki kütle kesrini veya düğüm başına biriken kütleyi temsil edebilir.
-        # Solver'daki taşınım mantığına göre kütle kesri olarak yönetilir.
-        self.CO2 = np.zeros(N, dtype=np.float64) 
-
-        # --- Fiziksel Parametreler ---
-        self.rho_g = np.ones(N, dtype=np.float64) * 1.2 # Nominal hava yoğunluğu (kg/m3)
+        # --- Gaz Fazı Takibi ---
+        self.CO2_released = np.zeros(N, dtype=np.float64) # kg/s cinsinden her düğümde çıkan CO2
 
     @property
-    def check_mass_fraction(self):
+    def total_solid_fraction(self):
         """
-        Katı fazdaki türlerin toplamını kontrol eder. 
-        Kalsinasyon sonrası CO2 gaz fazına geçtiği için, 
-        stokiyometrik denge solver içinde kütle kaybı olarak yönetilmelidir.
+        Kütle koruması kontrolü. 
+        NOT: Kalsinasyon bölgesinde bu değer 1.0'ın altına düşecektir.
+        Çünkü CO2 katı fazdan ayrılır.
         """
-        total_solid = (
-            self.CaCO3 + self.CaO + self.SiO2 +
-            self.Al2O3 + self.Fe2O3 +
-            self.C2S + self.C3S + self.C3A + self.C4AF
-        )
-        return total_solid
+        return (self.CaCO3 + self.CaO + self.SiO2 + self.Al2O3 + self.Fe2O3 +
+                self.C2S + self.C3S + self.C3A + self.C4AF)
 
-    def initialize_profiles(self,
-                            T_ambient=300.0,
-                            T_gas_inlet=2000.0,
-                            raw_meal_comp=None):
+    def initialize_profiles(self, config, raw_meal_comp=None):
         """
-        Başlangıç profillerini Solver'daki taşınım (Upwind) mantığına uygun başlatır.
+        Config dosyasından gelen parametrelerle profilleri başlatır.
         """
-        if raw_meal_comp is None:
-            raw_meal_comp = {
-                "CaCO3": 0.76,
-                "SiO2": 0.14,
-                "Al2O3": 0.03,
-                "Fe2O3": 0.02
-            }
+        # Config hiyerarşisine göre güvenli okuma
+        mat_cfg = config.get("material", {})
+        gas_cfg = config.get("gas", {})
+        
+        T_ambient = mat_cfg.get("temp_inlet", 300.0)
+        T_gas_max = gas_cfg.get("temp_inlet", 2200.0)
 
-        # 1. Sıcaklık Başlatma
-        # Ts: Besleme sıcaklığından başlar (Sayısal şokları önlemek için tüm düğümler T_ambient)
+        # 1. Sıcaklık Başlatma (Lineer bir tahmin nümerik yakınsamayı hızlandırır)
         self.Ts.fill(T_ambient)
-        self.Tw.fill(T_ambient + 100.0) # Duvar biraz daha sıcak varsayılabilir
-        
-        # Tg: Solver içinde linspace ile ezilecek olsa da burada tutarlılık için atanır.
-        self.Tg = np.linspace(T_ambient + 200.0, T_gas_inlet, self.N)
+        self.Tw.fill(T_ambient + 50.0)
+        self.Tg = np.linspace(T_ambient + 100.0, T_gas_max, self.N)
 
-        # 2. Bileşenlerin Tüm Fırın Boyunca Başlatılması
-        # ÖNEMLİ: Upwind şemasında [i] düğümü [i-1]'den beslendiği için,
-        # fırının içini boş (0.0) başlatmak yerine ham karışımla dolu başlatmak 
-        # simülasyonun kararlı hale gelme süresini (settling time) kısaltır.
-        
-        self.CaCO3.fill(raw_meal_comp.get("CaCO3", 0.0))
-        self.SiO2.fill(raw_meal_comp.get("SiO2", 0.0))
-        self.Al2O3.fill(raw_meal_comp.get("Al2O3", 0.0))
-        self.Fe2O3.fill(raw_meal_comp.get("Fe2O3", 0.0))
+        # 2. Bileşen Başlatma (Ham karışım normalizasyonu)
+        if raw_meal_comp is None:
+            raw_meal_comp = config.get("raw_meal_composition", {})
 
-        # Ürün fazları başlangıçta fırın içinde sıfırdır.
-        other_phases = ["CaO", "C2S", "C3S", "C3A", "C4AF", "CO2"]
-        for attr in other_phases:
+        # Toplamı 1.0 yapacak şekilde normalize et
+        total_sum = sum(raw_meal_comp.values())
+        if total_sum > 0:
+            for key, val in raw_meal_comp.items():
+                if hasattr(self, key):
+                    getattr(self, key).fill(val / total_sum)
+
+        # Diğer fazları temizle
+        for attr in ["CaO", "C2S", "C3S", "C3A", "C4AF", "CO2_released"]:
             getattr(self, attr).fill(0.0)
 
     def get_solid_state_vector(self):
-        """Kinetik hesaplamalar için toplu matris döndürür."""
-        return np.vstack((
+        """Kinetik çözücüye (ODE solver) gönderilecek vektör."""
+        return np.array([
             self.CaCO3, self.CaO, self.SiO2, self.Al2O3, self.Fe2O3,
             self.C2S, self.C3S, self.C3A, self.C4AF
-        ))
+        ])
+    
+    def apply_solid_state_vector(self, vector):
+        """Kinetik çözücüden dönen sonuçları düğümlere geri yazar."""
+        (self.CaCO3, self.CaO, self.SiO2, self.Al2O3, self.Fe2O3,
+         self.C2S, self.C3S, self.C3A, self.C4AF) = vector

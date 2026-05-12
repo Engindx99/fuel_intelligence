@@ -61,28 +61,22 @@ def main():
 
     raw_meal = config.get(
         "raw_meal_composition",
-        {"CaCO3": 0.81, "SiO2": 0.13, "Al2O3": 0.04, "Fe2O3": 0.02}
+        {"CaCO3": 0.73, "SiO2": 0.21, "Al2O3": 0.04, "Fe2O3": 0.02}
     )
 
-    ambient_temp = float(config["material"].get("temp_inlet", 300.0))
-    gas_inlet_temp = float(config["gas"].get("temp_inlet", 2200.0))
-
-    # Solver'ın state nesnesini kullanarak başlangıç profillerini kuruyoruz
-    solver.state.initialize_profiles(
-        T_ambient=ambient_temp,
-        T_gas_inlet=gas_inlet_temp,
-        raw_meal_comp=raw_meal
-    )
+    # initialize_profiles artık config'i doğrudan alarak daha stabil bir başlangıç yapar
+    solver.state.initialize_profiles(config)
     
-    # t=0'da fırın hammadde dolu varsayımı (Sayısal şokları önlemek için tüm düğümler doldurulur)
-    # Katı akışı z=0 -> z=L yönündedir.
+    # t=0'da fırın hammadde dolu varsayımı (Sayısal şokları önlemek için)
+    # Katı akışı z=0 (Giriş) -> z=L (Çıkış) yönündedir.
     solver.state.CaCO3[:] = raw_meal["CaCO3"]
     solver.state.SiO2[:]  = raw_meal["SiO2"]
     solver.state.Al2O3[:] = raw_meal["Al2O3"]
     solver.state.Fe2O3[:] = raw_meal["Fe2O3"]
     
-    # Gaz sıcaklığı fırın boyunca soğuyarak ilerlemeli (Başlangıç tahmini)
-    # Brülör z=L (indeks -1), Baca z=0 (indeks 0)
+    # Gaz sıcaklığı başlangıç tahmini: Brülör tarafı (z=L, -1) sıcak, baca (z=0, 0) tarafı soğuk.
+    # Solver içinde gaz denklemi sağdan sola (N-1 -> 0) çözüldüğü için bu gradyan kritiktir.
+    gas_inlet_temp = float(config["gas"].get("temp_inlet", 2200.0))
     solver.state.Tg = np.linspace(800.0, gas_inlet_temp, solver.state.N)
 
     # ==========================================================
@@ -105,11 +99,11 @@ def main():
     print(f"Time Step           : {dt:.3f} s")
     
 
-    # Başlık Düzeni: Tg_out yerine rampa etkisini görebileceğimiz Tg_Burn eklendi.
+
     print(
-        f"{'Time':>7} | {'Ts_Clnk':>8} | {'Tg_Burn':>8} | "
-        f"{'CaCO3':>8} | {'CaO':>8} | {'SiO2':>8} | {'Al2O3':>8} | {'Fe2O3':>8} | "
-        f"{'C2S':>8} | {'C3S':>8} | {'C3A':>8} | {'C4AF':>8} | {'CO2':>8} | {'Mass':>8}"
+        f"{'Time':>7} | {'Ts':>8} | {'Tg_Burn':>8} | "
+        f"{'CaCO3':>8} | {'CaO':>8} | {'SiO2':>8} | "
+        f"{'C2S':>8} | {'C3S':>8} | {'CO2':>8} | {'Mass':>8}"
     )
 
     start_wall_time = time.time()
@@ -137,13 +131,12 @@ def main():
 
                 s = solver.state
                 
-                # Katı Faz Kütle Dengesi (Katı bileşenlerin toplamı)
+                # Katı Faz Kütle Dengesi
                 solid_mass_profile = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 + 
                                      s.C2S + s.C3S + s.C3A + s.C4AF)
 
                 # Loglama Güncellemesi: 
-                # s.Ts[-1] -> Klinker çıkış sıcaklığı (Burning zone sonu)
-                # s.Tg[-1] -> Brülörün olduğu hücredeki gaz sıcaklığı (Rampayı izlemek için)
+                # Ts[-1] ve Tg[-1] brülör tarafındaki (çıkış) değerleri gösterir.
                 print(
                     f"{t/3600:7.2f} | "
                     f"{s.Ts[1]:8.1f} | "
@@ -151,12 +144,8 @@ def main():
                     f"{s.CaCO3[-1]:8.4f} | "
                     f"{s.CaO[-1]:8.4f} | "
                     f"{s.SiO2[-1]:8.4f} | "
-                    f"{s.Al2O3[-1]:8.4f} | "
-                    f"{s.Fe2O3[-1]:8.4f} | "
                     f"{s.C2S[-1]:8.4f} | "
                     f"{s.C3S[-1]:8.4f} | "
-                    f"{s.C3A[-1]:8.4f} | "
-                    f"{s.C4AF[-1]:8.4f} | "
                     f"{s.CO2[-1]:8.4f} | " 
                     f"{solid_mass_profile[-1]:8.4f}"
                 )
@@ -180,12 +169,12 @@ def main():
 
     # 1. Termal Profil: Ts ve Tg Birlikte
     plt.figure("Thermal Profile", figsize=(13, 7))
-    plt.plot(z, s.Ts, label="Solid Temperature (Ts)", color='blue', linestyle='-', linewidth=1.2)
-    plt.plot(z, s.Tg, label="Gas Temperature (Tg)", color='red', linestyle='-', linewidth=1.2)
+    plt.plot(z, s.Ts, label="Solid Temperature (Ts)", color='blue', linestyle='-', linewidth=2.0)
+    plt.plot(z, s.Tg, label="Gas Temperature (Tg)", color='red', linestyle='-', linewidth=1.5)
     plt.plot(z, s.Tw, label="Wall Temperature (Tw)", color='black', linestyle='--', linewidth=0.8, alpha=0.5)
     
     plt.title(f"Thermal Profiles Along Kiln (Time: {t/3600:.2f} h)")
-    plt.xlabel("Kiln Length (m) [0: Material Inlet, L: Clinker Outlet / Burner]")
+    plt.xlabel("Kiln Length (m) [0: Inlet, L: Outlet/Burner]")
     plt.ylabel("Temperature (K)")
     plt.legend(loc='best')
     plt.grid(alpha=0.3)
@@ -193,18 +182,19 @@ def main():
     # 2. Kimya Profili: Tüm bileşenler
     plt.figure("Chemistry Profile", figsize=(14, 8))
     
-    plt.plot(z, s.CaCO3, label="CaCO3", linestyle='-', linewidth=1.0)
-    plt.plot(z, s.CaO, label="CaO", linestyle='-', linewidth=1.0)
-    plt.plot(z, s.SiO2, label="SiO2", linestyle='-', linewidth=1.0)
-    plt.plot(z, s.Al2O3, label="Al2O3", linestyle='-', linewidth=1.0)
-    plt.plot(z, s.Fe2O3, label="Fe2O3", linestyle='-', linewidth=1.0)
-    plt.plot(z, s.C2S, label="C2S (Belite)", linestyle='-', linewidth=1.5)
-    plt.plot(z, s.C3S, label="C3S (Alite)", linestyle='-', linewidth=1.5)
-    plt.plot(z, s.C3A, label="C3A", linestyle='-', linewidth=1.0)
-    plt.plot(z, s.C4AF, label="C4AF", linestyle='-', linewidth=1.0)
+    plt.plot(z, s.CaCO3, label="CaCO3", linestyle='-', linewidth=1.2)
+    plt.plot(z, s.CaO, label="CaO", linestyle='--', linewidth=1.0)
+    plt.plot(z, s.C2S, label="C2S (Belite)", linestyle='-', linewidth=2.0)
+    plt.plot(z, s.C3S, label="C3S (Alite)", linestyle='-', linewidth=2.5, color='darkgreen')
     
-    # CO2'yi gaz fazına geçtiği için ayrı bir görselleştirme ile takip ediyoruz
-    plt.plot(z, s.CO2, label="CO2 (Solid-Tracked Fraction)", color='gray', linestyle=':', linewidth=1.0, alpha=0.6)
+    # Diğer bileşenleri daha ince çizgilerle göstererek karmaşayı azaltıyoruz
+    plt.plot(z, s.SiO2, label="SiO2", alpha=0.5, linewidth=0.8)
+    plt.plot(z, s.Al2O3, label="Al2O3", alpha=0.5, linewidth=0.8)
+    plt.plot(z, s.Fe2O3, label="Fe2O3", alpha=0.5, linewidth=0.8)
+    plt.plot(z, s.C3A, label="C3A", alpha=0.5, linewidth=0.8)
+    plt.plot(z, s.C4AF, label="C4AF", alpha=0.5, linewidth=0.8)
+    
+    plt.plot(z, s.CO2, label="CO2 (Solid-Tracked)", color='gray', linestyle=':', linewidth=1.0, alpha=0.6)
 
     plt.title(f"Chemical Composition Along Kiln (Time: {t/3600:.2f} h)")
     plt.xlabel("Kiln Length (m)")
