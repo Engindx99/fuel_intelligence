@@ -25,7 +25,6 @@ sys.path.append(
 from core.solver import KilnSolver
 from core.transport import TransportModel
 from core.energy import EnergyModel
-from core.kinetics import compute_clinker_kinetics_numba as kinetics
 
 
 # ==============================================================
@@ -53,7 +52,7 @@ def main():
     transport = TransportModel(config)
     energy = EnergyModel(config)
 
-    solver = KilnSolver(config, kinetics, transport, energy)
+    solver = KilnSolver(config, transport, energy)
 
     # ==========================================================
     # INITIAL STATE

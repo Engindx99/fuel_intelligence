@@ -2,7 +2,7 @@ import numpy as np
 from numba import njit
 
 # ============================================================== 
-# NUMBA KERNEL: Fiziksel Limitli ve Kararlı Çekirdek (UPDATED)
+# NUMBA KERNEL: Fiziksel Limitli ve Kararlı Çekirdek (INTEGRATED)
 # ==============================================================
 
 @njit(fastmath=True, cache=True)
@@ -19,6 +19,7 @@ def _physics_step_core(
 
     for _ in range(sub_steps):
         # --- 1. TAŞINIM (ADVECTION) ---
+        # Katı taşınımı: Girişten (0) çıkışa (nodes-1)
         cfl_s = np.minimum(v_s * dt_sub / dz, 0.2)
         for i in range(nodes - 1, 0, -1):
             Ts[i] = (1 - cfl_s) * Ts[i] + cfl_s * Ts[i-1]
@@ -34,8 +35,10 @@ def _physics_step_core(
 
         # Gaz taşınımı: Çıkıştan (nodes-1) girişe (0) - Karşıt Akış
         for i in range(nodes - 1):
-            cfl_g = np.minimum(gas_vel[i] * dt_sub / dz, 0.2)
+            cfl_g = np.minimum(gas_vel[i] * dt_sub / dz, 0.4)
             Tg[i] = (1 - cfl_g) * Tg[i] + cfl_g * Tg[i+1]
+            # CO2 gaz fazında süpürülür
+            CO2[i] = (1 - cfl_g) * CO2[i] + cfl_g * CO2[i+1]
 
         # --- 2. REAKSİYON VE ENERJİ DENGESİ ---
         for i in range(nodes):
@@ -44,20 +47,27 @@ def _physics_step_core(
             inv_rt = 1.0 / (R_gas * T_s_curr + eps)
 
             # --- KİNETİK HESAPLAMALAR ---
+            # 1. Kalsinasyon (r0)
             r0 = 0.0
             if T_s_curr > 850.0 and CaCO3[i] > 1e-5:
                 arg = max(-60.0, -Ea_v[0] * inv_rt)
-                r0 = min(0.005, k0_v[0] * np.exp(arg) * CaCO3[i])
+                r0 = k0_v[0] * np.exp(arg) * CaCO3[i]
+                r0 = min(r0, CaCO3[i] / dt_sub) # Kütle güvenliği
 
+            # 2. Belit Oluşumu (r1)
             r1 = 0.0
-            if T_s_curr > 1000.0:
+            if T_s_curr > 1000.0 and CaO[i] > eps:
                 arg = max(-60.0, -Ea_v[1] * inv_rt)
-                r1 = min(0.002, k0_v[1] * np.exp(arg) * CaO[i] * SiO2[i])
+                # Basitleştirilmiş form: k * CaO * SiO2
+                r1 = k0_v[1] * np.exp(arg) * CaO[i] * SiO2[i]
+                r1 = min(r1, SiO2[i] / dt_sub)
 
+            # 3. Alit Oluşumu (r2)
             r2 = 0.0
-            if T_s_curr > 1300.0:
+            if T_s_curr > 1300.0 and C2S[i] > eps:
                 arg = max(-60.0, -Ea_v[2] * inv_rt)
-                r2 = min(0.001, k0_v[2] * np.exp(arg) * C2S[i] * CaO[i])
+                r2 = k0_v[2] * np.exp(arg) * C2S[i] * CaO[i]
+                r2 = min(r2, C2S[i] / dt_sub)
 
             # --- ISI AKILARI ---
             q_conv = h_conv * (T_g_curr - T_s_curr) * exchange_area
@@ -65,6 +75,7 @@ def _physics_step_core(
             temp_term = T_s_curr**4 - 320.0**4
             q_loss = 5.67e-8 * 0.9 * exchange_area * max(0.0, temp_term) * 0.1
             
+            # Reaksiyon entalpileri (Endotermik +, Ekzotermik -)
             q_rxn = (r0 * enthalpies[0] + r1 * enthalpies[1] + r2 * enthalpies[2]) * m_dot_s_in
 
             # --- TERMAL KÜTLE VE KAYNAKLAR ---
@@ -78,27 +89,31 @@ def _physics_step_core(
             dT_s = ((q_conv - q_rxn - q_loss) / m_cp_s) * dt_sub
             dT_g = ((eff_fuel - q_conv) / m_cp_g) * dt_sub
 
-            lim = 0.5 * dt_sub # Max 0.5K per sub-step
+            lim = 1.0 * dt_sub # Max 1.0K per sub-step
             Ts[i] += max(-lim, min(lim, dT_s))
             Tg[i] += max(-lim * 2, min(lim * 2, dT_g))
 
-            # --- KÜTLE GÜNCELLEME ---
-            r0_dt = min(CaCO3[i], r0 * dt_sub)
+            # --- KÜTLE GÜNCELLEME (Stoikiometrik Korunumlu) ---
+            # Kalsinasyon: CaCO3 -> CaO + CO2
+            r0_dt = r0 * dt_sub
             CaCO3[i] -= r0_dt
-            CaO[i]   += r0_dt * 0.56
-            CO2[i]   += r0_dt * 0.44
+            CaO[i]   += r0_dt * 0.56 
+            CO2[i]   += r0_dt * 0.44 # CO2 burada üretilir
+            CO2[i]   = min(1.0, CO2[i])
 
-            if CaO[i] > eps:
-                dr1 = min(CaO[i]*0.5, r1 * dt_sub)
-                CaO[i]  -= dr1 * 0.5
-                SiO2[i] -= dr1 * 0.35
-                C2S[i]  += dr1
+            # Belit Oluşumu: 2CaO + SiO2 -> C2S
+            if r1 > eps:
+                dr1 = r1 * dt_sub
+                CaO[i]   -= dr1 * 0.65
+                SiO2[i]  -= dr1 * 0.35
+                C2S[i]   += dr1
                 
-                if C2S[i] > eps:
-                    dr2 = min(C2S[i], r2 * dt_sub)
-                    C2S[i] -= dr2
-                    CaO[i] -= dr2 * 0.5
-                    C3S[i] += dr2
+            # Alit Oluşumu: C2S + CaO -> C3S
+            if r2 > eps:
+                dr2 = r2 * dt_sub
+                C2S[i] -= dr2 * 0.75
+                CaO[i] -= dr2 * 0.25
+                C3S[i] += dr2
 
     return Ts, Tg, CaCO3, CaO, SiO2, C2S, C3S, CO2
 
@@ -142,13 +157,14 @@ class KilnState:
 
         self.Ts.fill(300.0)
         self.Tg.fill(300.0)
+        self.CO2.fill(0.0)
 
 # ============================================================== 
 # SOLVER
 # ==============================================================
 
 class KilnSolver:
-    def __init__(self, config, kinetics_fn, transport, energy):
+    def __init__(self, config, transport, energy):
         self.cfg = config
         self.tra = transport
         self.en = energy
@@ -172,16 +188,11 @@ class KilnSolver:
         dist = self.length - x
         flame = np.exp(-dist / L_flame)
         
-        # Üstel Rampa Katsayısı [0.0 - 1.0]
-        # alpha(t) = 1 - exp(-t/tau)
         ramp_alpha = 1.0 - np.exp(-current_time / 3e4)
-        
         lhv = float(self.cfg["gas"]["lhv_fuel"])
         
-        # Yakıt enerji girdisi rampa ile çarpılır
         total_energy = fuel_rate * lhv * ramp_alpha
-        
-        energy_dist = (flame / np.sum(flame)) * total_energy
+        energy_dist = (flame / (np.sum(flame) + 1e-9)) * total_energy
         return energy_dist, ramp_alpha
 
     def solve_step(self, dt, fuel_rate, feed_rate, kiln_rpm, fan_rate):
@@ -189,28 +200,30 @@ class KilnSolver:
         k = self.cfg["kinetics"]
         self.elapsed_time += dt
 
+        # Kinetik parametrelerin vektörel hazırlığı
         k0_v = np.array([k["k0"], k["k0_c2s"], k["k0_c3s"]], dtype=np.float64)
         Ea_v = np.array([k["Ea"], k["Ea_c2s"], k["Ea_c3s"]], dtype=np.float64)
+        # Kalsinasyon (+), C2S (-), C3S (+) entalpileri
         enthalpies = np.array([1780e3, -590e3, 500e3], dtype=np.float64)
 
         d = self._extract_val(self.cfg["kiln"]["diameter"])
         A = np.pi * (d/2)**2
         fill = self.tra.get_dynamic_filling_degree(kiln_rpm, feed_rate)
         
-        # Alev enerjisi ve rampa katsayısını hesapla
         fuel_profile, alpha = self._calculate_exponential_flame(fuel_rate, self.elapsed_time)
 
-        # Sınır Koşulu Güncelleme: 
-        # Gaz giriş sıcaklığı (alev ucu) rampa ile 300K'den hedefe yükselir
+        # Sınır Koşulları
         s.Tg[-1] = 300.0 + (self.target_temp_inlet - 300.0) * alpha
         s.Ts[0] = 300.0
+        s.CO2[-1] = 0.0 # Brülör tarafında temiz hava girişi
 
+        # Fiziksel Çekirdek Çağrısı
         res = _physics_step_core(
             s.Ts, s.Tg, s.CaCO3, s.CaO, s.SiO2, s.C2S, s.C3S,
             s.Al2O3, s.Fe2O3, s.C3A, s.C4AF, s.CO2,
             dt, self.dz,
             self.tra.calculate_solid_velocity(kiln_rpm),
-            np.full(self.nodes, 6.5 + fan_rate/200.0),
+            np.full(self.nodes, 7.5 + fan_rate/150.0),
             (feed_rate*1000.0)/3600.0,
             A*fill, A*(1.0-fill),
             self._extract_val(self.cfg["material"]["rho_s"]),
@@ -222,6 +235,8 @@ class KilnSolver:
             fuel_profile
         )
 
+        # State Güncelleme
         (s.Ts, s.Tg, s.CaCO3, s.CaO, s.SiO2, s.C2S, s.C3S, s.CO2) = res
         s.snapshot(self.elapsed_time)
+        
         return dt
