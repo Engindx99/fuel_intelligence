@@ -20,56 +20,66 @@ material:
 
 kinetics:
   R: 8.314
-  
+
+  # ==========================================================
+  # IMPORTANT NOTE:
+  # These parameters are only meaningful if solver uses
+  # SIGMOID-BASED TRANSITION KINETICS (not step thresholds)
+  # ==========================================================
+
   # 1. CALCINATION (CaCO3 -> CaO + CO2)
-  # Center: 1173K (~900°C)
   k0: 1.0e5
   Ea: 2.28e5
-  T_center_calc: 1173.0 
+  T_center_calc: 1173.0
   sharpness_calc: 0.04
 
-  # 2. BELITE (C2S) - 2CaO + SiO2 -> C2S
-  # Center: 1220K (~947°C) - Kalsinasyon devam ederken başlar
-  k0_c2s: 0.74e5
+  # 2. BELITE (C2S formation)
+  k0_c2s: 1.94e5
   Ea_c2s: 2.3e5
   T_center_c2s: 1220.0
   sharpness_c2s: 0.03
 
-  # 3. ALITE (C3S) - CaO + C2S -> C3S
-  # Center: 1450K - Sıvı fazın oluşumuyla hızlanır
-  k0_c3s: 1.8e6
+  # 3. ALITE (C3S formation)
+  k0_c3s: 1.8e5
   Ea_c3s: 2.4e5
-  T_center_c3s: 1450.0 # solver.py'deki 1450 değeriyle senkronize
+  T_center_c3s: 1450.0
   sharpness_c3s: 0.05
 
-  # 4. AUX PHASES (C3A & C4AF) - Liquid Phase Transition
-  # Center: 1350K (~1077°C)
+  # 4. AUX PHASES (liquid phase controlled)
   pre_factor_c3a: 8.0e-4
   pre_factor_c4af: 5.0e-4
   T_center_liquid: 1350.0
   sharpness_liquid: 0.03
 
-  # Numerical Safety
+  # ==========================================================
+  # NUMERICAL SAFETY (IMPORTANT FOR NUMBA STABILITY)
+  # ==========================================================
   arrhenius_clip_max: 45.0
   min_species_floor: 1e-12
 
 gas:
-  fuel_rate: 11.72 # ton/h       
+  fuel_rate: 11.72 # ton/h
   fan_rate: 800.0
   nominal_flow: 52.0
-  temp_inlet: 300.0    
+  temp_inlet: 2300.0
   cp_g: 1280.0
-  h_gs: 140.0        
+  h_gs: 140.0
   emissivity_g: 0.55
   lhv_fuel: 3.2e7
 
 raw_meal_composition:
-  CaCO3: 0.730           
-  SiO2: 0.210            
-  Al2O3: 0.040           
-  Fe2O3: 0.020           
+  CaCO3: 0.730
+  SiO2: 0.210
+  Al2O3: 0.040
+  Fe2O3: 0.020
 
 solver:
-  dt: 0.05               
-  simulation_hours: 30
+  dt: 0.05
+  simulation_hours: 36
   tolerance: 1e-4
+
+  # ==========================================================
+  # OPTIONAL (RECOMMENDED FOR STABILITY)
+  # ==========================================================
+  substeps: 50
+  cfl_limit: 0.01
