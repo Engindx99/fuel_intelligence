@@ -3,6 +3,7 @@ import time
 import numpy as np
 import sys
 import os
+import logging
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -25,6 +26,58 @@ sys.path.append(
 from core.solver import KilnSolver
 from core.transport import TransportModel
 from core.energy import EnergyModel
+
+# ==============================================================
+# LOGGER
+# ==============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(message)s"
+)
+
+logger = logging.getLogger("Kiln")
+
+# ==============================================================
+# CLOSURE
+# ==============================================================
+
+class ClosureTracker:
+
+    def __init__(self):
+        self.initial_mass = None
+        self.initial_energy = None
+
+    def total_mass(self, s):
+
+        return np.sum(
+            s.CaCO3 + s.CaO + s.SiO2 +
+            s.Al2O3 + s.Fe2O3 +
+            s.C2S + s.C3S +
+            s.C3A + s.C4AF +
+            s.CO2
+        )
+
+    def total_energy(self, s):
+
+        return np.sum(s.Tg) + np.sum(s.Ts)
+
+    def initialize(self, s):
+
+        self.initial_mass = self.total_mass(s)
+        self.initial_energy = self.total_energy(s)
+
+    def check(self, s):
+
+        mass_error = (
+            self.total_mass(s) - self.initial_mass
+        ) / max(self.initial_mass, 1e-12)
+
+        energy_error = (
+            self.total_energy(s) - self.initial_energy
+        ) / max(self.initial_energy, 1e-12)
+
+        return mass_error, energy_error
 
 
 # ==============================================================
@@ -54,6 +107,8 @@ def main():
 
     solver = KilnSolver(config, transport, energy)
 
+    closure = ClosureTracker()
+
     # ==========================================================
     # INITIAL STATE
     # ==========================================================
@@ -72,12 +127,14 @@ def main():
     solver.state.Fe2O3[:] = raw_meal["Fe2O3"]
 
     # Termal Gradyan Kurulumu:
-    gas_inlet_temp = float(config["gas"].get("temp_inlet", 2200.0)) 
-    
-    # Katı sıcaklığı fırın genelinde 300K, gaz sıcaklığı ise sistemin 
+    gas_inlet_temp = float(config["gas"].get("temp_inlet", 2200.0))
+
+    # Katı sıcaklığı fırın genelinde 300K, gaz sıcaklığı ise sistemin
     # ısınmasını hızlandırmak için 800K başlangıç değerine atanır.
     solver.state.Ts.fill(300.0)
-    solver.state.Tg.fill(800.0) 
+    solver.state.Tg.fill(800.0)
+
+    closure.initialize(solver.state)
 
     # ==========================================================
     # SIMULATION PARAMETERS
@@ -98,11 +155,11 @@ def main():
     print(f"Nodes               : {solver.state.N}")
     print(f"Time Step           : {dt:.3f} s")
 
-    # Başlık kısmında Ts[1] yerine Ts_Out (fırın sonu) izlenmesi fiziksel tutarlılık için daha doğrudur.
     print(
         f"{'Time':>7} | {'Ts_Out':>8} | {'Tg_Burn':>8} | "
         f"{'CaCO3_O':>8} | {'CaO_O':>8} | {'SiO2_O':>8} | "
-        f"{'C2S_O':>8} | {'C3S_O':>8} | {'CO2_O':>8} | {'Mass_O':>8}"
+        f"{'C2S_O':>8} | {'C3S_O':>8} | {'CO2_O':>8} | "
+        f"{'Mass_O':>8} | {'M_ERR':>10} | {'E_ERR':>10}"
     )
 
     start_wall_time = time.time()
@@ -122,14 +179,17 @@ def main():
     history_C3S = []
     history_CO2 = []
 
+    history_mass_error = []
+    history_energy_error = []
+
     # ==========================================================
     # MAIN LOOP
     # ==============================================================
 
     try:
         while t < t_final:
-            
-            # Sınır koşullarını her adımda zorla (Besleme tarafı 300K, Yakıcı tarafı Flame Temp)
+
+            # Sınır koşullarını her adımda zorla
             solver.state.Tg[-1] = gas_inlet_temp
             solver.state.Ts[0] = 300.0
 
@@ -144,10 +204,11 @@ def main():
             t += actual_dt
             s = solver.state
 
-            # Loglama ve History Kaydı (Her 10 dakikada bir)
+            mass_error, energy_error = closure.check(s)
+
+            # Loglama ve History Kaydı
             if (t - last_log) >= 600.0:
-                
-                # History listelerini güncelle
+
                 history_time.append(t)
                 history_Ts.append(s.Ts.copy())
                 history_Tg.append(s.Tg.copy())
@@ -158,10 +219,16 @@ def main():
                 history_C3S.append(s.C3S.copy())
                 history_CO2.append(s.CO2.copy())
 
-                solid_mass_profile = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 +
-                                     s.C2S + s.C3S + s.C3A + s.C4AF)
+                history_mass_error.append(mass_error)
+                history_energy_error.append(energy_error)
 
-                # Terminal logunda fırının ÇIKIŞ (index -1) değerlerini izliyoruz.
+                solid_mass_profile = (
+                    s.CaCO3 + s.CaO + s.SiO2 +
+                    s.Al2O3 + s.Fe2O3 +
+                    s.C2S + s.C3S +
+                    s.C3A + s.C4AF
+                )
+
                 print(
                     f"{t/3600:7.2f} | "
                     f"{s.Ts[-1]:8.1f} | "
@@ -173,6 +240,8 @@ def main():
                     f"{s.C3S[-1]:8.4f} | "
                     f"{s.CO2[-1]:8.4f} | "
                     f"{solid_mass_profile[-1]:8.4f}"
+                    f" | {mass_error:10.3e}"
+                    f" | {energy_error:10.3e}"
                 )
 
                 last_log = t
@@ -189,8 +258,8 @@ def main():
     s = solver.state
     kiln_length = float(config["kiln"]["length"])
     z = np.linspace(0, kiln_length, s.N)
-    
-    lw = 0.8 # Çizgi kalınlığı
+
+    lw = 0.8
 
     plt.style.use("seaborn-v0_8-muted")
 
@@ -199,6 +268,7 @@ def main():
     # ==============================================================
 
     plt.figure("Thermal Profile", figsize=(13, 7))
+
     plt.plot(z, history_Ts[-1], label="Solid Temperature (Ts)", color='blue', lw=lw)
     plt.plot(z, history_Tg[-1], label="Gas Temperature (Tg)", color='red', lw=lw)
     plt.plot(z, s.Tw, label="Wall Temperature (Tw)", linestyle='--', alpha=0.5, color='black', lw=lw)
@@ -243,8 +313,8 @@ def main():
     outlet_Ts = [x[-1] for x in history_Ts]
     outlet_Tg = [x[-1] for x in history_Tg]
 
-    plt.plot(np.array(history_time)/3600, outlet_Ts, label="Ts outlet (Burner side)", lw=lw)
-    plt.plot(np.array(history_time)/3600, outlet_Tg, label="Tg outlet (Burner side)", lw=lw)
+    plt.plot(np.array(history_time)/3600, outlet_Ts, label="Ts outlet", lw=lw)
+    plt.plot(np.array(history_time)/3600, outlet_Tg, label="Tg outlet", lw=lw)
 
     plt.title("Temperature Evolution at Burner Side over Time")
     plt.xlabel("Time (h)")
