@@ -188,7 +188,7 @@ class KilnSolver:
         dist = self.length - x
         flame = np.exp(-dist / L_flame)
         
-        ramp_alpha = 1.0 - np.exp(-current_time / 3e4)
+        ramp_alpha = 1.0 - np.exp(-current_time / 5e4)
         lhv = float(self.cfg["gas"]["lhv_fuel"])
         
         total_energy = fuel_rate * lhv * ramp_alpha
