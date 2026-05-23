@@ -73,7 +73,7 @@ def _physics_step_core(
             q_conv = h_conv * (T_g_curr - T_s_curr) * exchange_area
             
             temp_term = T_s_curr**4 - 320.0**4
-            q_loss = 5.67e-8 * 0.9 * exchange_area * max(0.0, temp_term) * 0.1
+            q_loss = 5.67e-8 * 0.9 * exchange_area * max(0.0, temp_term) * 0.07
             
             # Reaksiyon entalpileri (Endotermik +, Ekzotermik -)
             q_rxn = (r0 * enthalpies[0] + r1 * enthalpies[1] + r2 * enthalpies[2]) * m_dot_s_in

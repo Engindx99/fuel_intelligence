@@ -102,7 +102,7 @@ def main():
     print(
         f"{'Time':>7} | {'Ts_Out':>8} | {'Tg_Burn':>8} | "
         f"{'CaCO3_O':>8} | {'CaO_O':>8} | {'SiO2_O':>8} | "
-        f"{'C2S_O':>8} | {'C3S_O':>8} | {'CO2_O':>8} | {'Mass_O':>8}"
+        f"{'C2S_O':>8} | {'C3S_O':>8} | {'CO2_O':>8}"
     )
 
     start_wall_time = time.time()
@@ -158,8 +158,6 @@ def main():
                 history_C3S.append(s.C3S.copy())
                 history_CO2.append(s.CO2.copy())
 
-                solid_mass_profile = (s.CaCO3 + s.CaO + s.SiO2 + s.Al2O3 + s.Fe2O3 +
-                                     s.C2S + s.C3S + s.C3A + s.C4AF)
 
                 # Terminal logunda fırının ÇIKIŞ (index -1) değerlerini izliyoruz.
                 print(
@@ -172,7 +170,6 @@ def main():
                     f"{s.C2S[-1]:8.4f} | "
                     f"{s.C3S[-1]:8.4f} | "
                     f"{s.CO2[-1]:8.4f} | "
-                    f"{solid_mass_profile[-1]:8.4f}"
                 )
 
                 last_log = t

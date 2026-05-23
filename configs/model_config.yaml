@@ -75,7 +75,7 @@ raw_meal_composition:
 
 solver:
   dt: 0.05
-  simulation_hours: 36
+  simulation_hours: 48
   tolerance: 1e-4
 
   # ==========================================================
