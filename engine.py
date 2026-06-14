@@ -29,7 +29,7 @@ N = 434
 
 df = pd.DataFrame(0.0, index=np.arange(N), columns=columns)
 
-dt = 1/6
+dt = 0.05
 df["t"] = np.arange(N) * dt
 
 # 3. REGIME DEFINITION (OUTSIDE LOOP - FIXED ORDER)
@@ -69,7 +69,7 @@ def step(x, t, regime):
     # G: Kiln_solid_out
     # -------------------------
     if t == 0:
-        x_next["Kiln_solid_out"] = 0.0
+        x_next["Kiln_solid_out"] = 1e-6
     else:
         x_next["Kiln_solid_out"] = (
             0.15 * (x_next["Feed_rate"] - x_next["CO2"])
@@ -92,7 +92,7 @@ def step(x, t, regime):
     # I: Clinker_output
     # -------------------------
     if t == 0:
-        x_next["Clinker_output"] = 0.0
+        x_next["Clinker_output"] = 1e-6
     else:
         x_next["Clinker_output"] = 0.9 * x_next["Kiln_solid_out"]
 
@@ -352,12 +352,12 @@ def step(x, t, regime):
             * np.exp(-160000 / (8.314 * (x["Ts_calcination"] + 273.15)))
         )
 
-        x_next["CaCO3"] = x["CaCO3"] * np.exp(-k * (1/6))
+        x_next["CaCO3"] = x["CaCO3"] * np.exp(-k *dt)
     # =========================
     # AC: CaO (ton/h)
     # =========================
     if t == 0:
-        x_next["CaO"] = 0.0
+        x_next["CaO"] = 1e-6
     else:
 
         # previous CaCO3 (AB3 in Excel logic)
@@ -378,7 +378,7 @@ def step(x, t, regime):
     # AD: CO2 (ton/h)
     # =========================
     if t == 0:
-        x_next["CO2"] = 0.0
+        x_next["CO2"] = 1e-6
     else:
         x_next["CO2"] = (
             80.0
@@ -430,14 +430,14 @@ def step(x, t, regime):
     # AI: C3A
     # -------------------------
     if t == 0:
-        x_next["C3A"] = 0.0
+        x_next["C3A"] = 1e-6
     else:
         x_next["C3A"] = x["C3A"] + x_next["Al2O3"]
     # -------------------------
     # AJ: C4AF
     # -------------------------
     if t == 0:
-        x_next["C4AF"] = 0.0
+        x_next["C4AF"] = 1e-6
     else:
         x_next["C4AF"] = (
             x["C4AF"]
@@ -447,7 +447,7 @@ def step(x, t, regime):
     # AK: C2S
     # -------------------------
     if t == 0:
-        x_next["C2S"] = 0.0
+        x_next["C2S"] = 1e-6
     else:
         x_next["C2S"] = max(
             0.0,
@@ -459,7 +459,7 @@ def step(x, t, regime):
     # AL: C3S
     # -------------------------
     if t == 0:
-        x_next["C3S"] = 0.0
+        x_next["C3S"] = 1e-6
     else:
         x_next["C3S"] = (
             x["C3S"]
@@ -469,11 +469,11 @@ def step(x, t, regime):
     # AM: dC2S
     # -------------------------
     if t == 0:
-        x_next["dC2S"] = 0.0
+        x_next["dC2S"] = 1e-6
     else:
 
-        if x_next["SiO2"] <= 0:
-            x_next["dC2S"] = 0.0
+        if x_next["SiO2"] <= 1e-6:
+            x_next["dC2S"] = 1e-6
         else:
 
             arrhenius = np.exp(
@@ -482,7 +482,7 @@ def step(x, t, regime):
 
             rate_term = 50000000 * arrhenius
 
-            kinetic = 1 - np.exp(-rate_term * (1/6))
+            kinetic = 1 - np.exp(-rate_term *dt)
 
             limiting = min(
                 x_next["SiO2"] - x_next["dC3S"],
@@ -497,12 +497,12 @@ def step(x, t, regime):
     # AN: dC3S
     # -------------------------
     if t == 0:
-        x_next["dC3S"] = 0.0
+        x_next["dC3S"] = 1e-6
     else:
 
         # AK = C2S
-        if x_next["C2S"] <= 0:
-            x_next["dC3S"] = 0.0
+        if x_next["C2S"] <= 1e-6:
+            x_next["dC3S"] = 1e-6
         else:
 
             arrhenius = np.exp(
@@ -511,7 +511,7 @@ def step(x, t, regime):
 
             rate_term = 228000000 * arrhenius
 
-            kinetic = 1 - np.exp(-rate_term * (1/6))
+            kinetic = 1 - np.exp(-rate_term *dt)
 
             limiting = min(
                 x_next["C2S"],
@@ -526,12 +526,12 @@ def step(x, t, regime):
     # AO: dC3A
     # -------------------------
     if t == 0:
-        x_next["dC3A"] = 0.0
+        x_next["dC3A"] = 1e-6
     else:
 
         # AF = Al2O3
-        if x_next["Al2O3"] <= 0:
-            x_next["dC3A"] = 0.0
+        if x_next["Al2O3"] <= 1e-6:
+            x_next["dC3A"] = 1e-6
         else:
 
             arrhenius = np.exp(
@@ -540,7 +540,7 @@ def step(x, t, regime):
 
             rate_term = 100000 * arrhenius
 
-            kinetic = 1 - np.exp(-rate_term * (1/6))
+            kinetic = 1 - np.exp(-rate_term *dt)
 
             limiting = min(
                 x_next["Al2O3"],
@@ -555,12 +555,12 @@ def step(x, t, regime):
     # AP: dC4AF
     # -------------------------
     if t == 0:
-        x_next["dC4AF"] = 0.0
+        x_next["dC4AF"] = 1e-6
     else:
 
         # AF = Al2O3, AG = Fe2O3
-        if x_next["Al2O3"] <= 0 or x_next["Fe2O3"] <= 0:
-            x_next["dC4AF"] = 0.0
+        if x_next["Al2O3"] <= 1e-6 or x_next["Fe2O3"] <= 1e-6:
+            x_next["dC4AF"] = 1e-6
         else:
 
             arrhenius = np.exp(
@@ -569,7 +569,7 @@ def step(x, t, regime):
 
             rate_term = 200000 * arrhenius
 
-            kinetic = 1 - np.exp(-rate_term * (1/6))
+            kinetic = 1 - np.exp(-rate_term *dt)
 
             if x_next["CaO"] > 0:
                 ca_limit = (x_next["CaO"]
@@ -593,7 +593,7 @@ def step(x, t, regime):
     # AQ: dCaO_calcination
     # -------------------------
     if t == 0:
-        x_next["dCaO_calcination"] = 0.0
+        x_next["dCaO_calcination"] = 1e-6
     else:
 
         # AB = CaCO3 feed
@@ -605,7 +605,7 @@ def step(x, t, regime):
 
         rate_term = 100000000 * arrhenius
 
-        kinetic = 1 - np.exp(-rate_term * (1/6))
+        kinetic = 1 - np.exp(-rate_term *dt)
 
         limiting = min(
             ab,
@@ -620,7 +620,7 @@ def step(x, t, regime):
     # AR: Mass_Balance_Error
     # -------------------------
     if t == 0:
-        x_next["Mass_Balance_Error"] = 0.0
+        x_next["Mass_Balance_Error"] = 1e-6
     else:
 
         inputs = (
@@ -686,7 +686,7 @@ def step(x, t, regime):
     import math
 
     if t == 0:
-        x_next["Residence"] = 0.0
+        x_next["Residence"] = 1e-6
     else:
 
         kiln_rpm = max(x_next["kiln_rpm"], 1e-6)
@@ -769,9 +769,8 @@ def step(x, t, regime):
     # BD: dTg_burning
     # -------------------------
     if t == 0:
-        x_next["dTg_burning"] = 0.0
+        x_next["dTg_burning"] = 1e-6
     else:
-        dt = 1/6  # 10 min time step
 
         x_next["dTg_burning"] = (
             x_next["Tg_burning"]
@@ -782,9 +781,8 @@ def step(x, t, regime):
     # BE: dFuel_rate
     # -------------------------
     if t == 0:
-        x_next["dFuel_rate"] = 0.0
+        x_next["dFuel_rate"] = 1e-6
     else:
-        dt = 1/6
 
         x_next["dFuel_rate"] = (
             x_next["Fuel_rate"]
@@ -842,62 +840,61 @@ def step(x, t, regime):
         x_next["SCALE"] = max(0.0, scale)                                                                                                             
     return x_next
 
+# 1. GLOBAL KONFİGÜRASYON
+reporting_dt = 1/6  # 10 dakika (saat cinsinden)
+STEPS_PER_REPORT = int(reporting_dt / dt) 
 
-# 5. MAIN SIMULATION LOOP
+REGIME_FEED_MULT = {
+    "R1_HEATING_STABILIZATION": 0.6,
+    "R2_EARLY_CALCINATION": 0.75,
+    "R3_ACTIVE_CALCINATION": 0.85,
+    "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
+    "R5_EARLY_CLINKERIZATION": 0.97,
+    "R6_STEADY_CLINKERIZATION": 1.0,
+    "R7_FUEL_SWITCH_TRANSIENT": 1.03,
+    "R8_RESTABILIZATION": 0.9,
+}
 
-dt = 1/6
-df.loc[0, "Feed_rate"] = 35.92  # INITIAL CONDITION
+# 3. MAIN SIMULATION LOOP
+sim_time = 0.0  # Fiziksel zaman başlangıcı (saat)
 
 for t in range(N - 1):
-
     x_t = df.iloc[t].to_dict()
-    time = t * dt
+    
+    # Zaman yönetimi: t indisi değil, sim_time zamanı raporlar
+    x_t["t"] = sim_time 
     regime = x_t["Regime"]
 
-    # INPUT LAYER (D & E)
-
+    # --- INPUT LAYER ---
+    # Not: Bazı girişler zamana (t indis) bağlıydı, fiziksel denge için 'sim_time' bazlı 
+    # ölçekleme yapmak daha doğru olabilir, ancak mevcut formülleri korudum.
     D = 0.03 + (0.1 - 0.03) * (1 - np.exp(-t / 80))
     E = 0.07 + (0.14 - 0.07) * (1 - np.exp(-t / 100))
-
     x_t["Petcoke"] = D
     x_t["Alternative_Fuel"] = E
     x_t["Lignite_Coal"] = max(0.0, 1.0 - D - E)
-
-    # INPUT LAYER (F: Feed_rate)
-
-    REGIME_FEED_MULT = {
-        "R1_HEATING_STABILIZATION": 0.5,
-        "R2_EARLY_CALCINATION": 0.65,
-        "R3_ACTIVE_CALCINATION": 0.85,
-        "R4_TRANSITION_TO_CLINKERIZATION": 0.9,
-        "R5_EARLY_CLINKERIZATION": 0.95,
-        "R6_STEADY_CLINKERIZATION": 1.0,
-        "R7_FUEL_SWITCH_TRANSIENT": 1.0,
-        "R8_RESTABILIZATION": 0.95,
-    }
 
     base_feed = (
         132 if t >= 72 else
         72 + 60 * ((1 / (1 + np.exp(-0.065 * (t - 36)))) - 0.09) / 0.82
     )
+    x_t["Feed_rate"] = base_feed * REGIME_FEED_MULT.get(regime, 1.0)
 
-    x_t["Feed_rate"] = base_feed * REGIME_FEED_MULT[regime]
-
-    # -------------------------
-    # STATE UPDATE
-    # -------------------------
-    x_next = step(x_t, time, regime)
-
-    # -------------------------
-    # SAFETY: full schema alignment
-    # -------------------------
-    x_next = {col: x_next.get(col, 0.0) for col in df.columns}
+    # --- STATE UPDATE (SUB-STEPPING) ---
+    x_current = x_t.copy()
     
-    df.iloc[t + 1, 1:] = pd.Series(x_next).reindex(df.columns[1:]).values
+    for sub in range(STEPS_PER_REPORT):
+        step_time = sim_time + (sub * dt)
+        x_current = step(x_current, step_time, regime)
 
-# 6. SAVE TO CSV (ROOT)
+    # DataFrame'e fiziksel zamanı da içeren güncel veriyi yaz
+    x_current["t"] = sim_time + reporting_dt
+    df.iloc[t + 1] = pd.Series(x_current)
+    
+    # Zamanı raporlama periyodu kadar ilerlet
+    sim_time += reporting_dt
+
+# 6. SAVE TO CSV
 output_path = "kiln_simulation_output.csv"
-
 df.to_csv(output_path, index=False)
-
-print(f"Saved: {output_path}")
+print(f"Simülasyon başarıyla tamamlandı: {output_path}")
