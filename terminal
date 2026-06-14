@@ -1,1 +1,1 @@
-python -m simulation.run_simulation
+python kiln.py
