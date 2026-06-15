@@ -73,6 +73,31 @@ def step(x, t, regime):
     )
     
     # -------------------------
+    # Fuel_rate (ton/h)
+    # -------------------------
+    if t == 0:
+        x["Fuel_rate"] = 2.5
+    else:
+
+        REGIME_FUEL_MULT = {
+            "R1_HEATING_STABILIZATION": 0.6,
+            "R2_EARLY_CALCINATION": 0.75,
+            "R3_ACTIVE_CALCINATION": 0.85,
+            "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
+            "R5_EARLY_CLINKERIZATION": 0.97,
+            "R6_STEADY_CLINKERIZATION": 1.0,
+            "R7_FUEL_SWITCH_TRANSIENT": 1.03,
+            "R8_RESTABILIZATION": 0.9,
+        }
+
+        k = REGIME_FUEL_MULT[regime]
+
+        x_next["Fuel_rate"] = (
+            x["Fuel_rate"]
+            + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * t))
+        ) * k
+    
+    # -------------------------
     # O2 (%)
     # -------------------------
     if t == 0:
@@ -106,31 +131,6 @@ def step(x, t, regime):
     )
     
     # -------------------------
-    # Fuel_rate (ton/h)
-    # -------------------------
-    if t == 0:
-        x["Fuel_rate"] = 2.5
-    else:
-
-        REGIME_FUEL_MULT = {
-            "R1_HEATING_STABILIZATION": 0.6,
-            "R2_EARLY_CALCINATION": 0.75,
-            "R3_ACTIVE_CALCINATION": 0.85,
-            "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
-            "R5_EARLY_CLINKERIZATION": 0.97,
-            "R6_STEADY_CLINKERIZATION": 1.0,
-            "R7_FUEL_SWITCH_TRANSIENT": 1.03,
-            "R8_RESTABILIZATION": 0.9,
-        }
-
-        k = REGIME_FUEL_MULT[regime]
-
-        x_next["Fuel_rate"] = (
-            x["Fuel_rate"]
-            + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * t))
-        ) * k
-    
-    # -------------------------
     # dFuel_rate
     # -------------------------
     if t == 0:
@@ -146,21 +146,36 @@ def step(x, t, regime):
     # Feed_rate
     # -------------------------
         
-        feed_term = (
-            x_next["Fuel_rate"]
-            * 0.8
-            * (1 - np.exp(-0.01 * t))
+    if t >= 72:
+        base_feed = 132
+    else:
+        base_feed = (
+            72
+            + 60
+            * (
+                (1 / (1 + np.exp(-0.065 * (t - 36))))
+                - 0.09
+            )
+            / 0.82
         )
 
-        growth = (
-            x_next["Fuel_rate"]
-            + (6 - x_next["Fuel_rate"]) * (1 - np.exp(-0.00041 * t))
-        )
+    REGIME_FEED_MULT = {
+        "R1_HEATING_STABILIZATION": 0.5,
+        "R2_EARLY_CALCINATION": 0.65,
+        "R3_ACTIVE_CALCINATION": 0.85,
+        "R4_TRANSITION_TO_CLINKERIZATION": 0.9,
+        "R5_EARLY_CLINKERIZATION": 0.95,
+        "R6_STEADY_CLINKERIZATION": 1.0,
+        "R7_FUEL_SWITCH_TRANSIENT": 1.0,
+        "R8_RESTABILIZATION": 0.95,
+    }
 
-        x_next["kiln_rpm"] = (
-            0.1
-            + growth * coeff * feed_term
-        )
+    feed_rate = (
+        base_feed
+        * REGIME_FEED_MULT.get(regime, 1.0)
+    )
+
+    x_next["Feed_rate"] = feed_rate
         
     # -------------------------
     # Air_flow (EXP RAMP)
@@ -687,6 +702,16 @@ def step(x, t, regime):
         x_next["Clinker_output"] = 1e-6
     else:
         x_next["Clinker_output"] = 0.9 * x_next["Kiln_solid_out"]
+        
+    # -------------------------
+    # Clinker_yield
+    # -------------------------
+    feed_safe = max(x_next["Feed_rate"], 1e-6)
+
+    x_next["Clinker_yield"] = (
+        x_next["Clinker_output"]
+        / feed_safe
+    )    
 
     # -------------------------
     # H: Material_acc
@@ -731,18 +756,30 @@ def step(x, t, regime):
         x_next["kiln_rpm"] = 0.1
     else:
 
-        REGIME_RPM_COEFF = {
+        coeff = {
             "R1_HEATING_STABILIZATION": 0.55,
-            "R2_EARLY_CALCINATION": 0.7,
-            "R3_ACTIVE_CALCINATION": 0.8,
-            "R4_TRANSITION_TO_CLINKERIZATION": 0.9,
+            "R2_EARLY_CALCINATION": 0.70,
+            "R3_ACTIVE_CALCINATION": 0.80,
+            "R4_TRANSITION_TO_CLINKERIZATION": 0.90,
             "R5_EARLY_CLINKERIZATION": 0.95,
-            "R6_STEADY_CLINKERIZATION": 1.0,
+            "R6_STEADY_CLINKERIZATION": 1.00,
             "R7_FUEL_SWITCH_TRANSIENT": 1.05,
             "R8_RESTABILIZATION": 0.85,
-        }
+        }.get(regime, 1.0)
 
-        coeff = REGIME_RPM_COEFF[regime]
+        coeff *= (1 - np.exp(-0.02 * t))
+
+        x_next["kiln_rpm"] = (
+            0.1
+            + (
+                x_next["Fuel_rate"]
+                + (6 - x_next["Fuel_rate"])
+                * (1 - np.exp(-0.00041 * t))
+                * coeff
+            )
+            * 0.8
+            * (1 - np.exp(-0.01 * t))
+        )
 
 
     # -------------------------
@@ -768,14 +805,7 @@ def step(x, t, regime):
             * (feed / 120) ** (-0.6)
         )
 
-    # -------------------------
-    # Q_out (kJ/kg)
-    # -------------------------
-    x_next["Q_out"] = (
-        x_next["Q_acc"]
-        + x_next["Q_loss"]
-        + x_next["Q_reaction"]
-    )
+    
     # -------------------------
     # Q_acc (kJ/kg)
     # -------------------------
@@ -794,6 +824,7 @@ def step(x, t, regime):
             - 25**4
         )
     )
+    
     # -------------------------
     # Q_reaction
     # -------------------------
@@ -802,6 +833,19 @@ def step(x, t, regime):
         * (1 - x_next["Clinker_yield"])
         * 3.2
     )
+    
+    # -------------------------
+    # Q_out (kJ/kg)
+    # -------------------------
+    x_next["Q_out"] = (
+        x_next["Q_acc"]
+        + x_next["Q_loss"]
+        + x_next["Q_reaction"]
+    )
+
+    
+
+
     # -------------------------
     # Q_gas
     # -------------------------
@@ -817,15 +861,7 @@ def step(x, t, regime):
         x_next["Clinker_output"]
         * 1800
     )
-    # -------------------------
-    # Clinker_yield
-    # -------------------------
-    feed_safe = max(x_next["Feed_rate"], 1e-6)
 
-    x_next["Clinker_yield"] = (
-        x_next["Clinker_output"]
-        / feed_safe
-    )
 
     # -------------------------
     # Normalized_Energy_Index
