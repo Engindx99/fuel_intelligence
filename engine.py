@@ -21,8 +21,7 @@ columns = [
     "Q_in","Q_out","Q_acc","Q_loss","Q_reaction","Q_gas","Q_clinker",
     "Clinker_yield",
     "dTg_burning","dFuel_rate",
-    "Normalized_Energy_Index","Global_Energy_Closure","Energy_error",
-    "SCALE"
+    "Normalized_Energy_Index","Global_Energy_Closure","Energy_error"
 ]
 
 # 2. INIT DATA
@@ -72,13 +71,33 @@ def step(x, t, regime):
     # -------------------------
     # Fuel_rate (ton/h)
     # -------------------------
+
+    F_min = 2.5
+    F_max = 6.0
+
     if t == 0:
-     x_next["Fuel_rate"] = 2.5
+        x_next["Fuel_rate"] = F_min
     else:
-     x_next["Fuel_rate"] = (
-        x["Fuel_rate"]
-        + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * dt))
-    )
+
+        # 1) Smooth target ramp (operational reality)
+        F_target = F_min + (F_max - F_min) * (
+            1 / (1 + np.exp(-0.03 * (t - 40)))
+        )
+
+        # 2) Physical inertia (1st order lag)
+        tau_F = 18.0  # system response time
+
+        x_next["Fuel_rate"] = (
+            x["Fuel_rate"]
+            + (dt / tau_F) * (F_target - x["Fuel_rate"])
+        )
+
+        # 3) Safety bounds (physical + operational limits)
+        x_next["Fuel_rate"] = np.clip(
+            x_next["Fuel_rate"],
+            F_min,
+            F_max
+        )
      
     # -------------------------
     # O2 (%)
@@ -86,21 +105,15 @@ def step(x, t, regime):
     if t == 0:
         x_next["O2"] = 6.0
     else:
+        air_fuel_ratio = x_next["Air_flow"] / (x_next["Fuel_rate"] + 1e-6)
+
+        target_O2 = 2.5 + 4.5 * np.exp(-1.2 / (air_fuel_ratio + 1e-3))
+
         x_next["O2"] = (
-            3.2
-            + (6.0 - 3.2) * np.exp(-dt / 10)
+            x["O2"]
+            + 0.15 * (target_O2 - x["O2"])
         )
     
-    # -------------------------
-    # CO ppm
-    # -------------------------
-    if t == 0:
-        x_next["CO_ppm"] = 900.0
-    else:
-        x_next["CO_ppm"] = (
-            36.0
-            + (900.0 - 36.0) * np.exp(-dt / 10)
-        )
     
     # -------------------------
     # Q_in (kJ/kg)
@@ -168,6 +181,11 @@ def step(x, t, regime):
             -269.0
             + (-120.0 + 269.0) * np.exp(-t / 15)
         )
+        
+        x0calc = x_next
+
+        x0calc["Tg_calcination"] = df.iloc[-1]["Tg_preheater"]
+
                     
     # -------------------------
     # Tg_preheater (°C)
@@ -186,6 +204,8 @@ def step(x, t, regime):
         noise = np.random.normal(0, 1.8)
 
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
+        
+        x0calc["Ts_calcination"] = df.iloc[-1]["Ts_preheater"]
         
     # -------------------------
     # Tg_calcination (°C)
@@ -278,6 +298,28 @@ def step(x, t, regime):
         else:
             x_next["Tg_Cooling"] = x["Tg_Cooling"] + np.random.normal(0, 1.5)
             
+        
+    # -------------------------
+    # CO ppm
+    # -------------------------
+    if t == 0:
+        x_next["CO_ppm"] = 900.0
+    else:
+        oxygen_deficit = max(0.0, 6.0 - x_next["O2"])
+
+        T_eff = x_next["Tg_burning"]
+
+        temp_factor = np.exp(-T_eff / 1200)
+
+        fuel_factor = x_next["Fuel_rate"] / 6.0
+
+        target_CO = 20 + 800 * oxygen_deficit * fuel_factor * temp_factor
+
+        x_next["CO_ppm"] = (
+            x["CO_ppm"]
+            + 0.25 * (target_CO - x["CO_ppm"])
+        )
+            
     #===================================== Solid Phase =====================================
     
     # -------------------------
@@ -294,13 +336,15 @@ def step(x, t, regime):
     # -------------------------
     # Ts_calcination (°C)
     # -------------------------
-    if t == 0:
-        x_next["Ts_calcination"] = x_next["Ts_preheater"]
-    else:
-        x_next["Ts_calcination"] = (
-            x["Ts_calcination"]
-            - 0.0018217 * (x["Tg_calcination"] - x["Ts_calcination"])
-        )
+    # effective time constant (zone inertia)
+    tau_s = 55.0  # tuneable but physically meaningful
+
+    target = x["Tg_calcination"]
+
+    x_next["Ts_calcination"] = (
+        x["Ts_calcination"]
+        + (dt / tau_s) * (target - x["Ts_calcination"])
+    )
         
            
     # -------------------------
@@ -903,7 +947,78 @@ def input_layer(t, regime):
 # INITIAL STATE
 # ==============================
 
-x_current = df.iloc[0].to_dict()
+x_current = {col: 0.0 for col in columns}
+
+# explicit physical initial conditions
+x_current["Fuel_rate"] = 2.5
+x_current["O2"] = 6.0
+x_current["CO_ppm"] = 900.0
+x_current["Tg_preheater"] = 400.0
+x_current["Ts_preheater"] = 100.0
+
+# ======================
+# GAS PHASE INITIAL CHAIN
+# ======================
+x_current["O2"] = 6.0
+x_current["CO_ppm"] = 900.0
+
+x_current["Tg_preheater"] = 400.0
+x_current["Ts_preheater"] = 100.0
+
+# =========================
+# GAS PHASE BOUNDARY LINK
+# =========================
+
+
+
+
+
+
+
+# cooling starts from burning exit
+x_current["Tg_Cooling"] = x_current["Tg_burning"]
+
+x_current["Air_flow"] = 50000.0
+x_current["Cooler_air_flow"] = 10000.0
+x_current["ID_fan_speed"] = 900.0
+
+# -------------------------
+# SOLID PHASE INITIALIZATION
+# -------------------------
+x_current["Feed_rate"] = 2.5
+x_current["Kiln_solid_out"] = 0.1
+x_current["Material_acc"] = 0.0
+
+x_current["Ts_preheater"] = x_current["Tg_preheater"] - 300
+x_current["Ts_calcination"] = x_current["Ts_preheater"]
+x_current["Ts_burning"] = x_current["Ts_calcination"]
+x_current["Ts_Cooling"] = 100.0
+
+# -------------------------
+# CHEMISTRY INITIALIZATION
+# -------------------------
+x_current["CaCO3"] = 80.0
+x_current["CaO"] = 1e-6
+x_current["CO2"] = 1e-6
+
+x_current["SiO2"] = 13.0
+x_current["Al2O3"] = 4.0
+x_current["Fe2O3"] = 3.0
+
+x_current["C2S"] = 1e-6
+x_current["C3S"] = 1e-6
+x_current["C3A"] = 1e-6
+x_current["C4AF"] = 1e-6
+
+# -------------------------
+# CONTROL INPUTS
+# -------------------------
+x_current["Fuel_rate"] = 2.5
+x_current["Petcoke"] = 0.03
+x_current["Alternative_Fuel"] = 0.07
+x_current["Lignite_Coal"] = 0.90
+
+
 sim_time = 0.0
 
 # ==============================
@@ -930,7 +1045,7 @@ for t in range(N - 1):
 
     # 4) SAVE OUTPUT
     x_current["t"] = sim_time + reporting_dt
-    df.iloc[t + 1] = pd.Series(x_current)
+    df.iloc[t + 1] = pd.Series(x_current).reindex(df.columns)
 
     # 5) ADVANCE TIME
     sim_time += reporting_dt
@@ -942,3 +1057,6 @@ output_path = "kiln_simulation_output.csv"
 df.to_csv(output_path, index=False)
 
 print(f"Simülasyon başarıyla tamamlandı: {output_path}")
+print(df["Ts_calcination"].min())
+print(df["Ts_calcination"].max())
+print(df["Ts_calcination"].describe())
