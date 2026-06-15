@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import math
 
 columns = [
     "t",
@@ -59,15 +60,42 @@ df["Regime"] = regime_list
 def step(x, t, regime):
 
     x_next = x.copy()
+    
+    #===================================== INPUTS =====================================
+    
+    # -------------------------
+    # Fuel_composition
+    # -------------------------
 
     x_next["Lignite_Coal"] = max(
         0.0,
         1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
     )
     
+    # -------------------------
+    # O2 (%)
+    # -------------------------
+    if t == 0:
+        x_next["O2"] = 6.0
+    else:
+        x_next["O2"] = (
+            3.2
+            + (6.0 - 3.2) * np.exp(-t / 10)
+        )
     
     # -------------------------
-    # AV: Q_in (kJ/kg)
+    # CO ppm
+    # -------------------------
+    if t == 0:
+        x_next["CO_ppm"] = 900.0
+    else:
+        x_next["CO_ppm"] = (
+            36.0
+            + (900.0 - 36.0) * np.exp(-t / 10)
+        )
+    
+    # -------------------------
+    # Q_in (kJ/kg)
     # -------------------------
     x_next["Q_in"] = (
         (x_next["Lignite_Coal"] * 15000
@@ -78,7 +106,7 @@ def step(x, t, regime):
     )
     
     # -------------------------
-    # M: Fuel_rate (ton/h)
+    # Fuel_rate (ton/h)
     # -------------------------
     if t == 0:
         x["Fuel_rate"] = 2.5
@@ -101,6 +129,22 @@ def step(x, t, regime):
             x["Fuel_rate"]
             + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * t))
         ) * k
+    
+    # -------------------------
+    # dFuel_rate
+    # -------------------------
+    if t == 0:
+        x_next["dFuel_rate"] = 1e-6
+    else:
+
+        x_next["dFuel_rate"] = (
+            x_next["Fuel_rate"]
+            - x["Fuel_rate"]
+        ) / dt
+            
+    # -------------------------
+    # Feed_rate
+    # -------------------------
         
         feed_term = (
             x_next["Fuel_rate"]
@@ -119,23 +163,23 @@ def step(x, t, regime):
         )
         
     # -------------------------
-    # J: Air_flow (EXP RAMP)
+    # Air_flow (EXP RAMP)
     # -------------------------
     x_next["Air_flow"] = 45000 + (95000 - 45000) * (1 - np.exp(-t / 120))
     
     # -------------------------
-    # K: Cooler_air_flow (EXP RAMP)
+    # Cooler_air_flow (EXP RAMP)
     # -------------------------
     x_next["Cooler_air_flow"] = 8000 + (83000 - 8000) * (1 - np.exp(-t / 140))
     
     # -------------------------
-    # L: ID_fan_speed (EXP RAMP)
+    # ID_fan_speed (EXP RAMP)
     # -------------------------
     x_next["ID_fan_speed"] = 900 + (2550 - 900) * (1 - np.exp(-t / 110))
     
-    # =========================
-    # Z: Damper_position (%)
-    # =========================
+    # -------------------------
+    # Damper_position (%)
+    # -------------------------
     if t == 0:
         x_next["Damper_position"] = 85.0
     else:
@@ -143,48 +187,22 @@ def step(x, t, regime):
             33.0
             + (85.0 - 33.0) * np.exp(-t / 25)
         )
-    
         
-
+    #===================================== Gas Phase =====================================
+    
     # -------------------------
-    # G: Kiln_solid_out
+    # P_preheater (Pa)
     # -------------------------
     if t == 0:
-        x_next["Kiln_solid_out"] = 1e-6
+        x_next["P_preheater"] = -120.0
     else:
-        x_next["Kiln_solid_out"] = (
-            0.15 * (x_next["Feed_rate"] - x_next["CO2"])
-            + 0.85 * x["Kiln_solid_out"]
+        x_next["P_preheater"] = (
+            -269.0
+            + (-120.0 + 269.0) * np.exp(-t / 15)
         )
-
+                    
     # -------------------------
-    # H: Material_acc
-    # -------------------------
-    if t == 0:
-        x_next["Material_acc"] = x_next["Feed_rate"]
-    else:
-        x_next["Material_acc"] = (
-            x_next["Feed_rate"]
-            - x_next["Kiln_solid_out"]
-            - x_next["CO2"]
-        )
-
-    # -------------------------
-    # I: Clinker_output
-    # -------------------------
-    if t == 0:
-        x_next["Clinker_output"] = 1e-6
-    else:
-        x_next["Clinker_output"] = 0.9 * x_next["Kiln_solid_out"]
-
-
-
-
-
-
-
-    # -------------------------
-    # N: Tg_preheater (°C)
+    # Tg_preheater (°C)
     # -------------------------
     if t == 0:
         x_next["Tg_preheater"] = 399.6
@@ -200,25 +218,14 @@ def step(x, t, regime):
         noise = np.random.normal(0, 1.8)
 
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
-
+        
     # -------------------------
-    # O: Ts_preheater (°C)
-    # -------------------------
-    if t == 0:
-        x_next["Ts_preheater"] = 101.6
-    else:
-        x_next["Ts_preheater"] = (
-            x["Ts_preheater"]
-            + 0.0081 * (x["Tg_preheater"] - x["Ts_preheater"])
-        )
-
-    # -------------------------
-    # P: Tg_calcination (°C)
+    # Tg_calcination (°C)
     # -------------------------
     if t == 0:
         x_next["Tg_calcination"] = x_next["Tg_preheater"]
     else:
-
+ 
         if t <= 36:
 
             w = 1 / (1 + np.exp(-0.25 * (t - 36)))
@@ -245,18 +252,7 @@ def step(x, t, regime):
                 x_next["Tg_calcination"] = ref + noise
                 
     # -------------------------
-    # Q: Ts_calcination (°C)
-    # -------------------------
-    if t == 0:
-        x_next["Ts_calcination"] = x_next["Ts_preheater"]
-    else:
-        x_next["Ts_calcination"] = (
-            x["Ts_calcination"]
-            - 0.0018217 * (x["Tg_calcination"] - x["Ts_calcination"])
-        )
-        
-    # -------------------------
-    # R: Tg_burning (°C)
+    # Tg_burning (°C)
     # -------------------------
     if t == 0:
         x_next["Tg_burning"] = x_next["Tg_calcination"]
@@ -286,10 +282,62 @@ def step(x, t, regime):
 
                 ref = x["Tg_burning"]  # approx INDEX(R:R,218)
 
-                x_next["Tg_burning"] = ref + noise
+                x_next["Tg_burning"] = ref + noise   
                 
     # -------------------------
-    # S: Ts_burning (°C)
+    # dTg_burning
+    # -------------------------
+    if t == 0:
+        x_next["dTg_burning"] = 1e-6
+    else:
+
+        x_next["dTg_burning"] = (
+            x_next["Tg_burning"]
+            - x["Tg_burning"]
+        ) / dt         
+    
+    #-------------------------
+    # Tg_Cooling
+    #-------------------------
+    if t == 0:
+        x_next["Tg_Cooling"] = x["Tg_burning"]
+    else:
+        if t <= 36:
+            w = 1 / (1 + np.exp(-0.25 * (t - 36)))
+            T_new = x["Tg_Cooling"] + 0.0183 * (140 - x["Tg_Cooling"])
+            noise = np.random.normal(0, 1.5) * w
+            x_next["Tg_Cooling"] = T_new + noise
+        else:
+            x_next["Tg_Cooling"] = x["Tg_Cooling"] + np.random.normal(0, 1.5)
+            
+    
+    #===================================== Solid Phase =====================================
+    
+    # -------------------------
+    # Ts_preheater (°C)
+    # -------------------------
+    if t == 0:
+        x_next["Ts_preheater"] = 101.6
+    else:
+        x_next["Ts_preheater"] = (
+            x["Ts_preheater"]
+            + 0.0081 * (x["Tg_preheater"] - x["Ts_preheater"])
+        )
+    
+    # -------------------------
+    # Ts_calcination (°C)
+    # -------------------------
+    if t == 0:
+        x_next["Ts_calcination"] = x_next["Ts_preheater"]
+    else:
+        x_next["Ts_calcination"] = (
+            x["Ts_calcination"]
+            - 0.0018217 * (x["Tg_calcination"] - x["Ts_calcination"])
+        )
+        
+           
+    # -------------------------
+    # Ts_burning (°C)
     # -------------------------
     if t == 0:
         x_next["Ts_burning"] = x_next["Ts_calcination"]
@@ -303,23 +351,10 @@ def step(x, t, regime):
 
         x_next["Ts_burning"] = S_new + noise
         
-    # =========================
-    # T: Tg_Cooling
-    # =========================
-    if t == 0:
-        x_next["Tg_Cooling"] = x["Tg_burning"]
-    else:
-        if t <= 36:
-            w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-            T_new = x["Tg_Cooling"] + 0.0183 * (140 - x["Tg_Cooling"])
-            noise = np.random.normal(0, 1.5) * w
-            x_next["Tg_Cooling"] = T_new + noise
-        else:
-            x_next["Tg_Cooling"] = x["Tg_Cooling"] + np.random.normal(0, 1.5)
-            
-    # =========================
-    # U: Ts_Cooling (°C)
-    # =========================
+       
+    # -------------------------
+    # Ts_Cooling (°C)
+    # -------------------------
     if t == 0:
         x_next["Ts_Cooling"] = x["Ts_Cooling"]
     else:
@@ -337,39 +372,13 @@ def step(x, t, regime):
             x_next["Ts_Cooling"] = x["Ts_Cooling"] + np.random.normal(0, 1.5)
         else:
             x_next["Ts_Cooling"] = x["Ts_Cooling"] + np.random.normal(0, 1.5)
-    # =========================
-    # V: O2 (%)
-    # =========================
-    if t == 0:
-        x_next["O2"] = 6.0
-    else:
-        x_next["O2"] = (
-            3.2
-            + (6.0 - 3.2) * np.exp(-t / 10)
-        )
-    # =========================
-    # W: CO ppm
-    # =========================
-    if t == 0:
-        x_next["CO_ppm"] = 900.0
-    else:
-        x_next["CO_ppm"] = (
-            36.0
-            + (900.0 - 36.0) * np.exp(-t / 10)
-        )
-    # =========================
-    # X: P_preheater (Pa)
-    # =========================
-    if t == 0:
-        x_next["P_preheater"] = -120.0
-    else:
-        x_next["P_preheater"] = (
-            -269.0
-            + (-120.0 + 269.0) * np.exp(-t / 15)
-        )
-    # =========================
-    # Y: P_calcination (Pa)
-    # =========================
+            
+    
+    #===================================== Reactions =====================================
+    
+    # -------------------------
+    # P_calcination (Pa)
+    # -------------------------
     if t == 0:
         x_next["P_calcination"] = -180.0
     else:
@@ -378,9 +387,9 @@ def step(x, t, regime):
             + (-180.0 + 406.0) * np.exp(-t / 20)
         )
 
-    # =========================
-    # AB: CaCO3 (ton/h)
-    # =========================
+    # -------------------------
+    # CaCO3 (ton/h)
+    # -------------------------
     if t == 0:
         x_next["CaCO3"] = 80.0
     else:
@@ -391,9 +400,9 @@ def step(x, t, regime):
         )
 
         x_next["CaCO3"] = x["CaCO3"] * np.exp(-k *dt)
-    # =========================
-    # AC: CaO (ton/h)
-    # =========================
+    # -------------------------
+    # CaO (ton/h)
+    # -------------------------
     if t == 0:
         x_next["CaO"] = 1e-6
     else:
@@ -412,9 +421,9 @@ def step(x, t, regime):
             - (x["Fuel_rate"] * 2)
             - (x["Alternative_Fuel"] * 3)
         )
-    # =========================
-    # AD: CO2 (ton/h)
-    # =========================
+    # -------------------------
+    # CO2 (ton/h)
+    # -------------------------
     if t == 0:
         x_next["CO2"] = 1e-6
     else:
@@ -422,8 +431,37 @@ def step(x, t, regime):
             80.0
             - (x_next["CaCO3"] + x_next["CaO"])
         )
+        
     # -------------------------
-    # AE: SiO2
+    # dCaO_calcination
+    # -------------------------
+    if t == 0:
+        x_next["dCaO_calcination"] = 1e-6
+    else:
+
+        # AB = CaCO3 feed
+        ab = x_next["CaCO3"]
+
+        arrhenius = np.exp(
+            -190000 / (8.314 * (x_next["Ts_calcination"] + 273.15))
+        )
+
+        rate_term = 100000000 * arrhenius
+
+        kinetic = 1 - np.exp(-rate_term *dt)
+
+        limiting = min(
+            ab,
+            (80 - ab)
+        )
+
+        x_next["dCaO_calcination"] = max(
+            0.0,
+            limiting * kinetic
+        )
+    
+        # -------------------------
+    # SiO2
     # -------------------------
     if t == 0:
         x_next["SiO2"] = 13.0
@@ -434,7 +472,7 @@ def step(x, t, regime):
         )
 
     # -------------------------
-    # AF: Al2O3
+    # Al2O3
     # -------------------------
     if t == 0:
         x_next["Al2O3"] = 4.0
@@ -445,7 +483,7 @@ def step(x, t, regime):
         )
 
     # -------------------------
-    # AG: Fe2O3
+    # Fe2O3
     # -------------------------
     if t == 0:
         x_next["Fe2O3"] = 3.0
@@ -456,7 +494,7 @@ def step(x, t, regime):
         )
 
     # -------------------------
-    # AH: LSF
+    # LSF
     # -------------------------
     x_next["LSF"] = x_next["CaO"] / (
         2.8 * x_next["SiO2"] +
@@ -465,14 +503,14 @@ def step(x, t, regime):
     )
 
     # -------------------------
-    # AI: C3A
+    # C3A
     # -------------------------
     if t == 0:
         x_next["C3A"] = 1e-6
     else:
         x_next["C3A"] = x["C3A"] + x_next["Al2O3"]
     # -------------------------
-    # AJ: C4AF
+    # C4AF
     # -------------------------
     if t == 0:
         x_next["C4AF"] = 1e-6
@@ -482,7 +520,7 @@ def step(x, t, regime):
             + x_next["dC4AF"]
         )  
     # -------------------------
-    # AK: C2S
+    # C2S
     # -------------------------
     if t == 0:
         x_next["C2S"] = 1e-6
@@ -494,7 +532,7 @@ def step(x, t, regime):
             - 0.75 * x_next["dC3S"]
         )
     # -------------------------
-    # AL: C3S
+    # C3S
     # -------------------------
     if t == 0:
         x_next["C3S"] = 1e-6
@@ -504,7 +542,7 @@ def step(x, t, regime):
             + x_next["dC3S"]
         )
     # -------------------------
-    # AM: dC2S
+    # dC2S
     # -------------------------
     if t == 0:
         x_next["dC2S"] = 1e-6
@@ -532,7 +570,7 @@ def step(x, t, regime):
                 limiting * kinetic
             )
     # -------------------------
-    # AN: dC3S
+    # dC3S
     # -------------------------
     if t == 0:
         x_next["dC3S"] = 1e-6
@@ -561,7 +599,7 @@ def step(x, t, regime):
                 limiting * kinetic
             )
     # -------------------------
-    # AO: dC3A
+    # dC3A
     # -------------------------
     if t == 0:
         x_next["dC3A"] = 1e-6
@@ -590,7 +628,7 @@ def step(x, t, regime):
                 limiting * kinetic
             )
     # -------------------------
-    # AP: dC4AF
+    # dC4AF
     # -------------------------
     if t == 0:
         x_next["dC4AF"] = 1e-6
@@ -627,35 +665,43 @@ def step(x, t, regime):
                 0.0,
                 limiting * kinetic
             )
+            
+    #===================================== Flows =====================================
+        
+
     # -------------------------
-    # AQ: dCaO_calcination
+    # G: Kiln_solid_out
     # -------------------------
     if t == 0:
-        x_next["dCaO_calcination"] = 1e-6
+        x_next["Kiln_solid_out"] = 1e-6
     else:
-
-        # AB = CaCO3 feed
-        ab = x_next["CaCO3"]
-
-        arrhenius = np.exp(
-            -190000 / (8.314 * (x_next["Ts_calcination"] + 273.15))
+        x_next["Kiln_solid_out"] = (
+            0.15 * (x_next["Feed_rate"] - x_next["CO2"])
+            + 0.85 * x["Kiln_solid_out"]
         )
-
-        rate_term = 100000000 * arrhenius
-
-        kinetic = 1 - np.exp(-rate_term *dt)
-
-        limiting = min(
-            ab,
-            (80 - ab)
-        )
-
-        x_next["dCaO_calcination"] = max(
-            0.0,
-            limiting * kinetic
-        )
+        
     # -------------------------
-    # AR: Mass_Balance_Error
+    # Clinker_output
+    # -------------------------
+    if t == 0:
+        x_next["Clinker_output"] = 1e-6
+    else:
+        x_next["Clinker_output"] = 0.9 * x_next["Kiln_solid_out"]
+
+    # -------------------------
+    # H: Material_acc
+    # -------------------------
+    if t == 0:
+        x_next["Material_acc"] = x_next["Feed_rate"]
+    else:
+        x_next["Material_acc"] = (
+            x_next["Feed_rate"]
+            - x_next["Kiln_solid_out"]
+            - x_next["CO2"]
+        )
+
+    # -------------------------
+    # Mass_Balance_Error
     # -------------------------
     if t == 0:
         x_next["Mass_Balance_Error"] = 1e-6
@@ -679,7 +725,7 @@ def step(x, t, regime):
 
         x_next["Mass_Balance_Error"] = inputs - outputs
     # -------------------------
-    # AS: kiln_rpm
+    # kiln_rpm
     # -------------------------
     if t == 0:
         x_next["kiln_rpm"] = 0.1
@@ -700,14 +746,14 @@ def step(x, t, regime):
 
 
     # -------------------------
-    # AT: Filling_rate
+    # Filling_rate
     # -------------------------
     x_next["Filling_rate"] = 0.1
     
     # -------------------------
-    # AU: Residence (min)
+    # Residence (min)
     # -------------------------
-    import math
+    
 
     if t == 0:
         x_next["Residence"] = 1e-6
@@ -723,7 +769,7 @@ def step(x, t, regime):
         )
 
     # -------------------------
-    # AW: Q_out (kJ/kg)
+    # Q_out (kJ/kg)
     # -------------------------
     x_next["Q_out"] = (
         x_next["Q_acc"]
@@ -731,12 +777,12 @@ def step(x, t, regime):
         + x_next["Q_reaction"]
     )
     # -------------------------
-    # AX: Q_acc (kJ/kg)
+    # Q_acc (kJ/kg)
     # -------------------------
     x_next["Q_acc"] = x_next["Clinker_output"] * 150
     
     # -------------------------
-    # AY: Q_loss
+    # Q_loss
     # -------------------------
     x_next["Q_loss"] = (
         0.0016
@@ -749,7 +795,7 @@ def step(x, t, regime):
         )
     )
     # -------------------------
-    # AZ: Q_reaction
+    # Q_reaction
     # -------------------------
     x_next["Q_reaction"] = (
         x_next["Feed_rate"]
@@ -757,7 +803,7 @@ def step(x, t, regime):
         * 3.2
     )
     # -------------------------
-    # BA: Q_gas
+    # Q_gas
     # -------------------------
     x_next["Q_gas"] = (
         x_next["Fuel_rate"]
@@ -765,14 +811,14 @@ def step(x, t, regime):
         * (x_next["Tg_burning"] - 25)
     )
     # -------------------------
-    # BB: Q_clinker
+    # Q_clinker
     # -------------------------
     x_next["Q_clinker"] = (
         x_next["Clinker_output"]
         * 1800
     )
     # -------------------------
-    # BC: Clinker_yield
+    # Clinker_yield
     # -------------------------
     feed_safe = max(x_next["Feed_rate"], 1e-6)
 
@@ -780,31 +826,9 @@ def step(x, t, regime):
         x_next["Clinker_output"]
         / feed_safe
     )
-    # -------------------------
-    # BD: dTg_burning
-    # -------------------------
-    if t == 0:
-        x_next["dTg_burning"] = 1e-6
-    else:
 
-        x_next["dTg_burning"] = (
-            x_next["Tg_burning"]
-            - x["Tg_burning"]
-        ) / dt
-        
     # -------------------------
-    # BE: dFuel_rate
-    # -------------------------
-    if t == 0:
-        x_next["dFuel_rate"] = 1e-6
-    else:
-
-        x_next["dFuel_rate"] = (
-            x_next["Fuel_rate"]
-            - x["Fuel_rate"]
-        ) / dt
-    # -------------------------
-    # BF: Normalized_Energy_Index
+    # Normalized_Energy_Index
     # -------------------------
     clinker_safe = max(x_next["Clinker_output"], 1e-6)
 
@@ -813,7 +837,7 @@ def step(x, t, regime):
         / clinker_safe
     )
     # -------------------------
-    # BG: Global_Energy_Closure
+    # Global_Energy_Closure
     # -------------------------
     x_next["Global_Energy_Closure"] = (
         x_next["Q_in"]
@@ -822,7 +846,7 @@ def step(x, t, regime):
         - x_next["Q_acc"]
     )
     # -------------------------
-    # BH: Energy_error (%)
+    # Energy_error (%)
     # -------------------------
     q_in_safe = max(x_next["Q_in"], 1e-6)
 
@@ -830,8 +854,8 @@ def step(x, t, regime):
         x_next["Global_Energy_Closure"]
         / q_in_safe
     ) * 100 
-        # -------------------------
-    # BI: SCALE
+    # -------------------------
+    # SCALE
     # -------------------------
     eps = 1e-9
 
@@ -855,7 +879,8 @@ def step(x, t, regime):
         x_next["SCALE"] = max(0.0, scale)                                                                                                             
     return x_next
 
-# 1. GLOBAL KONFİGÜRASYON
+#===================================== GLOBAL CONFIGURATION =====================================
+
 reporting_dt = 1/6  # 10 dakika (saat cinsinden)
 STEPS_PER_REPORT = int(reporting_dt / dt) 
 
@@ -871,6 +896,7 @@ REGIME_FEED_MULT = {
 }
 
 # 3. MAIN SIMULATION LOOP
+
 sim_time = 0.0  # Fiziksel zaman başlangıcı (saat)
 
 for t in range(N - 1):
