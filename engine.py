@@ -205,13 +205,13 @@ def step(x, t, regime):
 
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
         
-        x0calc["Ts_calcination"] = df.iloc[-1]["Ts_preheater"]
+        x0calc["Tg_calcination"] = df.iloc[-1]["Tg_preheater"]
         
     # -------------------------
     # Tg_calcination (°C)
     # -------------------------
     if t == 0:
-        x_next["Tg_calcination"] = x_next["Tg_preheater"]
+        x0calc["Tg_calcination"]
     else:
  
         if t <= 36:
@@ -909,7 +909,9 @@ def step(x, t, regime):
     if t == 0:
         x_next["SCALE"] = 1.0                                                                                                          
     return x_next
-#===================================== GLOBAL CONFIGURATION =====================================
+
+
+#  ===================================== GLOBAL CONFIGURATION =====================================
 
 reporting_dt = 1/6  # 10 dakika (saat cinsinden)
 STEPS_PER_REPORT = int(reporting_dt / dt) 
@@ -924,30 +926,35 @@ REGIME_FEED_MULT = {
     "R7_FUEL_SWITCH_TRANSIENT": 1.03,
     "R8_RESTABILIZATION": 0.9,
 }
+
 # ==============================
 # INPUT LAYER (CONTROL SYSTEM)
 # ==============================
 
-def input_layer(t, regime):
-    D = 0.03 + (0.1 - 0.03) * (1 - np.exp(-t / 80))
-    E = 0.07 + (0.14 - 0.07) * (1 - np.exp(-t / 100))
+def input_layer(t: float, regime: str) -> dict[str, float]:
+    """
+    Zamana ve rejime bağlı kontrol girdilerini hesaplar.
+    """
+    D = 0.03 + (0.1 - 0.03) * (1 - np.exp(-t / 80.0))
+    E = 0.07 + (0.14 - 0.07) * (1 - np.exp(-t / 100.0))
 
     base_feed = (
-        132 if t >= 72 else
-        72 + 60 * ((1 / (1 + np.exp(-0.065 * (t - 36)))) - 0.09) / 0.82
+        132.0 if t >= 72.0 else
+        72.0 + 60.0 * ((1.0 / (1.0 + np.exp(-0.065 * (t - 36.0)))) - 0.09) / 0.82
     )
 
     return {
         "Petcoke": D,
         "Alternative_Fuel": E,
-        "Feed_rate": base_feed * REGIME_FEED_MULT[regime]
+        "Feed_rate": base_feed * REGIME_FEED_MULT.get(regime, 1.0) # Fallback katsayısı eklendi
     }
 
 # ==============================
-# INITIAL STATE
+# INITIAL STATE ALLOCATION
 # ==============================
 
-x_current = {col: 0.0 for col in columns}
+# Tüm değişkenleri başlangıçta 0.0 olarak atıyoruz (Regime hariç, onu aşağıda eziyoruz)
+x_current = {col: 0.0 for col in columns if col != "Regime"}
 
 # explicit physical initial conditions
 x_current["Fuel_rate"] = 2.5
@@ -956,28 +963,10 @@ x_current["CO_ppm"] = 900.0
 x_current["Tg_preheater"] = 400.0
 x_current["Ts_preheater"] = 100.0
 
-# ======================
-# GAS PHASE INITIAL CHAIN
-# ======================
-x_current["O2"] = 6.0
-x_current["CO_ppm"] = 900.0
-
-x_current["Tg_preheater"] = 400.0
-x_current["Ts_preheater"] = 100.0
-
 # =========================
 # GAS PHASE BOUNDARY LINK
 # =========================
-
-
-
-
-
-
-
-# cooling starts from burning exit
-x_current["Tg_Cooling"] = x_current["Tg_burning"]
-
+x_current["Tg_Cooling"] = x_current.get("Tg_burning", 0.0)
 x_current["Air_flow"] = 50000.0
 x_current["Cooler_air_flow"] = 10000.0
 x_current["ID_fan_speed"] = 900.0
@@ -985,11 +974,11 @@ x_current["ID_fan_speed"] = 900.0
 # -------------------------
 # SOLID PHASE INITIALIZATION
 # -------------------------
-x_current["Feed_rate"] = 2.5
+x_current["Feed_rate"] = 41.50
 x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
-x_current["Ts_preheater"] = x_current["Tg_preheater"] - 300
+x_current["Ts_preheater"] = x_current["Tg_preheater"] - 300.0
 x_current["Ts_calcination"] = x_current["Ts_preheater"]
 x_current["Ts_burning"] = x_current["Ts_calcination"]
 x_current["Ts_Cooling"] = 100.0
@@ -1013,42 +1002,64 @@ x_current["C4AF"] = 1e-6
 # -------------------------
 # CONTROL INPUTS
 # -------------------------
-x_current["Fuel_rate"] = 2.5
 x_current["Petcoke"] = 0.03
 x_current["Alternative_Fuel"] = 0.07
 x_current["Lignite_Coal"] = 0.90
 
+# Pandas satır atamaları döngü içinde yavaştır. Çözüm sonuçlarını tutmak için liste kullanıyoruz.
+results_list = []
+sim_time = 0.0
+
+# Başlangıç durumunu ilk satır olarak kaydediyoruz. (Regime verisi df'den okunur)
+initial_record = x_current.copy()
+initial_record["t"] = sim_time
+initial_record["Regime"] = df.at[0, "Regime"]
+results_list.append(initial_record)
+
+# ==============================================================================
+# 2. SİMÜLASYON DÖNGÜSÜNDEKİ BAĞLANTI (SUB-STEP PHYSICS)
+# ==============================================================================
+
+# ... (Önceki tanımlamalar, INIT işlemleri ve boş results_list)
 
 sim_time = 0.0
 
-# ==============================
-# SIMULATION LOOP
-# ==============================
+for t_idx in range(N - 1):
 
-for t in range(N - 1):
-
-    # 1) REGIME (FIXED FROM SCHEDULE, NOT STATE)
-    regime = x_current["Regime"]
-
-    # 2) CONTROL INPUTS
-    inputs = input_layer(sim_time, regime)
+    # 1) Rejim ve Kontrol Girdilerinin Okunması
+    current_regime = df.at[t_idx, "Regime"]
+    inputs = input_layer(sim_time, current_regime)
 
     x_current["Petcoke"] = inputs["Petcoke"]
     x_current["Alternative_Fuel"] = inputs["Alternative_Fuel"]
     x_current["Feed_rate"] = inputs["Feed_rate"]
+    x_current["Regime"] = current_regime 
 
-    # 3) SUB-STEP PHYSICS
+    # 2) SUB-STEP PHYSICS: Kendi fonksiyonunuzun çağrıldığı yer
     for sub in range(STEPS_PER_REPORT):
-
         step_time = sim_time + dt * (sub + 1)
-        x_current = step(x_current, step_time, regime)
+        
+        # Fonksiyonunuz güncel durumu, zamanı ve rejimi alıp, hesaplanmış YENİ durumu döndürür
+        x_current = step(x_current, step_time, current_regime)
 
-    # 4) SAVE OUTPUT
-    x_current["t"] = sim_time + reporting_dt
-    df.iloc[t + 1] = pd.Series(x_current).reindex(df.columns)
-
-    # 5) ADVANCE TIME
+    # 3) ZAMAN İLERLETME VE KAYIT
     sim_time += reporting_dt
+    
+    # x_current'in değerlerini değer bazında (by value) listeye ekliyoruz
+    record = x_current.copy()
+    record["t"] = sim_time
+    results_list.append(record)
+
+    # 5) SAVE OUTPUT: Her adımı listeye atıyoruz (pandas .iloc atamasından O(1) düzeyinde daha hızlıdır)
+    record = x_current.copy()
+    record["t"] = sim_time
+    results_list.append(record)
+
+# Döngü bittiğinde tüm sonuçları tek seferde DataFrame'e geçiriyoruz (Performans optimizasyonu)
+df_results = pd.DataFrame(results_list)
+# Orijinal df formatına uydurmak için:
+df.update(df_results)
+
 # ==============================
 # SAVE OUTPUT
 # ==============================
@@ -1057,6 +1068,3 @@ output_path = "kiln_simulation_output.csv"
 df.to_csv(output_path, index=False)
 
 print(f"Simülasyon başarıyla tamamlandı: {output_path}")
-print(df["Ts_calcination"].min())
-print(df["Ts_calcination"].max())
-print(df["Ts_calcination"].describe())
