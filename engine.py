@@ -46,16 +46,13 @@ regime_series = [
     ("R8_RESTABILIZATION", 54),
 ]
 
-# expand regime into time series
 regime_list = []
 for r, n in regime_series:
     regime_list.extend([r] * n)
 
-# safety clamp (CRITICAL)
 regime_list = regime_list[:N]
 
 df["Regime"] = regime_list
-
 
 def step(x, t, regime):
 
@@ -76,27 +73,13 @@ def step(x, t, regime):
     # Fuel_rate (ton/h)
     # -------------------------
     if t == 0:
-        x["Fuel_rate"] = 2.5
+     x_next["Fuel_rate"] = 2.5
     else:
-
-        REGIME_FUEL_MULT = {
-            "R1_HEATING_STABILIZATION": 0.6,
-            "R2_EARLY_CALCINATION": 0.75,
-            "R3_ACTIVE_CALCINATION": 0.85,
-            "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
-            "R5_EARLY_CLINKERIZATION": 0.97,
-            "R6_STEADY_CLINKERIZATION": 1.0,
-            "R7_FUEL_SWITCH_TRANSIENT": 1.03,
-            "R8_RESTABILIZATION": 0.9,
-        }
-
-        k = REGIME_FUEL_MULT[regime]
-
-        x_next["Fuel_rate"] = (
-            x["Fuel_rate"]
-            + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * t))
-        ) * k
-    
+     x_next["Fuel_rate"] = (
+        x["Fuel_rate"]
+        + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * dt))
+    )
+     
     # -------------------------
     # O2 (%)
     # -------------------------
@@ -105,7 +88,7 @@ def step(x, t, regime):
     else:
         x_next["O2"] = (
             3.2
-            + (6.0 - 3.2) * np.exp(-t / 10)
+            + (6.0 - 3.2) * np.exp(-dt / 10)
         )
     
     # -------------------------
@@ -116,7 +99,7 @@ def step(x, t, regime):
     else:
         x_next["CO_ppm"] = (
             36.0
-            + (900.0 - 36.0) * np.exp(-t / 10)
+            + (900.0 - 36.0) * np.exp(-dt / 10)
         )
     
     # -------------------------
@@ -145,37 +128,8 @@ def step(x, t, regime):
     # -------------------------
     # Feed_rate
     # -------------------------
-        
-    if t >= 72:
-        base_feed = 132
-    else:
-        base_feed = (
-            72
-            + 60
-            * (
-                (1 / (1 + np.exp(-0.065 * (t - 36))))
-                - 0.09
-            )
-            / 0.82
-        )
-
-    REGIME_FEED_MULT = {
-        "R1_HEATING_STABILIZATION": 0.5,
-        "R2_EARLY_CALCINATION": 0.65,
-        "R3_ACTIVE_CALCINATION": 0.85,
-        "R4_TRANSITION_TO_CLINKERIZATION": 0.9,
-        "R5_EARLY_CLINKERIZATION": 0.95,
-        "R6_STEADY_CLINKERIZATION": 1.0,
-        "R7_FUEL_SWITCH_TRANSIENT": 1.0,
-        "R8_RESTABILIZATION": 0.95,
-    }
-
-    feed_rate = (
-        base_feed
-        * REGIME_FEED_MULT.get(regime, 1.0)
-    )
-
-    x_next["Feed_rate"] = feed_rate
+    # Feed_rate is controlled externally (input_layer)
+    x_next["Feed_rate"] = x["Feed_rate"]
         
     # -------------------------
     # Air_flow (EXP RAMP)
@@ -200,9 +154,8 @@ def step(x, t, regime):
     else:
         x_next["Damper_position"] = (
             33.0
-            + (85.0 - 33.0) * np.exp(-t / 25)
+            + (85.0 - 33.0) * np.exp(-dt / 25)
         )
-        
     #===================================== Gas Phase =====================================
     
     # -------------------------
@@ -325,7 +278,6 @@ def step(x, t, regime):
         else:
             x_next["Tg_Cooling"] = x["Tg_Cooling"] + np.random.normal(0, 1.5)
             
-    
     #===================================== Solid Phase =====================================
     
     # -------------------------
@@ -388,7 +340,6 @@ def step(x, t, regime):
         else:
             x_next["Ts_Cooling"] = x["Ts_Cooling"] + np.random.normal(0, 1.5)
             
-    
     #===================================== Reactions =====================================
     
     # -------------------------
@@ -523,7 +474,10 @@ def step(x, t, regime):
     if t == 0:
         x_next["C3A"] = 1e-6
     else:
-        x_next["C3A"] = x["C3A"] + x_next["Al2O3"]
+       x_next["C3A"] = max(
+    0.0,
+    x["C3A"] + x_next["dC3A"] * dt
+)
     # -------------------------
     # C4AF
     # -------------------------
@@ -683,7 +637,6 @@ def step(x, t, regime):
             
     #===================================== Flows =====================================
         
-
     # -------------------------
     # G: Kiln_solid_out
     # -------------------------
@@ -732,23 +685,31 @@ def step(x, t, regime):
         x_next["Mass_Balance_Error"] = 1e-6
     else:
 
-        inputs = (
-            x_next["CaCO3"]
-            + x_next["SiO2"]
-            + x_next["Al2O3"]
-            + x_next["Fe2O3"]
+        Ca_balance = x_next["CaCO3"] - (
+            x_next["CaO"]
+            + 3*x_next["C3A"]
+            + 4*x_next["C4AF"]
+            + 2*x_next["C2S"]
+            + 3*x_next["C3S"]
         )
 
-        outputs = (
-            x_next["CaO"]
-            + x_next["CO2"]
-            + x_next["C3A"]
-            + x_next["C4AF"]
-            + x_next["C2S"]
+        Si_balance = x_next["SiO2"] - (
+            x_next["C2S"]
             + x_next["C3S"]
         )
 
-        x_next["Mass_Balance_Error"] = inputs - outputs
+        Al_balance = x_next["Al2O3"] - (
+            x_next["C3A"]
+            + x_next["C4AF"]
+        )
+
+        Fe_balance = x_next["Fe2O3"] - (
+            x_next["C4AF"]
+        )
+
+        x_next["Mass_Balance_Error"] = (
+            Ca_balance + Si_balance + Al_balance + Fe_balance
+        )
     # -------------------------
     # kiln_rpm
     # -------------------------
@@ -781,7 +742,6 @@ def step(x, t, regime):
             * (1 - np.exp(-0.01 * t))
         )
 
-
     # -------------------------
     # Filling_rate
     # -------------------------
@@ -790,7 +750,6 @@ def step(x, t, regime):
     # -------------------------
     # Residence (min)
     # -------------------------
-    
 
     if t == 0:
         x_next["Residence"] = 1e-6
@@ -805,7 +764,6 @@ def step(x, t, regime):
             * (feed / 120) ** (-0.6)
         )
 
-    
     # -------------------------
     # Q_acc (kJ/kg)
     # -------------------------
@@ -843,9 +801,6 @@ def step(x, t, regime):
         + x_next["Q_reaction"]
     )
 
-    
-
-
     # -------------------------
     # Q_gas
     # -------------------------
@@ -861,7 +816,6 @@ def step(x, t, regime):
         x_next["Clinker_output"]
         * 1800
     )
-
 
     # -------------------------
     # Normalized_Energy_Index
@@ -890,31 +844,27 @@ def step(x, t, regime):
         x_next["Global_Energy_Closure"]
         / q_in_safe
     ) * 100 
+    
     # -------------------------
-    # SCALE
+    # SCALE + CONSTRAINT CHECK
     # -------------------------
     eps = 1e-9
 
+    denom1 = abs(3*x_next["dC3S"] + 2*x_next["dC2S"] + 3*x_next["dC3A"] + 4*x_next["dC4AF"]) + eps
+    denom2 = abs(x_next["SiO2"] + x_next["dC2S"]) + eps
+    denom3 = abs(x_next["Al2O3"] + x_next["dC3A"]) + eps
+    denom4 = abs(x_next["Fe2O3"]) + eps
+
+    x_next["constraint_violation"] = (
+        max(0, denom1 - x_next["CaO"])
+        + max(0, denom2 - x_next["SiO2"])
+        + max(0, denom3 - x_next["Al2O3"])
+        + max(0, denom4 - x_next["Fe2O3"])
+    )
+
     if t == 0:
-        x_next["SCALE"] = 1.0
-    else:
-
-        denom1 = abs(3*x_next["dC3S"] + 2*x_next["dC2S"] + 3*x_next["dC3A"] + 4*x_next["dC4AF"]) + eps
-        denom2 = abs(x_next["SiO2"] + x_next["dC2S"]) + eps
-        denom3 = abs(x_next["Al2O3"] + x_next["dC3A"]) + eps
-        denom4 = abs(x_next["Fe2O3"] + eps)
-
-        scale = min(
-            1.0,
-            x_next["CaO"] / denom1,
-            x_next["SiO2"] / denom2,
-            x_next["Al2O3"] / denom3,
-            x_next["Fe2O3"] / denom4
-        )
-
-        x_next["SCALE"] = max(0.0, scale)                                                                                                             
+        x_next["SCALE"] = 1.0                                                                                                          
     return x_next
-
 #===================================== GLOBAL CONFIGURATION =====================================
 
 reporting_dt = 1/6  # 10 dakika (saat cinsinden)
@@ -930,48 +880,65 @@ REGIME_FEED_MULT = {
     "R7_FUEL_SWITCH_TRANSIENT": 1.03,
     "R8_RESTABILIZATION": 0.9,
 }
+# ==============================
+# INPUT LAYER (CONTROL SYSTEM)
+# ==============================
 
-# 3. MAIN SIMULATION LOOP
-
-sim_time = 0.0  # Fiziksel zaman başlangıcı (saat)
-
-for t in range(N - 1):
-    x_t = df.iloc[t].to_dict()
-    
-    # Zaman yönetimi: t indisi değil, sim_time zamanı raporlar
-    x_t["t"] = sim_time 
-    regime = x_t["Regime"]
-
-    # --- INPUT LAYER ---
-    # Not: Bazı girişler zamana (t indis) bağlıydı, fiziksel denge için 'sim_time' bazlı 
-    # ölçekleme yapmak daha doğru olabilir, ancak mevcut formülleri korudum.
+def input_layer(t, regime):
     D = 0.03 + (0.1 - 0.03) * (1 - np.exp(-t / 80))
     E = 0.07 + (0.14 - 0.07) * (1 - np.exp(-t / 100))
-    x_t["Petcoke"] = D
-    x_t["Alternative_Fuel"] = E
-    x_t["Lignite_Coal"] = max(0.0, 1.0 - D - E)
 
     base_feed = (
         132 if t >= 72 else
         72 + 60 * ((1 / (1 + np.exp(-0.065 * (t - 36)))) - 0.09) / 0.82
     )
-    x_t["Feed_rate"] = base_feed * REGIME_FEED_MULT.get(regime, 1.0)
 
-    # --- STATE UPDATE (SUB-STEPPING) ---
-    x_current = x_t.copy()
-    
+    return {
+        "Petcoke": D,
+        "Alternative_Fuel": E,
+        "Feed_rate": base_feed * REGIME_FEED_MULT[regime]
+    }
+
+# ==============================
+# INITIAL STATE
+# ==============================
+
+x_current = df.iloc[0].to_dict()
+sim_time = 0.0
+
+# ==============================
+# SIMULATION LOOP
+# ==============================
+
+for t in range(N - 1):
+
+    # 1) REGIME (FIXED FROM SCHEDULE, NOT STATE)
+    regime = x_current["Regime"]
+
+    # 2) CONTROL INPUTS
+    inputs = input_layer(sim_time, regime)
+
+    x_current["Petcoke"] = inputs["Petcoke"]
+    x_current["Alternative_Fuel"] = inputs["Alternative_Fuel"]
+    x_current["Feed_rate"] = inputs["Feed_rate"]
+
+    # 3) SUB-STEP PHYSICS
     for sub in range(STEPS_PER_REPORT):
-        step_time = sim_time + (sub * dt)
+
+        step_time = sim_time + dt * (sub + 1)
         x_current = step(x_current, step_time, regime)
 
-    # DataFrame'e fiziksel zamanı da içeren güncel veriyi yaz
+    # 4) SAVE OUTPUT
     x_current["t"] = sim_time + reporting_dt
     df.iloc[t + 1] = pd.Series(x_current)
-    
-    # Zamanı raporlama periyodu kadar ilerlet
-    sim_time += reporting_dt
 
-# 6. SAVE TO CSV
+    # 5) ADVANCE TIME
+    sim_time += reporting_dt
+# ==============================
+# SAVE OUTPUT
+# ==============================
+
 output_path = "kiln_simulation_output.csv"
 df.to_csv(output_path, index=False)
+
 print(f"Simülasyon başarıyla tamamlandı: {output_path}")
