@@ -182,62 +182,44 @@ def step(x, t, regime):
             + (-120.0 + 269.0) * np.exp(-t / 15)
         )
         
-        x0calc = x_next
-
-        x0calc["Tg_calcination"] = df.iloc[-1]["Tg_preheater"]
-
-                    
-    # -------------------------
+# -------------------------
     # Tg_preheater (°C)
     # -------------------------
     if t == 0:
         x_next["Tg_preheater"] = 399.6
     else:
-
+        # ... (w, T_pre, T_calc hesaplamalarınız aynı kalıyor) ...
         w_up = 1 / (1 + np.exp(-0.03 * (x["Tg_preheater"] - 847)))
         w_down = 1 / (1 + np.exp(-0.03 * (x["Tg_preheater"] - 835)))
         w = (w_up + w_down) / 2
-
         T_pre = x["Tg_preheater"] + 0.0135 * (0.0131 * x["Air_flow"] - x["Tg_preheater"])
         T_calc = 847 + 0.0135 * ((0.0113 * x["Air_flow"] - 800) * 0.05)
-
         noise = np.random.normal(0, 1.8)
-
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
-        
-        x0calc["Tg_calcination"] = df.iloc[-1]["Tg_preheater"]
-        
+
     # -------------------------
-    # Tg_calcination (°C)
+    # Tg_calcination (°C) - DÜZENLENMİŞ SÜREKLİLİK
     # -------------------------
+    # Her adımda Tg_preheater güncellendiği için, kalsinatör girişini doğrudan buradan alıyoruz
+    # Bu, '0.0' değerini görmenizi engelleyecek çünkü preheater zaten tanımlı.
+    preheater_val = x_next.get("Tg_preheater", x.get("Tg_preheater", 400.0))
+
     if t == 0:
-        x0calc["Tg_calcination"]
+        x_next["Tg_calcination"] = preheater_val # 0.0 yerine preheater'dan başla
     else:
- 
         if t <= 36:
-
             w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-
             P_new = x["Tg_calcination"] + 0.0114 * (1300 - x["Tg_calcination"])
             noise = np.random.normal(0, 1.5)
-
             x_next["Tg_calcination"] = P_new + w * noise
-
         else:
-
             if t <= 218:
-
                 noise = np.random.normal(0, 1.5)
-
                 x_next["Tg_calcination"] = x["Tg_calcination"] + noise
-
             else:
-
                 noise = np.random.normal(0, 1.5)
-
-                ref = x["Tg_calcination"]  # approximation of INDEX(P:P,218)
-
-                x_next["Tg_calcination"] = ref + noise
+                # 'ref' olarak artık preheater'ın güncel değerini kullanıyoruz
+                x_next["Tg_calcination"] = preheater_val + noise
                 
     # -------------------------
     # Tg_burning (°C)
@@ -956,17 +938,25 @@ def input_layer(t: float, regime: str) -> dict[str, float]:
 # Tüm değişkenleri başlangıçta 0.0 olarak atıyoruz (Regime hariç, onu aşağıda eziyoruz)
 x_current = {col: 0.0 for col in columns if col != "Regime"}
 
-# explicit physical initial conditions
+
+# -------------------------------------
+# Explicit Physical initial Conditions
+# -------------------------------------
+
 x_current["Fuel_rate"] = 2.5
 x_current["O2"] = 6.0
 x_current["CO_ppm"] = 900.0
-x_current["Tg_preheater"] = 400.0
-x_current["Ts_preheater"] = 100.0
 
-# =========================
-# GAS PHASE BOUNDARY LINK
-# =========================
-x_current["Tg_Cooling"] = x_current.get("Tg_burning", 0.0)
+# -------------------------
+# GAS PHASE INITIALIZATION
+# -------------------------
+
+x_current["Tg_preheater"] = 400.0
+x_current["Tg_calcination"] = 600.0
+x_current["Tg_burning"] = 1200.0
+x_current["Tg_Cooling"] = 1590.0
+
+
 x_current["Air_flow"] = 50000.0
 x_current["Cooler_air_flow"] = 10000.0
 x_current["ID_fan_speed"] = 900.0
@@ -978,10 +968,10 @@ x_current["Feed_rate"] = 41.50
 x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
-x_current["Ts_preheater"] = x_current["Tg_preheater"] - 300.0
-x_current["Ts_calcination"] = x_current["Ts_preheater"]
-x_current["Ts_burning"] = x_current["Ts_calcination"]
-x_current["Ts_Cooling"] = 100.0
+x_current["Ts_preheater"] = 100.0
+x_current["Ts_calcination"] = 450.0
+x_current["Ts_burning"] = 1100.0
+x_current["Ts_Cooling"] = 1450.0
 
 # -------------------------
 # CHEMISTRY INITIALIZATION
