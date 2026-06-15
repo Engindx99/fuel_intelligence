@@ -64,6 +64,87 @@ def step(x, t, regime):
         0.0,
         1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
     )
+    
+    
+    # -------------------------
+    # AV: Q_in (kJ/kg)
+    # -------------------------
+    x_next["Q_in"] = (
+        (x_next["Lignite_Coal"] * 15000
+         + x_next["Petcoke"] * 30000
+         + x_next["Alternative_Fuel"] * 18000)
+        * x_next["Fuel_rate"]
+        * np.exp(-((x_next["O2"] - 3.5) ** 2) / 25)
+    )
+    
+    # -------------------------
+    # M: Fuel_rate (ton/h)
+    # -------------------------
+    if t == 0:
+        x["Fuel_rate"] = 2.5
+    else:
+
+        REGIME_FUEL_MULT = {
+            "R1_HEATING_STABILIZATION": 0.6,
+            "R2_EARLY_CALCINATION": 0.75,
+            "R3_ACTIVE_CALCINATION": 0.85,
+            "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
+            "R5_EARLY_CLINKERIZATION": 0.97,
+            "R6_STEADY_CLINKERIZATION": 1.0,
+            "R7_FUEL_SWITCH_TRANSIENT": 1.03,
+            "R8_RESTABILIZATION": 0.9,
+        }
+
+        k = REGIME_FUEL_MULT[regime]
+
+        x_next["Fuel_rate"] = (
+            x["Fuel_rate"]
+            + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.0041 * t))
+        ) * k
+        
+        feed_term = (
+            x_next["Fuel_rate"]
+            * 0.8
+            * (1 - np.exp(-0.01 * t))
+        )
+
+        growth = (
+            x_next["Fuel_rate"]
+            + (6 - x_next["Fuel_rate"]) * (1 - np.exp(-0.00041 * t))
+        )
+
+        x_next["kiln_rpm"] = (
+            0.1
+            + growth * coeff * feed_term
+        )
+        
+    # -------------------------
+    # J: Air_flow (EXP RAMP)
+    # -------------------------
+    x_next["Air_flow"] = 45000 + (95000 - 45000) * (1 - np.exp(-t / 120))
+    
+    # -------------------------
+    # K: Cooler_air_flow (EXP RAMP)
+    # -------------------------
+    x_next["Cooler_air_flow"] = 8000 + (83000 - 8000) * (1 - np.exp(-t / 140))
+    
+    # -------------------------
+    # L: ID_fan_speed (EXP RAMP)
+    # -------------------------
+    x_next["ID_fan_speed"] = 900 + (2550 - 900) * (1 - np.exp(-t / 110))
+    
+    # =========================
+    # Z: Damper_position (%)
+    # =========================
+    if t == 0:
+        x_next["Damper_position"] = 85.0
+    else:
+        x_next["Damper_position"] = (
+            33.0
+            + (85.0 - 33.0) * np.exp(-t / 25)
+        )
+    
+        
 
     # -------------------------
     # G: Kiln_solid_out
@@ -96,45 +177,11 @@ def step(x, t, regime):
     else:
         x_next["Clinker_output"] = 0.9 * x_next["Kiln_solid_out"]
 
-    # -------------------------
-    # J: Air_flow (EXP RAMP)
-    # -------------------------
-    x_next["Air_flow"] = 45000 + (95000 - 45000) * (1 - np.exp(-t / 120))
 
-    # -------------------------
-    # K: Cooler_air_flow (EXP RAMP)
-    # -------------------------
-    x_next["Cooler_air_flow"] = 8000 + (83000 - 8000) * (1 - np.exp(-t / 140))
 
-    # -------------------------
-    # L: ID_fan_speed (EXP RAMP)
-    # -------------------------
-    x_next["ID_fan_speed"] = 900 + (2550 - 900) * (1 - np.exp(-t / 110))
 
-    # -------------------------
-    # M: Fuel_rate (ton/h)
-    # -------------------------
-    if t == 0:
-        x_next["Fuel_rate"] = 2.5
-    else:
 
-        REGIME_FUEL_MULT = {
-            "R1_HEATING_STABILIZATION": 0.6,
-            "R2_EARLY_CALCINATION": 0.75,
-            "R3_ACTIVE_CALCINATION": 0.85,
-            "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
-            "R5_EARLY_CLINKERIZATION": 0.97,
-            "R6_STEADY_CLINKERIZATION": 1.0,
-            "R7_FUEL_SWITCH_TRANSIENT": 1.03,
-            "R8_RESTABILIZATION": 0.9,
-        }
 
-        k = REGIME_FUEL_MULT[regime]
-
-        x_next["Fuel_rate"] = (
-            x["Fuel_rate"]
-            + (6.0 - x["Fuel_rate"]) * (1 - np.exp(-0.00041 * t))
-        ) * k
 
     # -------------------------
     # N: Tg_preheater (°C)
@@ -330,16 +377,7 @@ def step(x, t, regime):
             -406.0
             + (-180.0 + 406.0) * np.exp(-t / 20)
         )
-    # =========================
-    # Z: Damper_position (%)
-    # =========================
-    if t == 0:
-        x_next["Damper_position"] = 85.0
-    else:
-        x_next["Damper_position"] = (
-            33.0
-            + (85.0 - 33.0) * np.exp(-t / 25)
-        )
+
     # =========================
     # AB: CaCO3 (ton/h)
     # =========================
@@ -660,21 +698,7 @@ def step(x, t, regime):
 
         coeff = REGIME_RPM_COEFF[regime]
 
-        feed_term = (
-            x_next["Fuel_rate"]
-            * 0.8
-            * (1 - np.exp(-0.01 * t))
-        )
 
-        growth = (
-            x_next["Fuel_rate"]
-            + (6 - x_next["Fuel_rate"]) * (1 - np.exp(-0.00041 * t))
-        )
-
-        x_next["kiln_rpm"] = (
-            0.1
-            + growth * coeff * feed_term
-        )
     # -------------------------
     # AT: Filling_rate
     # -------------------------
@@ -697,16 +721,7 @@ def step(x, t, regime):
             / (4.2 * kiln_rpm * math.tan(math.atan(3 / 100)))
             * (feed / 120) ** (-0.6)
         )
-    # -------------------------
-    # AV: Q_in (kJ/kg)
-    # -------------------------
-    x_next["Q_in"] = (
-        (x_next["Lignite_Coal"] * 15000
-         + x_next["Petcoke"] * 30000
-         + x_next["Alternative_Fuel"] * 18000)
-        * x_next["Fuel_rate"]
-        * np.exp(-((x_next["O2"] - 3.5) ** 2) / 25)
-    )
+
     # -------------------------
     # AW: Q_out (kJ/kg)
     # -------------------------
