@@ -204,12 +204,12 @@ def step(x, t, regime):
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
         
 
-# -------------------------------------------------------------
+    # -------------------------------------------------------------
     # Ts_calcination (°C) - Katı Faz (Enerji Alıcı)
     # -------------------------------------------------------------
     Cp_s = 1050.0          
     m_solid = x["Feed_rate"] 
-    h_gs = 98.0            
+    h_gs = 7.2            
     A_s = 840.0            
     Ts_calcination = x["Ts_calcination"]
     
@@ -224,24 +224,24 @@ def step(x, t, regime):
     b_s = (h_gs * A_s * Tg_calcination) - Q_calcination_load
     
     Ts_next = (C_solid * Ts_calcination + dt * b_s) / (C_solid + dt * a_s)
-    x_next["Ts_calcination"] = np.clip(Ts_next, 0.0, 1600.0)
+    x_next["Ts_calcination"] = Ts_next
 
     # -------------------------------------------------------------
     # Tg_calcination (°C) - Gaz Fazı (Enerji Kaynağı)
     # -------------------------------------------------------------
     Cp_g = 1150.0          
     A_c = 13.85            
-    h_c = 8.0             
+    h_c = 5.8             
     m_air = x["Air_flow"] * 0.001293  
     
     Tg_preheater = x.get("Tg_preheater", 400.0) 
     T_tertiary_nominal = 950.0  
     unit_conversion = 1000.0  
     
-    chi_gas = 0.43  
+    chi_gas = 0.48
     Q_in_effective = x["Q_in"] * unit_conversion * chi_gas
     
-    rho_V_g_effective = 150.0  
+    rho_V_g_effective = 1000.0  
     C_gas = rho_V_g_effective * Cp_g 
 
     Q_gs_factor = h_gs * A_s 
@@ -252,7 +252,7 @@ def step(x, t, regime):
             (h_c * A_c * Tg_preheater) + (Q_gs_factor * Ts_next)
     
     Tg_next = (C_gas * Tg_calcination + dt * b_gas) / (C_gas + dt * a_gas)
-    x_next["Tg_calcination"] = np.clip(Tg_next, 0.0, 1600.0)
+    x_next["Tg_calcination"] = Tg_next
     
                 
     # -------------------------
@@ -988,7 +988,7 @@ x_current["CO_ppm"] = 900.0
 
 x_current["Tg_preheater"] = 400.0
 x_current["Tg_calcination"] = 846.531
-x_current["Tg_burning"] = 1250.0
+x_current["Tg_burning"] = 1246.415
 x_current["Tg_Cooling"] = 1590.0
 
 
