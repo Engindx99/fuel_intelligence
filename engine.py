@@ -199,44 +199,41 @@ def step(x, t, regime):
 
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
         
+
     # -------------------------
-    # Tg_calcination (°C) - Fiziksel Enerji Dengesi (dt = 0.05h)
+    # Tg_calcination (°C) - Tamamen Fiziksel Implicit Model
     # -------------------------
     Cp_g = 1150.0          # kJ/tonK
-    h_c = 35.0             
-    A_c = 1.0              
-    rho_V_g = 12000.0      
-    eta_comb = 0.85 
+    A_c = 13.85            # m2 
+    h_c = 15.0             # kJ/h*m2*K 
 
-    # 1. Kütlesel Debiler (ton/h)
-    # Air_flow Nm³/h -> ton/h dönüşümü
     m_air = x["Air_flow"] * 0.001293  
     
-    # 2. Durumlar
-    Tg_preheater = x.get("Tg_preheater", 400.0)
+    Tg_preheater = x.get("Tg_preheater", 400.0) 
     Tg_calcination = x["Tg_calcination"]
+    T_tertiary_nominal = 950.0  # °C
     
-    # 3. Enerji Girdileri (kJ/h)
-    # Q_in zaten toplam ısı girişi (kJ/h)
-    Q_in = x["Q_in"] 
+    # --- FİZİKSEL ENERJİ DAĞILIMI (HEAT PARTITIONING) ---
+    # 1. Birim dönüşümü (ton/h -> kg/h)
+    unit_conversion = 1000.0  
     
-    # 4. Konvektif taşıma (kJ/h)
-    Q_conv_in = m_air * Cp_g * (Tg_preheater - Tg_calcination) * eta_comb
+    # 2. Reaksiyon Isı Yükü Ayırımı
+    # Enerjinin ne kadarı gazı ısıtmaya gidiyor (Geri kalanı kalsinasyon reaksiyonuna gider)
+    chi_gas = 0.43  
     
-    # 5. Toplam Net Enerji (kJ/h)
-    Q_total = Q_conv_in + Q_in
+    # Efektif Gaz Enerjisi
+    Q_in_effective = x["Q_in"] * unit_conversion * chi_gas
     
-    # 6. Isıl Eylemsizlik (kJ/K) - Sistemin termal kapasitesi
-    # C_gas ne kadar büyükse sistem o kadar "ağır" tepki verir.
-    C_gas = 1.2e6 
+    # Efektif Isıl Kütle (Fırın Ataleti)
+    rho_V_g_effective = 450.0  # ton
+    C_gas = rho_V_g_effective * Cp_g 
     
-    # 7. İntegrasyon (Zaman adımıyla ölçeklendirilmiş enerji)
-    # dt (saat) * Q_total (kJ/h) = Toplam Enerji (kJ)
-    # Toplam Enerji (kJ) / C_gas (kJ/K) = Sıcaklık Değişimi (K)
-    delta_Tg = (Q_total * dt) / C_gas
+    # --- IMPLICIT DENKLEM KATSAYILARI ---
+    a = (m_air * Cp_g) + (h_c * A_c)
+    b = (m_air * Cp_g * T_tertiary_nominal) + Q_in_effective + (h_c * A_c * Tg_preheater)
     
-    # 8. Güncelleme
-    Tg_next = Tg_calcination + delta_Tg + np.random.normal(0, 0.5)
+    # Koşulsuz Kararlı İntegrasyon Adımı (Backward Euler)
+    Tg_next = (C_gas * Tg_calcination + dt * b) / (C_gas + dt * a)
     
     x_next["Tg_calcination"] = Tg_next
     
