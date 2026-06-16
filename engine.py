@@ -56,7 +56,11 @@ df["Regime"] = regime_list
 def step(x, t, regime):
 
     x_next = x.copy()
-    
+    Tg_calcination = x["Tg_calcination"]
+    Ts_calcination = x["Ts_calcination"]
+    Tg_preheater   = x.get("Tg_preheater", 400.0)
+    m_air          = x["Air_flow"] * 0.001293
+    m_solid        = x["Feed_rate"]
     #===================================== INPUTS =====================================
     
     # -------------------------
@@ -169,7 +173,7 @@ def step(x, t, regime):
             33.0
             + (85.0 - 33.0) * np.exp(-dt / 25)
         )
-    #===================================== Gas Phase =====================================
+    #===================================== Operational Zones =====================================
     
     # -------------------------
     # P_preheater (Pa)
@@ -200,42 +204,55 @@ def step(x, t, regime):
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
         
 
-    # -------------------------
-    # Tg_calcination (°C) - Tamamen Fiziksel Implicit Model
-    # -------------------------
-    Cp_g = 1150.0          # kJ/tonK
-    A_c = 13.85            # m2 
-    h_c = 15.0             # kJ/h*m2*K 
+# -------------------------------------------------------------
+    # Ts_calcination (°C) - Katı Faz (Enerji Alıcı)
+    # -------------------------------------------------------------
+    Cp_s = 1050.0          
+    m_solid = x["Feed_rate"] 
+    h_gs = 98.0            
+    A_s = 840.0            
+    Ts_calcination = x["Ts_calcination"]
+    
+    # Reaksiyon yükü optimizasyonu
+    delta_H_rxn = 1700.0   
+    kalsinasyon_rate = 0.15 
+    reaction_throttle = 1.0 if Ts_calcination < 850.0 else 0.3
+    Q_calcination_load = m_solid * 1000.0 * kalsinasyon_rate * reaction_throttle * delta_H_rxn if (700.0 < Ts_calcination < 1100.0) else 0.0
+    
+    C_solid = (m_solid * 1000.0) * Cp_s / 3600.0
+    a_s = h_gs * A_s
+    b_s = (h_gs * A_s * Tg_calcination) - Q_calcination_load
+    
+    Ts_next = (C_solid * Ts_calcination + dt * b_s) / (C_solid + dt * a_s)
+    x_next["Ts_calcination"] = np.clip(Ts_next, 0.0, 1600.0)
 
+    # -------------------------------------------------------------
+    # Tg_calcination (°C) - Gaz Fazı (Enerji Kaynağı)
+    # -------------------------------------------------------------
+    Cp_g = 1150.0          
+    A_c = 13.85            
+    h_c = 8.0             
     m_air = x["Air_flow"] * 0.001293  
     
     Tg_preheater = x.get("Tg_preheater", 400.0) 
-    Tg_calcination = x["Tg_calcination"]
-    T_tertiary_nominal = 950.0  # °C
-    
-    # --- FİZİKSEL ENERJİ DAĞILIMI (HEAT PARTITIONING) ---
-    # 1. Birim dönüşümü (ton/h -> kg/h)
+    T_tertiary_nominal = 950.0  
     unit_conversion = 1000.0  
     
-    # 2. Reaksiyon Isı Yükü Ayırımı
-    # Enerjinin ne kadarı gazı ısıtmaya gidiyor (Geri kalanı kalsinasyon reaksiyonuna gider)
     chi_gas = 0.43  
-    
-    # Efektif Gaz Enerjisi
     Q_in_effective = x["Q_in"] * unit_conversion * chi_gas
     
-    # Efektif Isıl Kütle (Fırın Ataleti)
-    rho_V_g_effective = 450.0  # ton
+    rho_V_g_effective = 150.0  
     C_gas = rho_V_g_effective * Cp_g 
+
+    Q_gs_factor = h_gs * A_s 
+    a_gas = (m_air * Cp_g) + (h_c * A_c) + Q_gs_factor
     
-    # --- IMPLICIT DENKLEM KATSAYILARI ---
-    a = (m_air * Cp_g) + (h_c * A_c)
-    b = (m_air * Cp_g * T_tertiary_nominal) + Q_in_effective + (h_c * A_c * Tg_preheater)
+    # Gaz dengesi
+    b_gas = (m_air * Cp_g * T_tertiary_nominal) + Q_in_effective + \
+            (h_c * A_c * Tg_preheater) + (Q_gs_factor * Ts_next)
     
-    # Koşulsuz Kararlı İntegrasyon Adımı (Backward Euler)
-    Tg_next = (C_gas * Tg_calcination + dt * b) / (C_gas + dt * a)
-    
-    x_next["Tg_calcination"] = Tg_next
+    Tg_next = (C_gas * Tg_calcination + dt * b_gas) / (C_gas + dt * a_gas)
+    x_next["Tg_calcination"] = np.clip(Tg_next, 0.0, 1600.0)
     
                 
     # -------------------------
@@ -345,21 +362,7 @@ def step(x, t, regime):
             
     # Gaz fazı için (Enerji korumu gereği gazdan çıkan enerji)
     # Tg_next = Tg - (Q_gs * dt) / Cg
-    x_next["Ts_preheater"] =Ts_next       
-    
-    # -------------------------
-    # Ts_calcination (°C)
-    # -------------------------
-    # effective time constant (zone inertia)
-    tau_s = 2.34  # tuneable but physically meaningful
-
-    target = x["Tg_calcination"]
-
-    x_next["Ts_calcination"] = (
-        x["Ts_calcination"]
-        + (dt / tau_s) * (target - x["Ts_calcination"])
-    )
-        
+    x_next["Ts_preheater"] =Ts_next            
            
     # -------------------------
     # Ts_burning (°C)
@@ -1001,7 +1004,7 @@ x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
 x_current["Ts_preheater"] = 100.0
-x_current["Ts_calcination"] = 750.0
+x_current["Ts_calcination"] = 802.0224
 x_current["Ts_burning"] = 1150.0
 x_current["Ts_Cooling"] = 1450.0
 
