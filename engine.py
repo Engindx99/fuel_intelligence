@@ -204,20 +204,23 @@ def step(x, t, regime):
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
         
 
-    # -------------------------------------------------------------
+# -------------------------------------------------------------
     # Ts_calcination (°C) - Katı Faz (Enerji Alıcı)
     # -------------------------------------------------------------
-    Cp_s = 1050.0          
+    Cp_s = 1050.0            
     m_solid = x["Feed_rate"] 
-    h_gs = 7.2            
-    A_s = 840.0            
+    h_gs = 165.0             
+    A_s = 840.0             
     Ts_calcination = x["Ts_calcination"]
     
-    # Reaksiyon yükü optimizasyonu
+    # Reaksiyon yükü: Sigmoid throttle + Dinamik oran (1000C üstünde tam kapasite)
     delta_H_rxn = 1700.0   
-    kalsinasyon_rate = 0.15 
-    reaction_throttle = 1.0 if Ts_calcination < 850.0 else 0.3
-    Q_calcination_load = m_solid * 1000.0 * kalsinasyon_rate * reaction_throttle * delta_H_rxn if (700.0 < Ts_calcination < 1100.0) else 0.0
+    base_rate = 0.05
+    max_rate = 0.15
+    dynamic_rate = base_rate + (max_rate - base_rate) * (1.0 / (1.0 + np.exp(-0.02 * (Ts_calcination - 1000.0))))
+    reaction_throttle = 1.0 / (1.0 + np.exp(-0.08 * (Ts_calcination - 850.0)))
+    
+    Q_calcination_load = m_solid * 1000.0 * dynamic_rate * reaction_throttle * delta_H_rxn
     
     C_solid = (m_solid * 1000.0) * Cp_s / 3600.0
     a_s = h_gs * A_s
@@ -229,27 +232,27 @@ def step(x, t, regime):
     # -------------------------------------------------------------
     # Tg_calcination (°C) - Gaz Fazı (Enerji Kaynağı)
     # -------------------------------------------------------------
-    Cp_g = 1150.0          
-    A_c = 13.85            
-    h_c = 5.8             
-    m_air = x["Air_flow"] * 0.001293  
+    Cp_g = 1150.0            
+    A_c = 13.85             
+    h_c = 1.5                
+    m_air = x["Air_flow"] * 0.001270  
     
     Tg_preheater = x.get("Tg_preheater", 400.0) 
     T_tertiary_nominal = 950.0  
     unit_conversion = 1000.0  
     
-    chi_gas = 0.48
+    chi_gas = 0.75           
     Q_in_effective = x["Q_in"] * unit_conversion * chi_gas
     
-    rho_V_g_effective = 1000.0  
+    rho_V_g_effective = 1000.0 
     C_gas = rho_V_g_effective * Cp_g 
 
     Q_gs_factor = h_gs * A_s 
     a_gas = (m_air * Cp_g) + (h_c * A_c) + Q_gs_factor
     
-    # Gaz dengesi
+    # Gaz dengesi: Ts_next ile coupled (Bağlı) denge
     b_gas = (m_air * Cp_g * T_tertiary_nominal) + Q_in_effective + \
-            (h_c * A_c * Tg_preheater) + (Q_gs_factor * Ts_next)
+            (h_c * A_c * Tg_preheater) + (Q_gs_factor * Ts_next * 1.02)
     
     Tg_next = (C_gas * Tg_calcination + dt * b_gas) / (C_gas + dt * a_gas)
     x_next["Tg_calcination"] = Tg_next
