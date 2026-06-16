@@ -198,29 +198,48 @@ def step(x, t, regime):
         noise = np.random.normal(0, 1.8)
 
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
+# -------------------------
+    # Tg_calcination (°C) - Fiziksel Enerji Dengesi (dt = 0.05h)
+    # -------------------------
+    Cp_g = 1150.0          # kJ/tonK
+    h_c = 35.0             
+    A_c = 1.0              
+    rho_V_g = 12000.0      
+    eta_comb = 0.85 
 
-    # -------------------------
-    # Tg_calcination (°C) - FİZİKSEL SÜREKLİLİK (ODE Approach)
-    # -------------------------
-    # preheater_val, sistemin gaz fazı giriş referansıdır.
-    preheater_val = x_next.get("Tg_preheater", x.get("Tg_preheater", 400.0))
+    # 1. Kütlesel Debiler (ton/h)
+    # Air_flow Nm³/h -> ton/h dönüşümü
+    m_air = x["Air_flow"] * 0.001293  
     
-    # Fiziksel Zaman Sabiti (Tau): Sistemin ısıl eylemsizliğini temsil eder.
-    # Bu değer ne kadar büyükse, sıcaklık geçişi o kadar yavaş ve yumuşak olur.
-    tau = 2.04 
+    # 2. Durumlar
+    Tg_preheater = x.get("Tg_preheater", 400.0)
+    Tg_calcination = x["Tg_calcination"]
     
-    if t == 0:
-        x_next["Tg_calcination"] = 650.0 # Başlangıç kararlılığı için sabit
-    else:
-        # Fiziksel geçiş: İtici güç (preheater - current) / tau
-        # Bu denklem: dT/dt = (T_target - T_current) / tau şeklinde çalışır.
-        dT = ((preheater_val - x["Tg_calcination"]) / tau) * dt
-        
-        # Gürültü fiziksel sisteme değil, ölçüm çıktısına eklenir
-        noise = np.random.normal(0, 1.5)
-        
-        # Güncel değer, bir önceki değer + fiziksel değişim + gürültü
-        x_next["Tg_calcination"] = x["Tg_calcination"] + dT + noise
+    # 3. Enerji Girdileri (kJ/h)
+    # Q_in zaten toplam ısı girişi (kJ/h)
+    Q_in = x["Q_in"] 
+    
+    # 4. Konvektif taşıma (kJ/h)
+    Q_conv_in = m_air * Cp_g * (Tg_preheater - Tg_calcination) * eta_comb
+    
+    # 5. Toplam Net Enerji (kJ/h)
+    Q_total = Q_conv_in + Q_in
+    
+    # 6. Isıl Eylemsizlik (kJ/K) - Sistemin termal kapasitesi
+    # C_gas ne kadar büyükse sistem o kadar "ağır" tepki verir.
+    C_gas = 1.2e6 
+    
+    # 7. İntegrasyon (Zaman adımıyla ölçeklendirilmiş enerji)
+    # dt (saat) * Q_total (kJ/h) = Toplam Enerji (kJ)
+    # Toplam Enerji (kJ) / C_gas (kJ/K) = Sıcaklık Değişimi (K)
+    delta_Tg = (Q_total * dt) / C_gas
+    
+    # 8. Güncelleme
+    Tg_next = Tg_calcination + delta_Tg + np.random.normal(0, 0.5)
+    
+    # Sınırlandırma (Kendi kendine dengeye oturması için)
+    x_next["Tg_calcination"] = np.clip(Tg_next, 0.0, 1600.0)
+    
                 
     # -------------------------
     # Tg_burning (°C)
