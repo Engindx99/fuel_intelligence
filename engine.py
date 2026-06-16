@@ -73,7 +73,7 @@ def step(x, t, regime):
     # -------------------------
 
     F_min = 2.5
-    F_max = 6.0
+    F_max = 7.0
 
     if t == 0:
         x_next["Fuel_rate"] = F_min
@@ -81,11 +81,11 @@ def step(x, t, regime):
 
         # 1) Smooth target ramp (operational reality)
         F_target = F_min + (F_max - F_min) * (
-            1 / (1 + np.exp(-0.03 * (t - 40)))
+            1 / (1 + np.exp(-0.07 * (t - 14)))
         )
 
         # 2) Physical inertia (1st order lag)
-        tau_F = 18.0  # system response time
+        tau_F = 2.5  # system response time
 
         x_next["Fuel_rate"] = (
             x["Fuel_rate"]
@@ -182,44 +182,45 @@ def step(x, t, regime):
             + (-120.0 + 269.0) * np.exp(-t / 15)
         )
         
-# -------------------------
+    # -------------------------
     # Tg_preheater (°C)
     # -------------------------
     if t == 0:
         x_next["Tg_preheater"] = 399.6
     else:
-        # ... (w, T_pre, T_calc hesaplamalarınız aynı kalıyor) ...
         w_up = 1 / (1 + np.exp(-0.03 * (x["Tg_preheater"] - 847)))
         w_down = 1 / (1 + np.exp(-0.03 * (x["Tg_preheater"] - 835)))
         w = (w_up + w_down) / 2
+
         T_pre = x["Tg_preheater"] + 0.0135 * (0.0131 * x["Air_flow"] - x["Tg_preheater"])
         T_calc = 847 + 0.0135 * ((0.0113 * x["Air_flow"] - 800) * 0.05)
+
         noise = np.random.normal(0, 1.8)
+
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
 
     # -------------------------
-    # Tg_calcination (°C) - DÜZENLENMİŞ SÜREKLİLİK
+    # Tg_calcination (°C) - FİZİKSEL SÜREKLİLİK (ODE Approach)
     # -------------------------
-    # Her adımda Tg_preheater güncellendiği için, kalsinatör girişini doğrudan buradan alıyoruz
-    # Bu, '0.0' değerini görmenizi engelleyecek çünkü preheater zaten tanımlı.
+    # preheater_val, sistemin gaz fazı giriş referansıdır.
     preheater_val = x_next.get("Tg_preheater", x.get("Tg_preheater", 400.0))
-
+    
+    # Fiziksel Zaman Sabiti (Tau): Sistemin ısıl eylemsizliğini temsil eder.
+    # Bu değer ne kadar büyükse, sıcaklık geçişi o kadar yavaş ve yumuşak olur.
+    tau = 2.04 
+    
     if t == 0:
-        x_next["Tg_calcination"] = preheater_val # 0.0 yerine preheater'dan başla
+        x_next["Tg_calcination"] = 650.0 # Başlangıç kararlılığı için sabit
     else:
-        if t <= 36:
-            w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-            P_new = x["Tg_calcination"] + 0.0114 * (1300 - x["Tg_calcination"])
-            noise = np.random.normal(0, 1.5)
-            x_next["Tg_calcination"] = P_new + w * noise
-        else:
-            if t <= 218:
-                noise = np.random.normal(0, 1.5)
-                x_next["Tg_calcination"] = x["Tg_calcination"] + noise
-            else:
-                noise = np.random.normal(0, 1.5)
-                # 'ref' olarak artık preheater'ın güncel değerini kullanıyoruz
-                x_next["Tg_calcination"] = preheater_val + noise
+        # Fiziksel geçiş: İtici güç (preheater - current) / tau
+        # Bu denklem: dT/dt = (T_target - T_current) / tau şeklinde çalışır.
+        dT = ((preheater_val - x["Tg_calcination"]) / tau) * dt
+        
+        # Gürültü fiziksel sisteme değil, ölçüm çıktısına eklenir
+        noise = np.random.normal(0, 1.5)
+        
+        # Güncel değer, bir önceki değer + fiziksel değişim + gürültü
+        x_next["Tg_calcination"] = x["Tg_calcination"] + dT + noise
                 
     # -------------------------
     # Tg_burning (°C)
@@ -319,7 +320,7 @@ def step(x, t, regime):
     # Ts_calcination (°C)
     # -------------------------
     # effective time constant (zone inertia)
-    tau_s = 55.0  # tuneable but physically meaningful
+    tau_s = 2.34  # tuneable but physically meaningful
 
     target = x["Tg_calcination"]
 
@@ -952,7 +953,7 @@ x_current["CO_ppm"] = 900.0
 # -------------------------
 
 x_current["Tg_preheater"] = 400.0
-x_current["Tg_calcination"] = 600.0
+x_current["Tg_calcination"] = 650.0
 x_current["Tg_burning"] = 1200.0
 x_current["Tg_Cooling"] = 1590.0
 
@@ -969,7 +970,7 @@ x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
 x_current["Ts_preheater"] = 100.0
-x_current["Ts_calcination"] = 450.0
+x_current["Ts_calcination"] = 550.0
 x_current["Ts_burning"] = 1100.0
 x_current["Ts_Cooling"] = 1450.0
 
