@@ -198,7 +198,8 @@ def step(x, t, regime):
         noise = np.random.normal(0, 1.8)
 
         x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
-# -------------------------
+        
+    # -------------------------
     # Tg_calcination (°C) - Fiziksel Enerji Dengesi (dt = 0.05h)
     # -------------------------
     Cp_g = 1150.0          # kJ/tonK
@@ -237,8 +238,7 @@ def step(x, t, regime):
     # 8. Güncelleme
     Tg_next = Tg_calcination + delta_Tg + np.random.normal(0, 0.5)
     
-    # Sınırlandırma (Kendi kendine dengeye oturması için)
-    x_next["Tg_calcination"] = np.clip(Tg_next, 0.0, 1600.0)
+    x_next["Tg_calcination"] = Tg_next
     
                 
     # -------------------------
@@ -323,17 +323,32 @@ def step(x, t, regime):
         )
             
     #===================================== Solid Phase =====================================
-    
     # -------------------------
-    # Ts_preheater (°C)
+    # Tg_preheater (°C)
     # -------------------------
-    if t == 0:
-        x_next["Ts_preheater"] = 101.6
-    else:
-        x_next["Ts_preheater"] = (
-            x["Ts_preheater"]
-            + 0.0081 * (x["Tg_preheater"] - x["Ts_preheater"])
-        )
+    Tg = x["Tg_preheater"]
+    Ts = x["Ts_preheater"]
+            
+    # 2. Fiziksel Parametreler
+    h_gs = 96.0  # kJ/h*m2*C - Gaz-katı arası etkili ısı transfer katsayısı
+    A_gs = 50.0  # m2 - Temas yüzey alanı (fırın boyutuna göre değişir)
+            
+    # 3. Enerji Transferi (kJ/h)
+    Q_gs = h_gs * A_gs * (Tg - Ts)
+            
+    # 4. Katı Faz Enerji Dengesi (Isıl Eylemsizlik ile)
+    # Cs: Katının toplam ısıl kapasitesi (kJ/K)
+    Cs = 1.0e5 
+            
+    # dT/dt = Q / Cs
+    dTs_dt = Q_gs / Cs
+            
+    # 5. Güncelleme
+    Ts_next = Ts + (dTs_dt * dt)
+            
+    # Gaz fazı için (Enerji korumu gereği gazdan çıkan enerji)
+    # Tg_next = Tg - (Q_gs * dt) / Cg
+    x_next["Ts_preheater"] =Ts_next       
     
     # -------------------------
     # Ts_calcination (°C)
@@ -972,8 +987,8 @@ x_current["CO_ppm"] = 900.0
 # -------------------------
 
 x_current["Tg_preheater"] = 400.0
-x_current["Tg_calcination"] = 650.0
-x_current["Tg_burning"] = 1200.0
+x_current["Tg_calcination"] = 846.531
+x_current["Tg_burning"] = 1250.0
 x_current["Tg_Cooling"] = 1590.0
 
 
@@ -989,8 +1004,8 @@ x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
 x_current["Ts_preheater"] = 100.0
-x_current["Ts_calcination"] = 550.0
-x_current["Ts_burning"] = 1100.0
+x_current["Ts_calcination"] = 750.0
+x_current["Ts_burning"] = 1150.0
 x_current["Ts_Cooling"] = 1450.0
 
 # -------------------------
@@ -1030,8 +1045,6 @@ results_list.append(initial_record)
 # 2. SİMÜLASYON DÖNGÜSÜNDEKİ BAĞLANTI (SUB-STEP PHYSICS)
 # ==============================================================================
 
-# ... (Önceki tanımlamalar, INIT işlemleri ve boş results_list)
-
 sim_time = 0.0
 
 for t_idx in range(N - 1):
@@ -1045,29 +1058,26 @@ for t_idx in range(N - 1):
     x_current["Feed_rate"] = inputs["Feed_rate"]
     x_current["Regime"] = current_regime 
 
-    # 2) SUB-STEP PHYSICS: Kendi fonksiyonunuzun çağrıldığı yer
+    # 2) SUB-STEP PHYSICS: Fiziksel hesaplama adımları
+    # Fonksiyon, her sub-step'te x_current'i günceller
     for sub in range(STEPS_PER_REPORT):
+        # step_time artık sadece kayıt için değil, fonksiyon içindeki fiziksel mantık için referans
         step_time = sim_time + dt * (sub + 1)
-        
-        # Fonksiyonunuz güncel durumu, zamanı ve rejimi alıp, hesaplanmış YENİ durumu döndürür
         x_current = step(x_current, step_time, current_regime)
 
-    # 3) ZAMAN İLERLETME VE KAYIT
+    # 3) ZAMAN İLERLETME
     sim_time += reporting_dt
     
-    # x_current'in değerlerini değer bazında (by value) listeye ekliyoruz
+    # 4) SAVE OUTPUT: Sadece tek bir kayıt işlemi (Double-counting hatası giderildi)
     record = x_current.copy()
     record["t"] = sim_time
     results_list.append(record)
 
-    # 5) SAVE OUTPUT: Her adımı listeye atıyoruz (pandas .iloc atamasından O(1) düzeyinde daha hızlıdır)
-    record = x_current.copy()
-    record["t"] = sim_time
-    results_list.append(record)
-
-# Döngü bittiğinde tüm sonuçları tek seferde DataFrame'e geçiriyoruz (Performans optimizasyonu)
+# Döngü bittiğinde sonuçları DataFrame'e geçiriyoruz
 df_results = pd.DataFrame(results_list)
-# Orijinal df formatına uydurmak için:
+
+# Eğer df_results index'leri 0'dan başlıyorsa ve df ile hizalamak istiyorsanız:
+# df_results.index = df.index[:len(df_results)]
 df.update(df_results)
 
 # ==============================
