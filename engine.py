@@ -75,51 +75,71 @@ def step(x, t, regime):
         1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
     )
     
-    # -------------------------
-    # Fuel_rate (ton/h)
-    # -------------------------
-
-    F_min = 2.5
-    F_max = 7.0
-
-    if t == 0:
-        x_next["Fuel_rate"] = F_min
-    else:
-
-        # 1) Smooth target ramp (operational reality)
-        F_target = F_min + (F_max - F_min) * (
-            1 / (1 + np.exp(-0.07 * (t - 14)))
-        )
-
-        # 2) Physical inertia (1st order lag)
-        tau_F = 2.5  # system response time
-
-        x_next["Fuel_rate"] = (
-            x["Fuel_rate"]
-            + (dt / tau_F) * (F_target - x["Fuel_rate"])
-        )
-
-        # 3) Safety bounds (physical + operational limits)
-        x_next["Fuel_rate"] = np.clip(
-            x_next["Fuel_rate"],
-            F_min,
-            F_max
-        )
+# -------------------------------------------------------------
+    # Fuel_rate Hesaplaması (Sınırsız Doğal Dinamikler)
+    # -------------------------------------------------------------
+    
+    # 1. Efektif Yakıt Isıl Değeri Hesaplaması (Dynamic LHV)
+    LHV_mix_kg = (
+        x_next.get("Lignite_Coal", 0.0) * 15000.0
+        + x_next.get("Petcoke", 1.0) * 30000.0
+        + x_next.get("Alternative_Fuel", 0.0) * 18000.0
+    )
+    
+    # O2 bazlı yanma verimi
+    combustion_eff = np.exp(-((x_next.get("O2", 3.5) - 3.5) ** 2) / 25.0)
+    
+    # Sisteme giren net kullanılabilir enerji (kJ/ton_yakıt)
+    LHV_effective_ton = LHV_mix_kg * 1000.0 * combustion_eff
+    
+    # 2. Termodinamik Reaksiyon Tabanlı Yakıt Talebi (İleri Besleme)
+    m_calc_rate = x.get("r_calcination", 0.0) 
+    Delta_H_calc = 1.78e6  # kJ / ton_CaCO3
+    eta_kiln = 0.65        # Fırın termal verimlilik faktörü
+    
+    calcination_fuel_demand = (m_calc_rate * Delta_H_calc) / ((LHV_effective_ton * eta_kiln) + 1e-6)
+    
+    # 3. Klinkerizasyon Sıcaklık Kararlılığı (Geri Besleme)
+    T_sinter_setpoint = 1450.0
+    Ts_error = T_sinter_setpoint - x.get("Ts_burning", 1400.0)
+    clinker_feedback = Ts_error * 0.03  
+    
+    # 4. Soğutucu Isı Geri Kazanım Katalizörü
+    Tg_air = x.get("Tg_Cooling", 400.0)
+    cooling_benefit = max((Tg_air - 500.0) * 0.0015, 0.0)
+    
+    # 5. Rejim Bazlı Ekzotermik Katkı
+    chemical_exothermic_benefit = 0.0
+    if current_regime in ["R5_EARLY_CLINKERIZATION", "R6_STEADY_CLINKERIZATION"]:
+        chemical_exothermic_benefit = 0.25 
+        
+    # Toplam Dinamik Yakıt Talebi
+    base_loss_fuel = 1.5 
+    fuel_demand = (
+        base_loss_fuel 
+        + calcination_fuel_demand 
+        + clinker_feedback 
+        - cooling_benefit 
+        - chemical_exothermic_benefit
+    )
+    
+    tau_F = 3.0  
+    x_next["Fuel_rate"] = x["Fuel_rate"] + (dt / tau_F) * (fuel_demand - x["Fuel_rate"])
      
-    # -------------------------
-    # O2 (%)
-    # -------------------------
+    # -------------------------------------------------------------
+    # O2 (%) Dinamikleri
+    # -------------------------------------------------------------
     if t == 0:
         x_next["O2"] = 6.0
     else:
+        # Hava/Yakıt oranı hesabı
         air_fuel_ratio = x_next["Air_flow"] / (x_next["Fuel_rate"] + 1e-6)
-
+        
+        # Yanma kimyası eğrisi bazlı hedef O2 tahmini
         target_O2 = 2.5 + 4.5 * np.exp(-1.2 / (air_fuel_ratio + 1e-3))
-
-        x_next["O2"] = (
-            x["O2"]
-            + 0.15 * (target_O2 - x["O2"])
-        )
+        
+        # Baca fanı ataleti ve gaz akış gecikmesi
+        x_next["O2"] = x["O2"] + 0.15 * (target_O2 - x["O2"])
     
     
     # -------------------------
@@ -402,15 +422,15 @@ def step(x, t, regime):
     Cp_s = 1150.0            
     T_air_in = 25.0          
     C_gas_cool = 200000.0    
-    C_solid_cool = 250000.0  
+    C_solid_cool = 220.000 
 
     # 2. Debiler ve Rezidans Faktörü
-    m_gas = x.get("Cooling_air_flow", 10000.0) * 0.001293 * 0.6
+    m_gas = x.get("Cooling_air_flow", 10000.0) * 0.001293 * 0.5
     m_solid = x.get("Feed_rate", 100.0)
     
     # Residence süresi arttıkça soğutucu verimi (epsilon) artar
     res_val = x_next.get("Residence", 1.0)
-    epsilon = min(0.7 * (res_val / 30.0), 0.9) # Max %90 verim
+    epsilon = min(0.75 * (res_val / 30.0), 0.9) # Max %90 verim
     
     # 3. Enerji Transferi ve Kayıplar
     # Maksimum potansiyel enerji transferi (Q_max)
