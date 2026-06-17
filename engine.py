@@ -186,22 +186,45 @@ def step(x, t, regime):
             + (-120.0 + 269.0) * np.exp(-t / 15)
         )
         
-    # -------------------------
-    # Tg_preheater (°C)
-    # -------------------------
-    if t == 0:
-        x_next["Tg_preheater"] = 399.6
-    else:
-        w_up = 1 / (1 + np.exp(-0.03 * (x["Tg_preheater"] - 847)))
-        w_down = 1 / (1 + np.exp(-0.03 * (x["Tg_preheater"] - 835)))
-        w = (w_up + w_down) / 2
+    # -------------------------------------------------------------
+    # Sabitlerin Tanımlanması (Zon Başında)
+    # -------------------------------------------------------------
+    Cp_g = 1150.0            
+    Cp_s = 1000.0            
+    T_ambient = 25.0         
+    
+    
+    C_gas_pre = 200000.0
+    C_solid_pre = 300000.0
+    
+    # -------------------------------------------------------------
+    # Orijinal Debi Değerlerine Dönüş (Enerji Açlığını Giderdik)
+    # -------------------------------------------------------------
+    m_gas = x["Air_flow"] * 0.001293
+    m_solid = x["Feed_rate"]
+    
+    # UA_pre (Genel Isı Transfer Katsayısı)
+    # Bu değer gazın ısısını katıya ne kadar agresif geçirdiğini belirler.
+    # Monoton azalma bittikten sonra gaz çok sıcak kalırsa bu değeri ARTIR (örn: 60000, 80000)
+    UA_pre = 570000 
+    
+    # -------------------------------------------------------------
+    # Tg_preheater (°C) - Gaz Fazı
+    # -------------------------------------------------------------
+    a_gas_pre = (m_gas * Cp_g) + UA_pre
+    b_gas_pre = (m_gas * Cp_g * x["Tg_burning"]) + (UA_pre * x["Ts_preheater"])
+    
+    Tg_next_pre = (C_gas_pre * x["Tg_preheater"] + dt * b_gas_pre) / (C_gas_pre + dt * a_gas_pre)
+    x_next["Tg_preheater"] = Tg_next_pre
 
-        T_pre = x["Tg_preheater"] + 0.0135 * (0.0131 * x["Air_flow"] - x["Tg_preheater"])
-        T_calc = 847 + 0.0135 * ((0.0113 * x["Air_flow"] - 800) * 0.05)
-
-        
-
-        x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w
+    # -------------------------------------------------------------
+    # Ts_preheater (°C) - Katı Faz
+    # -------------------------------------------------------------
+    a_s_pre = (m_solid * Cp_s) + UA_pre
+    b_s_pre = (m_solid * Cp_s * T_ambient) + (UA_pre * Tg_next_pre)
+    
+    Ts_next_pre = (C_solid_pre * x["Ts_preheater"] + dt * b_s_pre) / (C_solid_pre + dt * a_s_pre)
+    x_next["Ts_preheater"] = Ts_next_pre
         
 
     # -------------------------------------------------------------
@@ -315,15 +338,7 @@ def step(x, t, regime):
     if Ts_next > (Tg_next - target_gap):
         Ts_next = Tg_next - target_gap
     
-    x_next["Ts_burning"] = Ts_next
-    
-    
-    
-               
-               
-               
-               
-                            
+    x_next["Ts_burning"] = Ts_next                   
                 
     # -------------------------
     # dTg_burning
@@ -373,32 +388,6 @@ def step(x, t, regime):
         )
             
     #===================================== Solid Phase =====================================
-    # -------------------------
-    # Tg_preheater (°C)
-    # -------------------------
-    Tg = x["Tg_preheater"]
-    Ts = x["Ts_preheater"]
-            
-    # 2. Fiziksel Parametreler
-    h_gs = 96.0  # kJ/h*m2*C - Gaz-katı arası etkili ısı transfer katsayısı
-    A_gs = 50.0  # m2 - Temas yüzey alanı (fırın boyutuna göre değişir)
-            
-    # 3. Enerji Transferi (kJ/h)
-    Q_gs = h_gs * A_gs * (Tg - Ts)
-            
-    # 4. Katı Faz Enerji Dengesi (Isıl Eylemsizlik ile)
-    # Cs: Katının toplam ısıl kapasitesi (kJ/K)
-    Cs = 1.0e5 
-            
-    # dT/dt = Q / Cs
-    dTs_dt = Q_gs / Cs
-            
-    # 5. Güncelleme
-    Ts_next = Ts + (dTs_dt * dt)
-            
-    # Gaz fazı için (Enerji korumu gereği gazdan çıkan enerji)
-    # Tg_next = Tg - (Q_gs * dt) / Cg
-    x_next["Ts_preheater"] =Ts_next            
         
        
     # -------------------------
