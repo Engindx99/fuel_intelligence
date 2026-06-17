@@ -4,24 +4,24 @@ import math
 
 columns = [
     "t",
-    "Regime","Lignite_Coal","Petcoke","Alternative_Fuel",
-    "Feed_rate","Kiln_solid_out","Material_acc","Clinker_output",
-    "Air_flow","Cooler_air_flow","ID_fan_speed","Fuel_rate",
-    "Tg_preheater","Ts_preheater","Tg_calcination","Ts_calcination",
-    "Tg_burning","Ts_burning","Tg_Cooling","Ts_Cooling",
-    "O2","CO_ppm",
-    "P_preheater","P_calcination","P_burning",
+    "Regime", "Lignite_Coal", "Petcoke", "Alternative_Fuel",
+    "Feed_rate", "Kiln_solid_out", "Material_acc", "Clinker_output",
+    "Air_flow", "Cooling_air_flow", "ID_fan_speed", "Fuel_rate",
+    "Tg_preheater", "Ts_preheater", "Tg_calcination", "Ts_calcination",
+    "Tg_burning", "Ts_burning", "Tg_Cooling", "Ts_Cooling",
+    "O2", "CO_ppm",
+    "P_preheater", "P_calcination", "P_burning",
     "Damper_position",
-    "CaCO3","CaO","CO2","SiO2","Al2O3","Fe2O3",
+    "CaCO3", "CaO", "CO2", "SiO2", "Al2O3", "Fe2O3",
     "LSF",
-    "C3A","C4AF","C2S","C3S",
-    "dC2S","dC3S","dC3A","dC4AF","dCaO_calcination",
+    "C3A", "C4AF", "C2S", "C3S",
+    "dC2S", "dC3S", "dC3A", "dC4AF", "dCaO_calcination",
     "Mass_Balance_Error",
-    "kiln_rpm","Filling_rate","Residence",
-    "Q_in","Q_out","Q_acc","Q_loss","Q_reaction","Q_gas","Q_clinker",
+    "kiln_rpm", "Filling_rate", "Residence",
+    "Q_in", "Q_out", "Q_acc", "Q_loss", "Q_reaction", "Q_gas", "Q_clinker",
     "Clinker_yield",
-    "dTg_burning","dFuel_rate",
-    "Normalized_Energy_Index","Global_Energy_Closure","Energy_error"
+    "dTg_burning", "dFuel_rate",
+    "Normalized_Energy_Index", "Global_Energy_Closure", "Energy_error"
 ]
 
 # 2. INIT DATA
@@ -56,11 +56,14 @@ df["Regime"] = regime_list
 def step(x, t, regime):
 
     x_next = x.copy()
+    
     Tg_calcination = x["Tg_calcination"]
     Ts_calcination = x["Ts_calcination"]
     Tg_preheater   = x.get("Tg_preheater", 400.0)
     m_air          = x["Air_flow"] * 0.001293
     m_solid        = x["Feed_rate"]
+    
+    x_next["Cooling_air_flow"] = x["Feed_rate"] * 4000.0
     #===================================== INPUTS =====================================
     
     # -------------------------
@@ -173,6 +176,61 @@ def step(x, t, regime):
             33.0
             + (85.0 - 33.0) * np.exp(-dt / 25)
         )
+        
+    
+    # -------------------------
+    # kiln_rpm
+    # -------------------------
+    if t == 0:
+        x_next["kiln_rpm"] = 0.1
+    else:
+
+        coeff = {
+            "R1_HEATING_STABILIZATION": 0.55,
+            "R2_EARLY_CALCINATION": 0.70,
+            "R3_ACTIVE_CALCINATION": 0.80,
+            "R4_TRANSITION_TO_CLINKERIZATION": 0.90,
+            "R5_EARLY_CLINKERIZATION": 0.95,
+            "R6_STEADY_CLINKERIZATION": 1.00,
+            "R7_FUEL_SWITCH_TRANSIENT": 1.05,
+            "R8_RESTABILIZATION": 0.85,
+        }.get(regime, 1.0)
+
+        coeff *= (1 - np.exp(-0.02 * t))
+
+        x_next["kiln_rpm"] = (
+            0.1
+            + (
+                x_next["Fuel_rate"]
+                + (6 - x_next["Fuel_rate"])
+                * (1 - np.exp(-0.00041 * t))
+                * coeff
+            )
+            * 0.8
+            * (1 - np.exp(-0.01 * t))
+        )
+
+    # -------------------------
+    # Filling_rate
+    # -------------------------
+    x_next["Filling_rate"] = 0.1
+    
+    # -------------------------
+    # Residence (min)
+    # -------------------------
+
+    if t == 0:
+        x_next["Residence"] = 1e-6
+    else:
+
+        kiln_rpm = max(x_next["kiln_rpm"], 1e-6)
+        feed = max(x_next["Feed_rate"], 1e-6)
+
+        x_next["Residence"] = (
+            (0.37 * 60)
+            / (4.2 * kiln_rpm * math.tan(math.atan(3 / 100)))
+            * (feed / 120) ** (-0.6)
+        )
     #===================================== Operational Zones =====================================
     
     # -------------------------
@@ -193,20 +251,13 @@ def step(x, t, regime):
     Cp_s = 1000.0            
     T_ambient = 25.0         
     
-    
     C_gas_pre = 200000.0
     C_solid_pre = 300000.0
-    
-    # -------------------------------------------------------------
-    # Orijinal Debi Değerlerine Dönüş (Enerji Açlığını Giderdik)
-    # -------------------------------------------------------------
+
     m_gas = x["Air_flow"] * 0.001293
     m_solid = x["Feed_rate"]
     
-    # UA_pre (Genel Isı Transfer Katsayısı)
-    # Bu değer gazın ısısını katıya ne kadar agresif geçirdiğini belirler.
-    # Monoton azalma bittikten sonra gaz çok sıcak kalırsa bu değeri ARTIR (örn: 60000, 80000)
-    UA_pre = 570000 
+    UA_pre = 570000 # (Genel Isı Transfer Katsayısı)
     
     # -------------------------------------------------------------
     # Tg_preheater (°C) - Gaz Fazı
@@ -282,7 +333,7 @@ def step(x, t, regime):
     
                 
     # -------------------------------------------------------------
-    # Tg_burning (°C) - Gaz Fazı (Zayıf Eşlemeli / Serbest Tırmanış)
+    # Tg_burning (°C)
     # -------------------------------------------------------------
     Cp_g = 1250.0            
     A_c = 13.85
@@ -311,7 +362,7 @@ def step(x, t, regime):
     x_next["Tg_burning"] = Tg_next
  
     # -------------------------------------------------------------
-    # Ts_burning (°C) - Kararlı 1450°C Hedefli Denge
+    # Ts_burning (°C)
     # -------------------------------------------------------------
     Cp_s = 1150.0            
     m_solid = x["Feed_rate"]
@@ -338,7 +389,76 @@ def step(x, t, regime):
     if Ts_next > (Tg_next - target_gap):
         Ts_next = Tg_next - target_gap
     
-    x_next["Ts_burning"] = Ts_next                   
+    x_next["Ts_burning"] = Ts_next
+    
+    
+
+    # -------------------------------------------------------------
+    # Cooling Zone - Epsilon-NTU Tabanlı Verimlilik Modeli
+    # -------------------------------------------------------------
+    
+    # 1. Fiziksel Sabitler
+    Cp_g = 1150.0            
+    Cp_s = 1150.0            
+    T_air_in = 25.0          
+    C_gas_cool = 200000.0    
+    C_solid_cool = 250000.0  
+
+    # 2. Debiler ve Rezidans Faktörü
+    m_gas = x.get("Cooling_air_flow", 10000.0) * 0.001293 * 0.6
+    m_solid = x.get("Feed_rate", 100.0)
+    
+    # Residence süresi arttıkça soğutucu verimi (epsilon) artar
+    res_val = x_next.get("Residence", 1.0)
+    epsilon = min(0.7 * (res_val / 30.0), 0.9) # Max %90 verim
+    
+    # 3. Enerji Transferi ve Kayıplar
+    # Maksimum potansiyel enerji transferi (Q_max)
+    delta_T_max = x.get("Ts_burning", 1400.0) - T_air_in
+    Q_max = m_solid * Cp_s * delta_T_max
+    
+    # Gerçek transfer edilen enerji (Epsilon * Q_max)
+    Q_transfer = epsilon * Q_max
+    
+    # Çevreye giden ısı kaybı (Radyasyon/Konveksiyon)
+    Q_loss_cooler = 150000.0 * (x.get("Ts_Cooling", 400.0) - 25.0)
+    
+    # -------------------------------------------------------------
+    # Dinamik Denklemler
+    # -------------------------------------------------------------
+    
+    # Gaz (Tg) denklemi:
+    # Gazın enerji dengesi: (Masaüstü kütlesi * Cp * T_in) + Gelen Isı
+    # a_g_cool'u sadece gazın kendi akış kapasitesine indirgedik (sıkışma bitti)
+    a_g_cool = (m_gas * Cp_g)
+    b_g_cool = (m_gas * Cp_g * T_air_in) + Q_transfer
+    
+    Tg_next_cool = (C_gas_cool * x.get("Tg_Cooling", 25.0) + dt * b_g_cool) / (C_gas_cool + dt * a_g_cool)
+    x_next["Tg_Cooling"] = Tg_next_cool
+    
+    # Katı (Ts) denklemi:
+    # Katı, giriş sıcaklığından gelir, transfer edilen ısıyı ve kayıpları düşeriz
+    a_s_cool = (m_solid * Cp_s)
+    
+    # Normalize edilmiş ısı kaybı
+    heat_loss_term = Q_loss_cooler / (m_solid * Cp_s + 1e-6)
+    b_s_cool = (m_solid * Cp_s * x.get("Ts_burning", 1400.0)) - Q_transfer - heat_loss_term
+    
+    Ts_next_cool = (C_solid_cool * x.get("Ts_Cooling", 400.0) + dt * b_s_cool) / (C_solid_cool + dt * a_s_cool)
+    x_next["Ts_Cooling"] = Ts_next_cool
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+                       
                 
     # -------------------------
     # dTg_burning
@@ -351,19 +471,6 @@ def step(x, t, regime):
             x_next["Tg_burning"]
             - x["Tg_burning"]
         ) / dt         
-    
-    #-------------------------
-    # Tg_Cooling
-    #-------------------------
-    if t == 0:
-        x_next["Tg_Cooling"] = x["Tg_burning"]
-    else:
-        if t <= 36:
-            w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-            T_new = x["Tg_Cooling"] + 0.0183 * (140 - x["Tg_Cooling"])
-            x_next["Tg_Cooling"] = T_new
-        else:
-            x_next["Tg_Cooling"] = x["Tg_Cooling"]
             
         
     # -------------------------
@@ -387,28 +494,7 @@ def step(x, t, regime):
             + 0.25 * (target_CO - x["CO_ppm"])
         )
             
-    #===================================== Solid Phase =====================================
-        
-       
-    # -------------------------
-    # Ts_Cooling (°C)
-    # -------------------------
-    if t == 0:
-        x_next["Ts_Cooling"] = x["Ts_Cooling"]
-    else:
 
-        w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-
-        # cooling relaxation toward ambient (~100°C)
-        U_new = x["Ts_Cooling"] - 0.01295 * (x["Ts_Cooling"] - 100)
-        
-
-        if t <= 36:
-            x_next["Ts_Cooling"] = U_new
-        elif t <= 218:
-            x_next["Ts_Cooling"] = x["Ts_Cooling"] 
-        else:
-            x_next["Ts_Cooling"] = x["Ts_Cooling"]
             
     #===================================== Reactions =====================================
     
@@ -780,59 +866,6 @@ def step(x, t, regime):
         x_next["Mass_Balance_Error"] = (
             Ca_balance + Si_balance + Al_balance + Fe_balance
         )
-    # -------------------------
-    # kiln_rpm
-    # -------------------------
-    if t == 0:
-        x_next["kiln_rpm"] = 0.1
-    else:
-
-        coeff = {
-            "R1_HEATING_STABILIZATION": 0.55,
-            "R2_EARLY_CALCINATION": 0.70,
-            "R3_ACTIVE_CALCINATION": 0.80,
-            "R4_TRANSITION_TO_CLINKERIZATION": 0.90,
-            "R5_EARLY_CLINKERIZATION": 0.95,
-            "R6_STEADY_CLINKERIZATION": 1.00,
-            "R7_FUEL_SWITCH_TRANSIENT": 1.05,
-            "R8_RESTABILIZATION": 0.85,
-        }.get(regime, 1.0)
-
-        coeff *= (1 - np.exp(-0.02 * t))
-
-        x_next["kiln_rpm"] = (
-            0.1
-            + (
-                x_next["Fuel_rate"]
-                + (6 - x_next["Fuel_rate"])
-                * (1 - np.exp(-0.00041 * t))
-                * coeff
-            )
-            * 0.8
-            * (1 - np.exp(-0.01 * t))
-        )
-
-    # -------------------------
-    # Filling_rate
-    # -------------------------
-    x_next["Filling_rate"] = 0.1
-    
-    # -------------------------
-    # Residence (min)
-    # -------------------------
-
-    if t == 0:
-        x_next["Residence"] = 1e-6
-    else:
-
-        kiln_rpm = max(x_next["kiln_rpm"], 1e-6)
-        feed = max(x_next["Feed_rate"], 1e-6)
-
-        x_next["Residence"] = (
-            (0.37 * 60)
-            / (4.2 * kiln_rpm * math.tan(math.atan(3 / 100)))
-            * (feed / 120) ** (-0.6)
-        )
 
     # -------------------------
     # Q_acc (kJ/kg)
@@ -1002,7 +1035,7 @@ x_current["Tg_Cooling"] = 1582.903
 
 
 x_current["Air_flow"] = 50000.0
-x_current["Cooler_air_flow"] = 10000.0
+x_current["Cooling_air_flow"] = 10000.0
 x_current["ID_fan_speed"] = 900.0
 
 # -------------------------
