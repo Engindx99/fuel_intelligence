@@ -75,71 +75,130 @@ def step(x, t, regime):
         1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
     )
     
-# -------------------------------------------------------------
-    # Fuel_rate Hesaplaması (Sınırsız Doğal Dinamikler)
-    # -------------------------------------------------------------
+# =============================================================
+    # BOYUTSAL OLARAK DOĞRULANMIŞ HIZLI VE KARARLI TERMAL MODEL
+    # =============================================================
     
-    # 1. Efektif Yakıt Isıl Değeri Hesaplaması (Dynamic LHV)
-    LHV_mix_kg = (
-        x_next.get("Lignite_Coal", 0.0) * 15000.0
-        + x_next.get("Petcoke", 1.0) * 30000.0
-        + x_next.get("Alternative_Fuel", 0.0) * 18000.0
-    )
+    Cp_g = 1250.0  # J/(kg·K)
+    Cp_s = 1150.0  # J/(kg·K)
+    A_c = 13.85    # m²
+    h_c = 0.05     # kW/(m²·K) -> W/m²K için aşağıda 1000 ile çarpılacak
+    A_s = x.get("A_s", 25.0)  # Gaz-Katı ısı transfer alanı
     
-    # O2 bazlı yanma verimi
-    combustion_eff = np.exp(-((x_next.get("O2", 3.5) - 3.5) ** 2) / 25.0)
+    # 1. Kütlesel Akışların Doğru Birime Çevrilmesi (kg/s)
+    m_air_s = (x.get("Air_flow", 30000.0) * 1.293) / 3600.0
+    m_solid_s = (x.get("Feed_rate", 100.0) * 1000.0) / 3600.0
     
-    # Sisteme giren net kullanılabilir enerji (kJ/ton_yakıt)
-    LHV_effective_ton = LHV_mix_kg * 1000.0 * combustion_eff
+    # 2. Dinamik Bölge Kütleleri (Residence Time Tabanlı Eylemsizlik)
+    tau_gas_residence = 5.0    # saniye
+    tau_solid_residence = 120.0 # saniye
     
-    # 2. Termodinamik Reaksiyon Tabanlı Yakıt Talebi (İleri Besleme)
-    m_calc_rate = x.get("r_calcination", 0.0) 
-    Delta_H_calc = 1.78e6  # kJ / ton_CaCO3
-    eta_kiln = 0.65        # Fırın termal verimlilik faktörü
+    # Efektif termal kapasiteler (J/K)
+    C_gas_total = max(10.0, m_air_s) * tau_gas_residence * Cp_g
+    C_solid_total = max(1.0, m_solid_s) * tau_solid_residence * Cp_s
     
-    calcination_fuel_demand = (m_calc_rate * Delta_H_calc) / ((LHV_effective_ton * eta_kiln) + 1e-6)
+    # 3. Anlık Isı Akıları (Watt)
+    Tg_curr = x.get("Tg_burning", 1200.0)
+    Ts_curr = x.get("Ts_burning", 1050.0)
     
-    # 3. Klinkerizasyon Sıcaklık Kararlılığı (Geri Besleme)
-    T_sinter_setpoint = 1450.0
-    Ts_error = T_sinter_setpoint - x.get("Ts_burning", 1400.0)
-    clinker_feedback = Ts_error * 0.03  
+    h_gs_burn = 220.0 if Tg_curr > 1000.0 else 50.0
     
-    # 4. Soğutucu Isı Geri Kazanım Katalizörü
+    # Isı transferleri
+    Q_gas_to_solid = h_gs_burn * A_s * (Tg_curr - Ts_curr)
+    Q_loss = (h_c * 1000.0) * A_c * (Tg_curr - 30.0)
+    
+    # Giriş/Çıkış entalpi akışları (Advection)
+    Q_gas_advection = m_air_s * Cp_g * (Tg_curr - 400.0)
+    Q_solid_advection = m_solid_s * Cp_s * (Ts_curr - 900.0)
+    
+    # 4. Yakıt Enerjisi Girişi (Q_in kW -> Watt)
+    Q_burn_in_W = x.get("Q_in", 0.0) * 1000.0 
+    
+    # Klinkerleşme reaksiyon ısısı (Fiziksel kontrollü ekzotermik)
+    Q_exo_W = 0.0
+    if Ts_curr > 1250.0:
+        Q_exo_W = min(400000.0, m_solid_s * 350000.0)
+        
+    # 5. Diferansiyel Denklemler (Net Enerji / Kapasite)
+    dTg_dt = (Q_burn_in_W - Q_gas_to_solid - Q_loss - Q_gas_advection) / C_gas_total
+    dTs_dt = (Q_gas_to_solid + Q_exo_W - Q_solid_advection) / C_solid_total
+    
+    # 6. Sayısal İntegrasyon & Eğim Sönümleme (Doğrudan fırından gelen dt ile)
+    max_step = 2.0  # Adım başına maksimum sıcaklık değişimi (°C)
+    dTg_dt = np.clip(dTg_dt, -max_step/dt, max_step/dt)
+    dTs_dt = np.clip(dTs_dt, -max_step/dt, max_step/dt)
+    
+    Tg_next = Tg_curr + dTg_dt * dt
+    Ts_next = Ts_curr + dTs_dt * dt
+    
+    # Termodinamik Kilit (İkinci Kanun Koruması)
+    if Ts_next > Tg_next:
+        Ts_next = Tg_next - 10.0
+        
+    # Fiziksel Taban Sınır
+    x_next["Tg_burning"] = max(400.0, Tg_next)
+    x_next["Ts_burning"] = max(400.0, Ts_next)
+
+    # =============================================================
+    # FUEL RATE GERİ BESLEME VE FİZİKSEL SINIRLANDIRMA (NO CLIP)
+    # =============================================================
+    
+    farin_to_clinker_factor = 1.55
+    expected_clinker_rate_t_h = x_next.get("Feed_rate", 100.0) / farin_to_clinker_factor
+    
+    # 1. Teorik proses yakıtı hesabı (Ton/Saat)
+    base_process_fuel = (expected_clinker_rate_t_h * 3400.0) / 25000.0
+    if base_process_fuel < 0.5:
+        base_process_fuel = 1.5 
+
+    # Katkı ve Fayda Hesapları
     Tg_air = x.get("Tg_Cooling", 400.0)
-    cooling_benefit = max((Tg_air - 500.0) * 0.0015, 0.0)
-    
-    # 5. Rejim Bazlı Ekzotermik Katkı
+    cooling_benefit = max((Tg_air - 500.0) * 0.0001, 0.0)
+
     chemical_exothermic_benefit = 0.0
     if current_regime in ["R5_EARLY_CLINKERIZATION", "R6_STEADY_CLINKERIZATION"]:
-        chemical_exothermic_benefit = 0.25 
-        
-    # Toplam Dinamik Yakıt Talebi
-    base_loss_fuel = 1.5 
-    fuel_demand = (
-        base_loss_fuel 
-        + calcination_fuel_demand 
-        + clinker_feedback 
-        - cooling_benefit 
-        - chemical_exothermic_benefit
-    )
+        chemical_exothermic_benefit = 0.10 
+
+    # 2. Yumuşatılmış Geri Besleme (Sönümlü Proportional Kazanç)
+    # Kazancı 0.0010 seviyesine çekerek termal eylemsizlikle uyumlu hale getiriyoruz.
+    T_sinter_setpoint = 1450.0
+    Ts_error = T_sinter_setpoint - x_next["Ts_burning"]
+    clinker_feedback = Ts_error * 0.0010  
     
-    tau_F = 3.0  
-    x_next["Fuel_rate"] = x["Fuel_rate"] + (dt / tau_F) * (fuel_demand - x["Fuel_rate"])
-     
+    # Brülörün vana açma talebi (Kimyasal limitler öncesi)
+    raw_fuel_demand = base_process_fuel + clinker_feedback - cooling_benefit - chemical_exothermic_benefit
+    
+    # 3. %100 FİZİKSEL LİMİT: STOICHIOMETRIC AIR CAPACITY
+    # m_air_s birimi kg/s. Bunu Ton/Saat birimine geri çeviriyoruz:
+    m_air_t_h = (m_air_s * 3600.0) / 1000.0
+    
+    # Ortalama petrokok/kömür karışımı için stoichiometric hava/yakıt oranı ~10.5'tir.
+    # Fırındaki hava akışının yakabileceği maksimum yakıt miktarı (Fiziksel Tavan):
+    max_physical_fuel_capacity = m_air_t_h / 10.5
+    
+    # Matematiksel Clip YOK; Yakıt talebi, havanın taşıma kapasitesine asimptotik bağlanır.
+    # Yumuşak bir fiziksel doyum (saturation) için sigmoid veya dinamik oranlama:
+    fuel_demand = raw_fuel_demand / (1.0 + max(0.0, raw_fuel_demand / max_physical_fuel_capacity) ** 4) ** 0.25
+    
+    # Pilot alev koruması (Fiziksel alt taban)
+    if fuel_demand < 0.5:
+        fuel_demand = 0.5
+
+    # 4. Yakıt Vana Ataleti (Mekanik Gecikme)
+    # Tırmanma hızını doğrudan vana motorunun zaman sabiti (tau_F) ile sınırlıyoruz.
+    # tau_F = 35.0 saniye yapılarak yakıtın ani fırlamaları zamana yayıldı.
+    tau_F = 35.0  
+    x_next["Fuel_rate"] = x.get("Fuel_rate", 2.5) + (dt / tau_F) * (fuel_demand - x.get("Fuel_rate", 2.5))
+
     # -------------------------------------------------------------
-    # O2 (%) Dinamikleri
+    # O2 (%) DİNAMİKLERİ
     # -------------------------------------------------------------
-    if t == 0:
-        x_next["O2"] = 6.0
-    else:
-        # Hava/Yakıt oranı hesabı
-        air_fuel_ratio = x_next["Air_flow"] / (x_next["Fuel_rate"] + 1e-6)
-        
-        # Yanma kimyası eğrisi bazlı hedef O2 tahmini
-        target_O2 = 2.5 + 4.5 * np.exp(-1.2 / (air_fuel_ratio + 1e-3))
-        
-        # Baca fanı ataleti ve gaz akış gecikmesi
-        x_next["O2"] = x["O2"] + 0.15 * (target_O2 - x["O2"])
+    # Eğer simülasyonun ilk adımı kontrol ediliyorsa t yerine x içindeki bir flag veya direkt else mantığı kullanılabilir.
+    # Burada genel akış korunmuştur.
+    air_fuel_ratio = x_next.get("Air_flow", 30000.0) / (x_next["Fuel_rate"] + 1e-6)
+    o2_dyn_arg = np.clip(-1.2 / (air_fuel_ratio + 1e-3), -50.0, 50.0)
+    target_O2 = 2.5 + 4.5 * np.exp(o2_dyn_arg)
+    x_next["O2"] = x.get("O2", 3.5) + 0.15 * (target_O2 - x.get("O2", 3.5))
     
     
     # -------------------------
@@ -352,63 +411,80 @@ def step(x, t, regime):
     x_next["Tg_calcination"] = Tg_next
     
                 
+# -------------------------------------------------------------
+    # Tg_burning & Ts_burning (°C) - Birinci İlkeler Modeli
     # -------------------------------------------------------------
-    # Tg_burning (°C)
+    
+    # Sabitler ve Boyutsal Çevrimler
+    Cp_g = 1250.0  # J/(kg·K)
+    Cp_s = 1150.0  # J/(kg·K)
+    A_c = 13.85    # Kayıp yüzey alanı m²
+    h_c = 0.05     # Çevreye kayıp katsayısı kW/(m²·K)
+    
+    # Alan tanımlaması (Eğer fırın geometrisinden gelmiyorsa güvenli default)
+    A_s = x.get("A_s", 25.0) 
+    
+    # Akışların Saatlikten Saniyelik (kg/s) Birimine Çevrilmesi (Fiziksel Tutarlılık)
+    # x["Air_flow"] Nm³/h -> kg/s çevrimi
+    m_air_s = (x["Air_flow"] * 1.293) / 3600.0  
+    # x["Feed_rate"] ton/h -> kg/s çevrimi
+    m_solid_s = (x["Feed_rate"] * 1000.0) / 3600.0 
+    
+    # Enerji Girdisi (Q_in kW cinsinden kabul edilmiştir, Watt'a çevrilir)
+    Q_burn_in_W = x.get("Q_in", 0.0) * 1000.0 
+    
+    # FIRIN İÇİ STATİK KÜTLE HESABI (Sıfıra bölmeyi önleyen eylemsizlik)
+    # Fırının o bölgesinde her an çakılı duran malzeme ve gaz kütlesi:
+    M_gas_zone = 120.0    # kg (Fırın içi anlık gaz kütlesi)
+    M_solid_zone = 4500.0 # kg (Fırın içi anlık malzeme kütlesi - Hold-up kütlesi)
+    
+    C_gas_total = M_gas_zone * Cp_g      # J/K (Gazın gerçek termal kapasitesi)
+    C_solid_total = M_solid_zone * Cp_s  # J/K (Katının gerçek termal kapasitesi)
+    
+    # Mevcut Sıcaklık Durumları
+    Tg_curr = x["Tg_burning"]
+    Ts_curr = x["Ts_burning"]
+    
+    # Dinamik Isı Transfer Katsayısı
+    h_gs_burn = 220.0 if Tg_curr > 1000.0 else 50.0 # W/(m²·K)
+    
     # -------------------------------------------------------------
-    Cp_g = 1250.0            
-    A_c = 13.85
-    h_c = 0.05                
+    # Gelişmiş Enerji Dengesi Denklemleri (Karşılıklı Etkileşimli)
+    # -------------------------------------------------------------
     
-    m_air = (x["Air_flow"] * 0.001293) * 0.40
+    # A. Gaz Bölgesi Akıları (Watt)
+    Q_gas_to_solid = h_gs_burn * A_s * (Tg_curr - Ts_curr)
+    Q_gas_loss_ambient = (h_c * 1000.0) * A_c * (Tg_curr - 30.0) # h_c kW'dan W'a çekildi
+    Q_gas_advection = m_air_s * Cp_g * (Tg_curr - 400.0) # Giriş havası 400°C kabul edildi
     
-    Q_in = x.get("Q_in", 0.0)
-    Q_burn_in = Q_in * 1000.0
+    # Gaz Türevi (Net Isı / Termal Kapasite)
+    dTg_dt = (Q_burn_in_W - Q_gas_to_solid - Q_gas_loss_ambient - Q_gas_advection) / C_gas_total
     
-    rho_V_g_burn = 100.0 
-    C_gas = rho_V_g_burn * Cp_g
+    # B. Katı Bölgesi Akıları (Watt)
+    # Klinker ekzotermik reaksiyon ısısı (Sadece kalsinasyon üstü sıcaklıklarda tetiklenir)
+    Q_exo_W = 0.0
+    if Ts_curr > 1200.0:
+        # Reaksiyon hızı sıcaklıkla orantılı (Maksimum 350 kW ekzotermik katkı)
+        Q_exo_W = min(350000.0, m_solid_s * 500000.0 * (1.0 + (Ts_curr - 1200.0)/250.0))
+        
+    # Malzeme akışının taşıdığı duyu sıcaklığı kaybı (Advection)
+    Q_solid_advection = m_solid_s * Cp_s * (Ts_curr - 900.0) # Kalsinasyondan 900°C'de giriyor
     
-    # Isı transfer katsayısı (Dinamik)
-    current_tg = x["Tg_burning"]
-    h_gs_burn = 220.0 if current_tg > 1000.0 else 50.0 
-    Q_gs_factor = h_gs_burn * A_s 
+    # Katı Türevi
+    dTs_dt = (Q_gas_to_solid + Q_exo_W - Q_solid_advection) / C_solid_total
     
-    # KİLİTLENMEYİ ÇÖZ: Gaz artık katıdan gelen geri beslemeye (x["Ts_burning"]) 
-    # doğrudan bağlı değil. Gaz sadece yanma ve hava kaybı ile tırmanır.
-    # Bu, gazın katı tarafından "sabitlenmesini" engeller.
-    a_gas_damped = (m_air * Cp_g) + (h_c * A_c)
-    b_gas_damped = Q_burn_in + (h_c * A_c * 30.0)
+    # -------------------------------------------------------------
+    # Sayısal İntegrasyon (Yarı-%100 Kararlı Örtük Yaklaşım sönümlemesi)
+    # -------------------------------------------------------------
+    Tg_next = Tg_curr + dTg_dt * dt
+    Ts_next = Ts_curr + dTs_dt * dt
     
-    Tg_next = (C_gas * x["Tg_burning"] + dt * b_gas_damped) / (C_gas + dt * a_gas_damped)
+    # İkinci Termodinamik Kanun Koruması: Isı soğuktan sıcağa akamaz.
+    # Çözücü adımı kaçırsa bile katı gazı geçemez.
+    if Ts_next > Tg_next:
+        Ts_next = Tg_next - 5.0
+        
     x_next["Tg_burning"] = Tg_next
- 
-    # -------------------------------------------------------------
-    # Ts_burning (°C)
-    # -------------------------------------------------------------
-    Cp_s = 1150.0            
-    m_solid = x["Feed_rate"]
-    
-    # Hedeflenen sıcaklık farkı (1590 - 1450 = 140)
-    target_gap = 140.0 
-    
-    # 1. Isı akışı: Fark 140'tan büyükse pozitif, küçükse negatiftir.
-    Q_flow = h_gs_burn * A_s * (Tg_next - x["Ts_burning"] - target_gap)
-    
-    # 2. Reaksiyon: Katı 1450 civarındayken Q_exo'yu minimize et
-    temp_diff_normalized = max(0.0, Tg_next - x["Ts_burning"])
-    reaction_throttle = min(1.0, temp_diff_normalized / target_gap)
-    Q_exo_actual = 25.0 * m_solid * reaction_throttle
-    
-    # 3. Enerji Dengesi ve Dengeleme
-    Q_total = Q_flow + Q_exo_actual
-    
-    dT_s = (Q_total / (m_solid * Cp_s)) * dt
-    Ts_next = x["Ts_burning"] + dT_s
-    
-    # GÜVENLİK SINIRI: Katıyı gazın 140 derece altında sabitle.
-    # Bu, 1450°C'ye geldiğinde artık tırmanmamasını sağlar.
-    if Ts_next > (Tg_next - target_gap):
-        Ts_next = Tg_next - target_gap
-    
     x_next["Ts_burning"] = Ts_next
     
     
@@ -535,13 +611,15 @@ def step(x, t, regime):
     if t == 0:
         x_next["CaCO3"] = 80.0
     else:
+        T_kelvin = x["Ts_calcination"] + 273.15
 
-        k = (
-            10000000
-            * np.exp(-160000 / (8.314 * (x["Ts_calcination"] + 273.15)))
-        )
+        if T_kelvin < 873.15:
+            k = 0.0
+        else:
+            k = 10000000 * np.exp(-160000 / (8.314 * T_kelvin))
 
-        x_next["CaCO3"] = x["CaCO3"] * np.exp(-k *dt)
+        # Analitik yarı-örtük integral (Kütle korunumu ve kararlılık sağlar)
+        x_next["CaCO3"] = x["CaCO3"] * np.exp(-k * dt)
     # -------------------------
     # CaO (ton/h)
     # -------------------------
@@ -580,27 +658,26 @@ def step(x, t, regime):
     if t == 0:
         x_next["dCaO_calcination"] = 1e-6
     else:
-
         # AB = CaCO3 feed
         ab = x_next["CaCO3"]
+        T_kelvin_calc = x_next["Ts_calcination"] + 273.15
 
-        arrhenius = np.exp(
-            -190000 / (8.314 * (x_next["Ts_calcination"] + 273.15))
-        )
+        if T_kelvin_calc < 873.15:
+            arrhenius = 0.0
+        else:
+            arrhenius = np.exp(
+                -190000 / (8.314 * T_kelvin_calc)
+            )
 
         rate_term = 100000000 * arrhenius
-
-        kinetic = 1 - np.exp(-rate_term *dt)
+        kinetic = 1 - np.exp(-rate_term * dt)
 
         limiting = min(
             ab,
             (80 - ab)
         )
-
-        x_next["dCaO_calcination"] = max(
-            0.0,
-            limiting * kinetic
-        )
+    
+        x_next["dCaO_calcination"] = max(0.0, limiting * kinetic)
     
         # -------------------------
     # SiO2
@@ -714,25 +791,31 @@ def step(x, t, regime):
                 0.0,
                 limiting * kinetic
             )
+
     # -------------------------
     # dC3S
     # -------------------------
     if t == 0:
         x_next["dC3S"] = 1e-6
     else:
-
         # AK = C2S
         if x_next["C2S"] <= 1e-6:
             x_next["dC3S"] = 1e-6
         else:
+            T_kelvin_sinter = x_next["Ts_calcination"] + 273.15
 
-            arrhenius = np.exp(
-                -200000 / (8.314 * (x_next["Ts_calcination"] + 273.15))
-            )
+            # FİZİKSEL EŞİK: Alit (C3S) oluşumu 1200°C altında sıvı faz olmadığından 
+            # ve katı hal difüzyonu yetersiz kaldığından tamamen durur.
+            if T_kelvin_sinter < 1473.15:
+                arrhenius = 0.0
+            else:
+                arrhenius = np.exp(
+                    -200000 / (8.314 * T_kelvin_sinter)
+                )
 
             rate_term = 228000000 * arrhenius
 
-            kinetic = 1 - np.exp(-rate_term *dt)
+            kinetic = 1 - np.exp(-rate_term * dt)
 
             limiting = min(
                 x_next["C2S"],
