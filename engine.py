@@ -76,129 +76,90 @@ def step(x, t, regime):
     )
     
 # =============================================================
-    # BOYUTSAL OLARAK DOĞRULANMIŞ HIZLI VE KARARLI TERMAL MODEL
+    # 1. GİRDİLER VE DİNAMİK RAMPALAR
     # =============================================================
+    target_feed = 120.0
+    current_feed = x.get("Feed_rate", 40.0)
+    x_next["Feed_rate"] = current_feed + (target_feed - current_feed) * 0.0005 * dt
     
-    Cp_g = 1250.0  # J/(kg·K)
-    Cp_s = 1150.0  # J/(kg·K)
-    A_c = 13.85    # m²
-    h_c = 0.05     # kW/(m²·K) -> W/m²K için aşağıda 1000 ile çarpılacak
-    A_s = x.get("A_s", 25.0)  # Gaz-Katı ısı transfer alanı
+    x_next["Air_flow"] = 45000 + (95000 - 45000) * (1 - np.exp(-t / 120))
+    x_next["Cooler_air_flow"] = 8000 + (83000 - 8000) * (1 - np.exp(-t / 140))
+    x_next["ID_fan_speed"] = 900 + (2550 - 900) * (1 - np.exp(-t / 110))
+    x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-dt / 25)
+
+    # =============================================================
+    # 2. KÜTLE DENGESİ (Değişkenler Tutarlı Hale Getirildi)
+    # =============================================================
+    net_inflow = x_next["Feed_rate"] / 1.55
+    mat_acc_curr = max(0.5, x.get("Material_acc", 15.0))
+    res_hours = max(0.1, x_next.get("Residence", 25.0) / 60.0)
     
-    # 1. Kütlesel Akışların Doğru Birime Çevrilmesi (kg/s)
-    m_air_s = (x.get("Air_flow", 30000.0) * 1.293) / 3600.0
-    m_solid_s = (x.get("Feed_rate", 100.0) * 1000.0) / 3600.0
+    # Kiln_solid_out artık bir anahtar (x_next içinden okunabilir)
+    x_next["Kiln_solid_out"] = min(mat_acc_curr / res_hours, (mat_acc_curr / dt) * 0.1)
     
-    # 2. Dinamik Bölge Kütleleri (Residence Time Tabanlı Eylemsizlik)
-    tau_gas_residence = 5.0    # saniye
-    tau_solid_residence = 120.0 # saniye
+    d_mat_acc = (net_inflow - x_next["Kiln_solid_out"]) / 3600.0
+    x_next["Material_acc"] = max(0.5, mat_acc_curr + d_mat_acc * dt)
+
+    # =============================================================
+    # 3. TERMAL MODEL (Kiln_solid_out kullanarak)
+    # =============================================================
+    m_air_s = (x_next["Air_flow"] * 1.293) / 3600.0
+    m_solid_s = (x_next["Feed_rate"] * 1000.0) / 3600.0 
+    Tg_curr, Ts_curr = x.get("Tg_burning", 1200.0), x.get("Ts_burning", 1050.0)
     
-    # Efektif termal kapasiteler (J/K)
-    C_gas_total = max(10.0, m_air_s) * tau_gas_residence * Cp_g
-    C_solid_total = max(1.0, m_solid_s) * tau_solid_residence * Cp_s
+    # Klinker Çıkış ve Isı Çekişi (Kiln_solid_out üzerinden tanımlı)
+    temp_eff = max(0.0, min(1.0, (Ts_curr - 1100.0) / 300.0))
+    f_rate = max(0.1, x.get("Fuel_rate", 2.5))
+    x_next["Clinker_output"] = x_next["Kiln_solid_out"] * (temp_eff * (0.6 + 0.4 * min(1.0, f_rate / 3.0)))
     
-    # 3. Anlık Isı Akıları (Watt)
-    Tg_curr = x.get("Tg_burning", 1200.0)
-    Ts_curr = x.get("Ts_burning", 1050.0)
+    # Fiziksel Isıl Çekiş
+    Q_clinker_out = x_next["Clinker_output"] * 1000.0 * 1.15 * (Ts_curr - 100.0) / 3600.0
     
-    h_gs_burn = 220.0 if Tg_curr > 1000.0 else 50.0
+    # Termal hesaplar
+    C_gas_total = max(10.0, m_air_s) * 5.0 * 1250.0
+    C_solid_total = max(1.0, m_solid_s) * 120.0 * 1150.0
     
-    # Isı transferleri
-    Q_gas_to_solid = h_gs_burn * A_s * (Tg_curr - Ts_curr)
-    Q_loss = (h_c * 1000.0) * A_c * (Tg_curr - 30.0)
-    
-    # Giriş/Çıkış entalpi akışları (Advection)
-    Q_gas_advection = m_air_s * Cp_g * (Tg_curr - 400.0)
-    Q_solid_advection = m_solid_s * Cp_s * (Ts_curr - 900.0)
-    
-    # 4. Yakıt Enerjisi Girişi (Q_in kW -> Watt)
+    Q_gas_to_solid = (220.0 if Tg_curr > 1000.0 else 50.0) * x.get("A_s", 25.0) * (Tg_curr - Ts_curr)
+    Q_loss = 50.0 * 13.85 * (Tg_curr - 30.0)
+    Q_gas_advection = m_air_s * 1250.0 * (Tg_curr - 400.0)
+    Q_solid_advection = m_solid_s * 1150.0 * (Ts_curr - 900.0)
     Q_burn_in_W = x.get("Q_in", 0.0) * 1000.0 
-    
-    # Klinkerleşme reaksiyon ısısı (Fiziksel kontrollü ekzotermik)
-    Q_exo_W = 0.0
-    if Ts_curr > 1250.0:
-        Q_exo_W = min(400000.0, m_solid_s * 350000.0)
+    Q_exo_W = min(400000.0, m_solid_s * 350000.0) if Ts_curr > 1250.0 else 0.0
         
-    # 5. Diferansiyel Denklemler (Net Enerji / Kapasite)
-    dTg_dt = (Q_burn_in_W - Q_gas_to_solid - Q_loss - Q_gas_advection) / C_gas_total
-    dTs_dt = (Q_gas_to_solid + Q_exo_W - Q_solid_advection) / C_solid_total
+    dTg_dt = np.clip((Q_burn_in_W - Q_gas_to_solid - Q_loss - Q_gas_advection) / C_gas_total, -1.0, 1.0)
+    dTs_dt = np.clip((Q_gas_to_solid + Q_exo_W - Q_solid_advection - Q_clinker_out) / C_solid_total, -1.0, 1.0)
     
-    # 6. Sayısal İntegrasyon & Eğim Sönümleme (Doğrudan fırından gelen dt ile)
-    max_step = 2.0  # Adım başına maksimum sıcaklık değişimi (°C)
-    dTg_dt = np.clip(dTg_dt, -max_step/dt, max_step/dt)
-    dTs_dt = np.clip(dTs_dt, -max_step/dt, max_step/dt)
-    
-    Tg_next = Tg_curr + dTg_dt * dt
-    Ts_next = Ts_curr + dTs_dt * dt
-    
-    # Termodinamik Kilit (İkinci Kanun Koruması)
-    if Ts_next > Tg_next:
-        Ts_next = Tg_next - 10.0
-        
-    # Fiziksel Taban Sınır
-    x_next["Tg_burning"] = max(400.0, Tg_next)
-    x_next["Ts_burning"] = max(400.0, Ts_next)
+    x_next["Tg_burning"] = max(400.0, Tg_curr + dTg_dt * dt)
+    x_next["Ts_burning"] = max(400.0, Ts_curr + dTs_dt * dt)
 
     # =============================================================
-    # FUEL RATE GERİ BESLEME VE FİZİKSEL SINIRLANDIRMA (NO CLIP)
+    # 5. O2 (%) DİNAMİKLERİ VE STATE UPDATE
     # =============================================================
+    # Hava/Yakıt oranı (Air_fuel_ratio) hesapla
+    # 1e-6 ekleyerek sıfıra bölünme hatasını (division by zero) engelledik
+    air_fuel_ratio = x_next["Air_flow"] / (x_next["Fuel_rate"] + 1e-6)
     
-    farin_to_clinker_factor = 1.55
-    expected_clinker_rate_t_h = x_next.get("Feed_rate", 100.0) / farin_to_clinker_factor
-    
-    # 1. Teorik proses yakıtı hesabı (Ton/Saat)
-    base_process_fuel = (expected_clinker_rate_t_h * 3400.0) / 25000.0
-    if base_process_fuel < 0.5:
-        base_process_fuel = 1.5 
-
-    # Katkı ve Fayda Hesapları
-    Tg_air = x.get("Tg_Cooling", 400.0)
-    cooling_benefit = max((Tg_air - 500.0) * 0.0001, 0.0)
-
-    chemical_exothermic_benefit = 0.0
-    if current_regime in ["R5_EARLY_CLINKERIZATION", "R6_STEADY_CLINKERIZATION"]:
-        chemical_exothermic_benefit = 0.10 
-
-    # 2. Yumuşatılmış Geri Besleme (Sönümlü Proportional Kazanç)
-    # Kazancı 0.0010 seviyesine çekerek termal eylemsizlikle uyumlu hale getiriyoruz.
-    T_sinter_setpoint = 1450.0
-    Ts_error = T_sinter_setpoint - x_next["Ts_burning"]
-    clinker_feedback = Ts_error * 0.0010  
-    
-    # Brülörün vana açma talebi (Kimyasal limitler öncesi)
-    raw_fuel_demand = base_process_fuel + clinker_feedback - cooling_benefit - chemical_exothermic_benefit
-    
-    # 3. %100 FİZİKSEL LİMİT: STOICHIOMETRIC AIR CAPACITY
-    # m_air_s birimi kg/s. Bunu Ton/Saat birimine geri çeviriyoruz:
-    m_air_t_h = (m_air_s * 3600.0) / 1000.0
-    
-    # Ortalama petrokok/kömür karışımı için stoichiometric hava/yakıt oranı ~10.5'tir.
-    # Fırındaki hava akışının yakabileceği maksimum yakıt miktarı (Fiziksel Tavan):
-    max_physical_fuel_capacity = m_air_t_h / 10.5
-    
-    # Matematiksel Clip YOK; Yakıt talebi, havanın taşıma kapasitesine asimptotik bağlanır.
-    # Yumuşak bir fiziksel doyum (saturation) için sigmoid veya dinamik oranlama:
-    fuel_demand = raw_fuel_demand / (1.0 + max(0.0, raw_fuel_demand / max_physical_fuel_capacity) ** 4) ** 0.25
-    
-    # Pilot alev koruması (Fiziksel alt taban)
-    if fuel_demand < 0.5:
-        fuel_demand = 0.5
-
-    # 4. Yakıt Vana Ataleti (Mekanik Gecikme)
-    # Tırmanma hızını doğrudan vana motorunun zaman sabiti (tau_F) ile sınırlıyoruz.
-    # tau_F = 35.0 saniye yapılarak yakıtın ani fırlamaları zamana yayıldı.
-    tau_F = 35.0  
-    x_next["Fuel_rate"] = x.get("Fuel_rate", 2.5) + (dt / tau_F) * (fuel_demand - x.get("Fuel_rate", 2.5))
-
-    # -------------------------------------------------------------
-    # O2 (%) DİNAMİKLERİ
-    # -------------------------------------------------------------
-    # Eğer simülasyonun ilk adımı kontrol ediliyorsa t yerine x içindeki bir flag veya direkt else mantığı kullanılabilir.
-    # Burada genel akış korunmuştur.
-    air_fuel_ratio = x_next.get("Air_flow", 30000.0) / (x_next["Fuel_rate"] + 1e-6)
-    o2_dyn_arg = np.clip(-1.2 / (air_fuel_ratio + 1e-3), -50.0, 50.0)
+    # O2 dinamikleri: Hava/Yakıt oranı arttıkça O2 artar, yanma verimi düştükçe azalır
+    # -1.2 katsayısı, yanma stokiometrisini simüle eden ampirik bir değerdir
+    o2_dyn_arg = np.clip(-1.2 / (air_fuel_ratio / 20000.0 + 1e-3), -50.0, 50.0)
     target_O2 = 2.5 + 4.5 * np.exp(o2_dyn_arg)
-    x_next["O2"] = x.get("O2", 3.5) + 0.15 * (target_O2 - x.get("O2", 3.5))
+    
+    # Mevcut O2 değerine doğru yumuşak geçiş (First-order lag)
+    current_O2 = x.get("O2", 3.5)
+    x_next["O2"] = current_O2 + 0.15 * (target_O2 - current_O2)
+    
+    # Fuel Demand (Önceki kodun aynısı)
+    base_process_fuel = (max(5.0, x_next["Clinker_output"]) * 3400.0) / 25000.0
+    fuel_demand = base_process_fuel + ((1450.0 - x_next["Ts_burning"]) * 0.02)
+    x_next["Fuel_rate"] = f_rate + (dt / 10.0) * (max(0.5, fuel_demand) - f_rate)
+    
+    # Residence (Güncelleme)
+    res_min = ((0.37 * 60) / (4.2 * (0.1 + (f_rate * 0.8)) * 0.03)) * (max(x_next["Feed_rate"], 5.0) / 120) ** (-0.6)
+    x_next["Residence"] = np.clip(res_min, 10.0, 45.0)
+    
+    # State Update: Tüm verileri x'e aktar
+    x.update(x_next)
+    x["t"] = t + dt
     
     
     # -------------------------
@@ -224,92 +185,7 @@ def step(x, t, regime):
             - x["Fuel_rate"]
         ) / dt
             
-    # -------------------------
-    # Feed_rate
-    # -------------------------
-    # Feed_rate is controlled externally (input_layer)
-    x_next["Feed_rate"] = x["Feed_rate"]
-        
-    # -------------------------
-    # Air_flow (EXP RAMP)
-    # -------------------------
-    x_next["Air_flow"] = 45000 + (95000 - 45000) * (1 - np.exp(-t / 120))
-    
-    # -------------------------
-    # Cooler_air_flow (EXP RAMP)
-    # -------------------------
-    x_next["Cooler_air_flow"] = 8000 + (83000 - 8000) * (1 - np.exp(-t / 140))
-    
-    # -------------------------
-    # ID_fan_speed (EXP RAMP)
-    # -------------------------
-    x_next["ID_fan_speed"] = 900 + (2550 - 900) * (1 - np.exp(-t / 110))
-    
-    # -------------------------
-    # Damper_position (%)
-    # -------------------------
-    if t == 0:
-        x_next["Damper_position"] = 85.0
-    else:
-        x_next["Damper_position"] = (
-            33.0
-            + (85.0 - 33.0) * np.exp(-dt / 25)
-        )
-        
-    
-    # -------------------------
-    # kiln_rpm
-    # -------------------------
-    if t == 0:
-        x_next["kiln_rpm"] = 0.1
-    else:
 
-        coeff = {
-            "R1_HEATING_STABILIZATION": 0.55,
-            "R2_EARLY_CALCINATION": 0.70,
-            "R3_ACTIVE_CALCINATION": 0.80,
-            "R4_TRANSITION_TO_CLINKERIZATION": 0.90,
-            "R5_EARLY_CLINKERIZATION": 0.95,
-            "R6_STEADY_CLINKERIZATION": 1.00,
-            "R7_FUEL_SWITCH_TRANSIENT": 1.05,
-            "R8_RESTABILIZATION": 0.85,
-        }.get(regime, 1.0)
-
-        coeff *= (1 - np.exp(-0.02 * t))
-
-        x_next["kiln_rpm"] = (
-            0.1
-            + (
-                x_next["Fuel_rate"]
-                + (6 - x_next["Fuel_rate"])
-                * (1 - np.exp(-0.00041 * t))
-                * coeff
-            )
-            * 0.8
-            * (1 - np.exp(-0.01 * t))
-        )
-
-    # -------------------------
-    # Filling_rate
-    # -------------------------
-    x_next["Filling_rate"] = 0.1
-    
-    # -------------------------
-    # Residence (min)
-    # -------------------------
-
-    if t == 0:
-        x_next["Residence"] = 1e-6
-    else:
-
-        kiln_rpm = max(x_next["kiln_rpm"], 1e-6)
-        feed = max(x_next["Feed_rate"], 1e-6)
-
-        x_next["Residence"] = (
-            (0.37 * 60)
-            / (4.2 * kiln_rpm * math.tan(math.atan(3 / 100)))
-            * (feed / 120) ** (-0.6)
-        )
     #===================================== Operational Zones =====================================
     
     # -------------------------
@@ -896,46 +772,7 @@ def step(x, t, regime):
             
     #===================================== Flows =====================================
         
-    # -------------------------
-    # G: Kiln_solid_out
-    # -------------------------
-    if t == 0:
-        x_next["Kiln_solid_out"] = 1e-6
-    else:
-        x_next["Kiln_solid_out"] = (
-            0.15 * (x_next["Feed_rate"] - x_next["CO2"])
-            + 0.85 * x["Kiln_solid_out"]
-        )
-        
-    # -------------------------
-    # Clinker_output
-    # -------------------------
-    if t == 0:
-        x_next["Clinker_output"] = 1e-6
-    else:
-        x_next["Clinker_output"] = 0.9 * x_next["Kiln_solid_out"]
-        
-    # -------------------------
-    # Clinker_yield
-    # -------------------------
-    feed_safe = max(x_next["Feed_rate"], 1e-6)
 
-    x_next["Clinker_yield"] = (
-        x_next["Clinker_output"]
-        / feed_safe
-    )    
-
-    # -------------------------
-    # H: Material_acc
-    # -------------------------
-    if t == 0:
-        x_next["Material_acc"] = x_next["Feed_rate"]
-    else:
-        x_next["Material_acc"] = (
-            x_next["Feed_rate"]
-            - x_next["Kiln_solid_out"]
-            - x_next["CO2"]
-        )
 
     # -------------------------
     # Mass_Balance_Error
@@ -1014,13 +851,6 @@ def step(x, t, regime):
         x_next["Fuel_rate"]
         * 1.1
         * (x_next["Tg_burning"] - 25)
-    )
-    # -------------------------
-    # Q_clinker
-    # -------------------------
-    x_next["Q_clinker"] = (
-        x_next["Clinker_output"]
-        * 1800
     )
 
     # -------------------------
