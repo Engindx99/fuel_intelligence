@@ -199,12 +199,12 @@ def step(x, t, regime):
         T_pre = x["Tg_preheater"] + 0.0135 * (0.0131 * x["Air_flow"] - x["Tg_preheater"])
         T_calc = 847 + 0.0135 * ((0.0113 * x["Air_flow"] - 800) * 0.05)
 
-        noise = np.random.normal(0, 1.8)
-
-        x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w * noise
         
 
-# -------------------------------------------------------------
+        x_next["Tg_preheater"] = (1 - w) * T_pre + w * T_calc + w
+        
+
+    # -------------------------------------------------------------
     # Ts_calcination (°C) - Katı Faz (Enerji Alıcı)
     # -------------------------------------------------------------
     Cp_s = 1050.0            
@@ -258,38 +258,72 @@ def step(x, t, regime):
     x_next["Tg_calcination"] = Tg_next
     
                 
-    # -------------------------
-    # Tg_burning (°C)
-    # -------------------------
-    if t == 0:
-        x_next["Tg_burning"] = x_next["Tg_calcination"]
-    else:
-
-        if t <= 36:
-
-            w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-
-            R_new = x["Tg_burning"] + 0.00927 * (1605 - x["Tg_burning"])
-
-            noise = np.random.normal(0, 1.5) * w
-
-            x_next["Tg_burning"] = R_new + noise
-
-        else:
-
-            if t <= 218:
-
-                noise = np.random.normal(0, 1.5)
-
-                x_next["Tg_burning"] = x["Tg_burning"] + noise
-
-            else:
-
-                noise = np.random.normal(0, 1.5)
-
-                ref = x["Tg_burning"]  # approx INDEX(R:R,218)
-
-                x_next["Tg_burning"] = ref + noise   
+    # -------------------------------------------------------------
+    # Tg_burning (°C) - Gaz Fazı (Zayıf Eşlemeli / Serbest Tırmanış)
+    # -------------------------------------------------------------
+    Cp_g = 1250.0            
+    A_c = 13.85
+    h_c = 0.05                
+    
+    m_air = (x["Air_flow"] * 0.001293) * 0.40
+    
+    Q_in = x.get("Q_in", 0.0)
+    Q_burn_in = Q_in * 1000.0
+    
+    rho_V_g_burn = 100.0 
+    C_gas = rho_V_g_burn * Cp_g
+    
+    # Isı transfer katsayısı (Dinamik)
+    current_tg = x["Tg_burning"]
+    h_gs_burn = 220.0 if current_tg > 1000.0 else 50.0 
+    Q_gs_factor = h_gs_burn * A_s 
+    
+    # KİLİTLENMEYİ ÇÖZ: Gaz artık katıdan gelen geri beslemeye (x["Ts_burning"]) 
+    # doğrudan bağlı değil. Gaz sadece yanma ve hava kaybı ile tırmanır.
+    # Bu, gazın katı tarafından "sabitlenmesini" engeller.
+    a_gas_damped = (m_air * Cp_g) + (h_c * A_c)
+    b_gas_damped = Q_burn_in + (h_c * A_c * 30.0)
+    
+    Tg_next = (C_gas * x["Tg_burning"] + dt * b_gas_damped) / (C_gas + dt * a_gas_damped)
+    x_next["Tg_burning"] = Tg_next
+ 
+    # -------------------------------------------------------------
+    # Ts_burning (°C) - Kararlı 1450°C Hedefli Denge
+    # -------------------------------------------------------------
+    Cp_s = 1150.0            
+    m_solid = x["Feed_rate"]
+    
+    # Hedeflenen sıcaklık farkı (1590 - 1450 = 140)
+    target_gap = 140.0 
+    
+    # 1. Isı akışı: Fark 140'tan büyükse pozitif, küçükse negatiftir.
+    Q_flow = h_gs_burn * A_s * (Tg_next - x["Ts_burning"] - target_gap)
+    
+    # 2. Reaksiyon: Katı 1450 civarındayken Q_exo'yu minimize et
+    temp_diff_normalized = max(0.0, Tg_next - x["Ts_burning"])
+    reaction_throttle = min(1.0, temp_diff_normalized / target_gap)
+    Q_exo_actual = 25.0 * m_solid * reaction_throttle
+    
+    # 3. Enerji Dengesi ve Dengeleme
+    Q_total = Q_flow + Q_exo_actual
+    
+    dT_s = (Q_total / (m_solid * Cp_s)) * dt
+    Ts_next = x["Ts_burning"] + dT_s
+    
+    # GÜVENLİK SINIRI: Katıyı gazın 140 derece altında sabitle.
+    # Bu, 1450°C'ye geldiğinde artık tırmanmamasını sağlar.
+    if Ts_next > (Tg_next - target_gap):
+        Ts_next = Tg_next - target_gap
+    
+    x_next["Ts_burning"] = Ts_next
+    
+    
+    
+               
+               
+               
+               
+                            
                 
     # -------------------------
     # dTg_burning
@@ -312,10 +346,9 @@ def step(x, t, regime):
         if t <= 36:
             w = 1 / (1 + np.exp(-0.25 * (t - 36)))
             T_new = x["Tg_Cooling"] + 0.0183 * (140 - x["Tg_Cooling"])
-            noise = np.random.normal(0, 1.5) * w
-            x_next["Tg_Cooling"] = T_new + noise
+            x_next["Tg_Cooling"] = T_new
         else:
-            x_next["Tg_Cooling"] = x["Tg_Cooling"] + np.random.normal(0, 1.5)
+            x_next["Tg_Cooling"] = x["Tg_Cooling"]
             
         
     # -------------------------
@@ -366,21 +399,6 @@ def step(x, t, regime):
     # Gaz fazı için (Enerji korumu gereği gazdan çıkan enerji)
     # Tg_next = Tg - (Q_gs * dt) / Cg
     x_next["Ts_preheater"] =Ts_next            
-           
-    # -------------------------
-    # Ts_burning (°C)
-    # -------------------------
-    if t == 0:
-        x_next["Ts_burning"] = x_next["Ts_calcination"]
-    else:
-
-        w = 1 / (1 + np.exp(-0.25 * (t - 36)))
-
-        S_new = x["Ts_burning"] + 0.0221 * (1455 - x["Ts_burning"])
-
-        noise = np.random.normal(0, 1.5) * w
-
-        x_next["Ts_burning"] = S_new + noise
         
        
     # -------------------------
@@ -394,15 +412,14 @@ def step(x, t, regime):
 
         # cooling relaxation toward ambient (~100°C)
         U_new = x["Ts_Cooling"] - 0.01295 * (x["Ts_Cooling"] - 100)
-
-        noise = np.random.normal(0, 1.5) * w
+        
 
         if t <= 36:
-            x_next["Ts_Cooling"] = U_new + noise
+            x_next["Ts_Cooling"] = U_new
         elif t <= 218:
-            x_next["Ts_Cooling"] = x["Ts_Cooling"] + np.random.normal(0, 1.5)
+            x_next["Ts_Cooling"] = x["Ts_Cooling"] 
         else:
-            x_next["Ts_Cooling"] = x["Ts_Cooling"] + np.random.normal(0, 1.5)
+            x_next["Ts_Cooling"] = x["Ts_Cooling"]
             
     #===================================== Reactions =====================================
     
@@ -990,9 +1007,9 @@ x_current["CO_ppm"] = 900.0
 # -------------------------
 
 x_current["Tg_preheater"] = 400.0
-x_current["Tg_calcination"] = 846.531
-x_current["Tg_burning"] = 1246.415
-x_current["Tg_Cooling"] = 1590.0
+x_current["Tg_calcination"] = 848.374628
+x_current["Tg_burning"] = 1245.088639
+x_current["Tg_Cooling"] = 1582.903
 
 
 x_current["Air_flow"] = 50000.0
@@ -1007,8 +1024,8 @@ x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
 x_current["Ts_preheater"] = 100.0
-x_current["Ts_calcination"] = 802.0224
-x_current["Ts_burning"] = 1150.0
+x_current["Ts_calcination"] = 802.022
+x_current["Ts_burning"] = 1060.038
 x_current["Ts_Cooling"] = 1450.0
 
 # -------------------------
