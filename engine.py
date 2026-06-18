@@ -17,7 +17,7 @@ columns = [
     "C3A", "C4AF", "C2S", "C3S",
     "dC2S", "dC3S", "dC3A", "dC4AF", "dCaO_calcination",
     "Mass_Balance_Error",
-    "kiln_rpm", "Filling_rate", "Residence",
+    "kiln_rpm", "Residence",
     "Q_in", "Q_out", "Q_acc", "Q_loss", "Q_reaction", "Q_gas", "Q_clinker",
     "Clinker_yield",
     "dTg_burning", "dFuel_rate",
@@ -48,9 +48,9 @@ for r, n in regime_series:
 df["Regime"] = regime_list[:N]
 
 # =============================================================
-# STABLE RESIDENCE TIME (FIXED)
+# STABLE RESIDENCE TIME (FIXED + FILLING COUPLING)
 # =============================================================
-def get_residence_time(kiln_rpm):
+def get_residence_time(kiln_rpm, filling_rate=0.10):
     L = 60.0
     D = 4.2
     slope = 0.03
@@ -58,12 +58,17 @@ def get_residence_time(kiln_rpm):
     rpm = max(0.1, kiln_rpm)
 
     # daha fiziksel RPM influence (log saturation değil, mild saturation)
-    rpm_eff = rpm / (0.6 + rpm)
+    rpm_eff = rpm / (0.26 + rpm)
+
+    # filling effect (higher filling -> slower axial movement)
+    filling = max(0.01, filling_rate)  # safety clamp
+
+    filling_factor = (0.08 / filling) ** 0.3
 
     # corrected axial velocity scale (calibrated to industrial range)
     v_axial = (
-            7.42 * D * rpm_eff * (1.5 + 44.8 * slope)
-    )
+        5.61 * D * rpm_eff * (1.5 + 44.8 * slope)
+    ) * filling_factor
 
     residence = (L / (v_axial + 1e-6)) * 60.0
 
@@ -103,7 +108,7 @@ def step(x, t, regime):
 
     # RPM
     rpm_current = x.get("kiln_rpm", 1.0)
-    rpm_setpoint = x.get("rpm_setpoint", 1.8)
+    rpm_setpoint = x.get("rpm_setpoint", 2.4)
     alpha = 0.005
 
     rpm_next = rpm_current + alpha * (rpm_setpoint - rpm_current)
@@ -122,9 +127,7 @@ def step(x, t, regime):
     x_next["Material_acc"] = mat_acc + (
         x_next["Feed_rate"] / 1.55 - kiln_out
     ) * (dt / 60.0)
-
-    x_next["Filling_rate"] = np.clip(x_next["Material_acc"] / 100.0, 0.0, 1.0)
-
+   
     # Thermal
     Tg = np.clip(x.get("Tg_burning", 1200.0), 400.0, 1600.0)
     Ts = np.clip(x.get("Ts_burning", 1050.0), 400.0, 1600.0)
