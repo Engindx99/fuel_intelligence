@@ -24,15 +24,11 @@ columns = [
     "Normalized_Energy_Index", "Global_Energy_Closure", "Energy_error"
 ]
 
-# 2. INIT DATA
 N = 434
-
 df = pd.DataFrame(0.0, index=np.arange(N), columns=columns)
 
-dt = 0.05 # minute
+dt = 0.05
 df["t"] = np.arange(N) * dt
-
-# 3. REGIME DEFINITION (OUTSIDE LOOP - FIXED ORDER)
 
 regime_series = [
     ("R1_HEATING_STABILIZATION", 50),
@@ -49,58 +45,54 @@ regime_list = []
 for r, n in regime_series:
     regime_list.extend([r] * n)
 
-regime_list = regime_list[:N]
+df["Regime"] = regime_list[:N]
 
-df["Regime"] = regime_list
-
-
-
-import numpy as np
-
-import numpy as np
-
-import numpy as np
 
 # =============================================================
-# CEBİRSEL PARAMETRE FONKSİYONLARI (DIŞARIDA)
+# STABLE RESIDENCE TIME (FIXED)
 # =============================================================
 def get_residence_time(kiln_rpm):
     L = 60.0
     D = 4.2
     slope = 0.03
 
-    # Fırın devrine bağlı eksenel hız dinamiği
-    v_axial = 5.74 * D * (1.0 - np.exp(-kiln_rpm)) * (1.5 + 20.0 * slope)
-    return (L / (v_axial + 1e-6)) * 60.0
+    rpm = max(0.1, kiln_rpm)
+
+    # daha fiziksel RPM influence (log saturation değil, mild saturation)
+    rpm_eff = rpm / (0.5 + rpm)
+
+    # corrected axial velocity scale (calibrated to industrial range)
+    v_axial = (
+            5.74 * D * rpm_eff * (1.5 + 34.8 * slope)
+    )
+
+    residence = (L / (v_axial + 1e-6)) * 60.0
+
+    return residence
+
 
 # =============================================================
-# ANA SİMÜLASYON ADIMI (SUB-STEP PHYSICS)
+# STEP FUNCTION
 # =============================================================
 def step(x, t, regime):
 
     x_next = x.copy()
-    
+
     Tg_calcination = x.get("Tg_calcination", 850.0)
     Ts_calcination = x.get("Ts_calcination", 800.0)
-    Tg_preheater   = x.get("Tg_preheater", 400.0)
-    m_air          = x.get("Air_flow", 45000.0) * 0.001293
-    m_solid        = x.get("Feed_rate", 40.0)
-    
+
+    m_air = x.get("Air_flow", 45000.0) * 0.001293
+    m_solid = x.get("Feed_rate", 40.0)
+
     x_next["Cooling_air_flow"] = x.get("Feed_rate", 40.0) * 4000.0
-    
-    #===================================== INPUTS =====================================
-    
-    # -------------------------
-    # Fuel_composition
-    # -------------------------
+
+    # Fuel composition
     x_next["Lignite_Coal"] = max(
         0.0,
         1.0 - x.get("Petcoke", 0.0) - x.get("Alternative_Fuel", 0.0)
     )
-    
-    # =============================================================
-    # 1. GİRDİLER VE DİNAMİK RAMPALAR
-    # =============================================================
+
+    # Inputs
     f_rate = max(0.1, x.get("Fuel_rate", 2.5))
     feed = x.get("Feed_rate", 40.0)
 
@@ -110,47 +102,40 @@ def step(x, t, regime):
     x_next["ID_fan_speed"] = 900.0 + (2550.0 - 900.0) * (1.0 - np.exp(-t / 110.0))
     x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-t / 25.0)
 
-    # =============================================================
-    # 2. SULLIVAN MODELİ VE KÜTLE DENGESİ
-    # =============================================================
-
-    # 2.1. Mevcut RPM
+    # RPM
     rpm_current = x.get("kiln_rpm", 1.0)
-
-    # 2.2. Mekanik Güncelleme (Residence time'dan ÖNCE RPM update edilmeli)
     rpm_setpoint = x.get("rpm_setpoint", 2.2)
     alpha = 0.02
 
     rpm_next = rpm_current + alpha * (rpm_setpoint - rpm_current)
-    
-    # RPM için güvenlik ve stabilite sınırı
-    rpm_next = max(0.1, rpm_next)
-    x_next["kiln_rpm"] = rpm_next
+    x_next["kiln_rpm"] = max(0.1, rpm_next)
 
-    # 2.3. Residence time (ARTIK güncellenmiş yeni RPM ile hesaplanıyor)
-    res_min = get_residence_time(rpm_next)
+    # Residence
+    res_min = get_residence_time(x_next["kiln_rpm"])
     x_next["Residence"] = res_min
 
-    # 2.4. Mass balance (Kütle Korunumu)
+    # Mass balance
     mat_acc = x.get("Material_acc", 15.0)
 
-    x_next["Kiln_solid_out"] = mat_acc / (res_min / 60.0 + 1e-6)
+    kiln_out = mat_acc / (res_min / 60.0 + 1e-6)
+    x_next["Kiln_solid_out"] = kiln_out
 
     x_next["Material_acc"] = mat_acc + (
-        x_next["Feed_rate"] / 1.55 - x_next["Kiln_solid_out"]
+        x_next["Feed_rate"] / 1.55 - kiln_out
     ) * (dt / 60.0)
 
-    x_next["Filling_rate"] = max(0.0, x_next["Material_acc"] / 100.0)
+    x_next["Filling_rate"] = np.clip(x_next["Material_acc"] / 100.0, 0.0, 1.0)
 
-    # =============================================================
-    # 3. TERMAL MODEL
-    # =============================================================
-    Tg, Ts = x.get("Tg_burning", 1200.0), x.get("Ts_burning", 1050.0)
-    m_air, m_sol = (x_next["Air_flow"] * 1.293) / 3600.0, (x_next["Feed_rate"] * 1000.0) / 3600.0
+    # Thermal
+    Tg = np.clip(x.get("Tg_burning", 1200.0), 400.0, 1600.0)
+    Ts = np.clip(x.get("Ts_burning", 1050.0), 400.0, 1600.0)
 
-    # Isı çekişi ve klinker verimi (0.0 ile 1.0 aralığı fiziksel dönüşüm sınırıdır)
-    temp_eff = max(0.0, min(1.0, (Ts - 1100.0) / 300.0))
-    x_next["Clinker_output"] = x_next["Kiln_solid_out"] * temp_eff * (0.6 + 0.4 * min(1.0, f_rate / 3.0))
+    m_air = (x_next["Air_flow"] * 1.293) / 3600.0
+    m_sol = (x_next["Feed_rate"] * 1000.0) / 3600.0
+
+    temp_eff = np.clip((Ts - 1100.0) / 300.0, 0.0, 1.0)
+
+    x_next["Clinker_output"] = kiln_out * temp_eff * (0.6 + 0.4 * min(1.0, f_rate / 3.0))
 
     Q_clink = x_next["Clinker_output"] * 1000.0 * 1.15 * (Ts - 100.0) / 3600.0
     Q_g2s = (220.0 if Tg > 1000.0 else 50.0) * x.get("A_s", 25.0) * (Tg - Ts)
@@ -159,28 +144,27 @@ def step(x, t, regime):
     Q_s_adv = m_sol * 1150.0 * (Ts - 900.0)
     Q_exo = min(400000.0, m_sol * 350000.0) if Ts > 1250.0 else 0.0
 
-    # Diferansiyel sıcaklık değişimi
     dTg = (x.get("Q_in", 0.0) * 1000.0 - Q_g2s - Q_loss - Q_g_adv) / (max(10.0, m_air) * 5.0 * 1250.0)
     dTs = (Q_g2s + Q_exo - Q_s_adv - Q_clink) / (max(1.0, m_sol) * 120.0 * 1150.0)
 
-    x_next["Tg_burning"] = max(400.0, Tg + dTg * dt)
-    x_next["Ts_burning"] = max(400.0, Ts + dTs * dt)
+    x_next["Tg_burning"] = Tg + dTg * dt
+    x_next["Ts_burning"] = Ts + dTs * dt
 
-    # =============================================================
-    # 4. MEKANİK, YAKIT VE O2
-    # =============================================================
+    # O2
     air_fuel_ratio = x_next["Air_flow"] / (f_rate + 1e-6)
-    
-    # O2 hedefi
-    o2_target = 2.5 + 4.5 * np.exp(-1.2 / (air_fuel_ratio / 20000.0 + 1e-3))
-    x_next["O2"] = x.get("O2", 3.5) + 0.15 * (o2_target - x.get("O2", 3.5))
 
-    fuel_req = (max(5.0, x_next["Clinker_output"]) * 3400.0 / 25000.0) + (1450.0 - x_next["Ts_burning"]) * 0.02
+    o2_target = 2.5 + 4.5 * np.exp(-1.2 / (air_fuel_ratio / 20000.0 + 1e-3))
+
+    x_next["O2"] = np.clip(
+        x.get("O2", 3.5) + 0.15 * (o2_target - x.get("O2", 3.5)),
+        0.0,
+        21.0
+    )
+
+    fuel_req = (max(5.0, x_next["Clinker_output"]) * 3400.0 / 25000.0) + (1450.0 - Ts) * 0.02
+
     x_next["Fuel_rate"] = f_rate + (dt / 10.0) * (max(0.5, fuel_req) - f_rate)
 
-    # =============================================================
-    # STATE UPDATE
-    # =============================================================
     x.update(x_next)
     x["t"] = t + dt
 
@@ -1028,7 +1012,8 @@ x_current["C4AF"] = 1e-6
 # -------------------------
 # CONTROL INPUTS
 # -------------------------
-x_current["kiln_rpm"] = 2.0
+x_current["kiln_rpm"] = 1.3
+x_current["Residence"] = get_residence_time(1.3)
 x_current["Petcoke"] = 0.03
 x_current["Alternative_Fuel"] = 0.07
 x_current["Lignite_Coal"] = 0.90
