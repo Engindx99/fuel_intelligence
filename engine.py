@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import math
+
 
 columns = [
     "t",
@@ -127,7 +127,7 @@ def step(x, t, regime):
     x_next["Material_acc"] = mat_acc + (
         x_next["Feed_rate"] / 1.55 - kiln_out
     ) * (dt / 60.0)
-   
+    
     # Thermal
     Tg = np.clip(x.get("Tg_burning", 1200.0), 400.0, 1600.0)
     Ts = np.clip(x.get("Ts_burning", 1050.0), 400.0, 1600.0)
@@ -135,9 +135,14 @@ def step(x, t, regime):
     m_air = (x_next["Air_flow"] * 1.293) / 3600.0
     m_sol = (x_next["Feed_rate"] * 1000.0) / 3600.0
 
-    temp_eff = np.clip((Ts - 1100.0) / 300.0, 0.0, 1.0)
-
-    x_next["Clinker_output"] = kiln_out * temp_eff * (0.6 + 0.4 * min(1.0, f_rate / 3.0))
+    # Fiziksel İyileştirme: Sıcaklıktan bağımsız kütle çıkışı ve kalite ayrımı
+    # conversion_factor (%89) ile Kiln_solid_out üzerinden klinker çıkışı hesaplandı
+    conversion_factor = 0.89
+    x_next["Clinker_output"] = kiln_out * conversion_factor
+    
+    # Kalite parametresi termal verimliliği izlemek için ayrı tutuldu
+    temp_eff = np.clip((Ts - 800.0) / 400.0, 0.1, 1.0)
+    x_next["Clinker_quality"] = temp_eff
 
     Q_clink = x_next["Clinker_output"] * 1000.0 * 1.15 * (Ts - 100.0) / 3600.0
     Q_g2s = (220.0 if Tg > 1000.0 else 50.0) * x.get("A_s", 25.0) * (Tg - Ts)
@@ -493,52 +498,29 @@ def step(x, t, regime):
             + (-180.0 + 406.0) * np.exp(-t / 20)
         )
 
-    # -------------------------
-    # CaCO3 (ton/h)
-    # -------------------------
+    # ---------------------------------------------------------
+    # 1. CaCO3 Kalsinasyonu (Kinetik model doğru)
+    # ---------------------------------------------------------
     if t == 0:
         x_next["CaCO3"] = 80.0
     else:
         T_kelvin = x["Ts_calcination"] + 273.15
+        k = 1e7 * np.exp(-160000 / (8.314 * T_kelvin)) if T_kelvin > 873.15 else 0.0
+        x_next["CaCO3"] = float(round(x["CaCO3"] * np.exp(-k * dt), 6))
 
-        if T_kelvin < 873.15:
-            k = 0.0
-        else:
-            k = 10000000 * np.exp(-160000 / (8.314 * T_kelvin))
+    # ---------------------------------------------------------
+    # 2. CaO (Kütle Korunumu)
+    # ---------------------------------------------------------
+    # Oluşan CaO, parçalanan CaCO3 miktarı ile doğrudan ilişkilidir.
+    dCaCO3 = x["CaCO3"] - x_next["CaCO3"]  # Parçalanan CaCO3 (Pozitif)
+    x_next["CaO"] = x["CaO"] + (dCaCO3 * 0.5603) 
 
-        # Analitik yarı-örtük integral (Kütle korunumu ve kararlılık sağlar)
-        x_next["CaCO3"] = x["CaCO3"] * np.exp(-k * dt)
-    # -------------------------
-    # CaO (ton/h)
-    # -------------------------
-    if t == 0:
-        x_next["CaO"] = 1e-6
-    else:
-
-        # previous CaCO3 (AB3 in Excel logic)
-        CaCO3_prev = x["CaCO3"]
-
-        # next CaCO3 (AB2 in Excel logic -> already computed in this step)
-        CaCO3_now = x_next["CaCO3"]
-
-        dCaCO3 = (CaCO3_now - CaCO3_prev)
-
-        x_next["CaO"] = (
-            x["CaO"]
-            + (dCaCO3 * 0.560331)
-            - (x["Fuel_rate"] * 2)
-            - (x["Alternative_Fuel"] * 3)
-        )
-    # -------------------------
-    # CO2 (ton/h)
-    # -------------------------
-    if t == 0:
-        x_next["CO2"] = 1e-6
-    else:
-        x_next["CO2"] = (
-            80.0
-            - (x_next["CaCO3"] + x_next["CaO"])
-        )
+    # ---------------------------------------------------------
+    # 3. CO2 (Kütle Korunumu)
+    # ---------------------------------------------------------
+    # CO2, CaCO3'ün parçalanmasıyla açığa çıkan gazdır.
+    # CO2_gen = dCaCO3 * 0.4397 (Stoikiyometrik oran)
+    x_next["CO2"] = x["CO2"] + (dCaCO3 * 0.4397)
         
     # -------------------------
     # dCaO_calcination
@@ -1020,6 +1002,44 @@ x_current["Petcoke"] = 0.03
 x_current["Alternative_Fuel"] = 0.07
 x_current["Lignite_Coal"] = 0.90
 
+# 1. Fiziksel stok ve akış
+x_current["Material_acc"] = 15.0
+x_current["Clinker_output"] = 36.5 
+x_current["Kiln_solid_out"] = 41.0 
+
+# 2. Basınç Profili (Pa)
+x_current["P_preheater"] = 12.0
+x_current["P_calcination"] = 5.5
+x_current["P_burning"] = 1.2
+
+# 3. Damper kontrol
+x_current["Damper_position"] = 33.0
+
+# ---------------------------------------------------------
+# ENERGY BALANCE INITIALIZATION (STATIONARY STATE)
+# ---------------------------------------------------------
+
+# Enerji akışları (Q) [MW veya kW cinsinden, simülasyon birimine göre]
+x_current["Q_in"] = 55000.0      # Giriş yakıt enerjisi
+x_current["Q_out"] = 50000.0     # Çıkış (baca + klinker ile giden)
+x_current["Q_acc"] = 500.0       # Termal birikim
+x_current["Q_loss"] = 4500.0     # Gövde ısı kaybı
+x_current["Q_reaction"] = 1800.0 # Kalsinasyon reaksiyon ısısı
+
+# Enerji taşıyıcıları
+x_current["Q_gas"] = 35000.0     # Gaz fazındaki ısı
+x_current["Q_clinker"] = 15000.0 # Klinker fazındaki ısı
+
+# Performans Göstergeleri
+x_current["Clinker_yield"] = 0.89
+x_current["dTg_burning"] = 0.0
+x_current["dFuel_rate"] = 0.0
+
+# Enerji İndeksleri
+x_current["Normalized_Energy_Index"] = 1.0
+x_current["Global_Energy_Closure"] = 1.0
+x_current["Energy_error"] = 0.0  # Başlangıçta hata 0 olmalı
+
 # Pandas satır atamaları döngü içinde yavaştır. Çözüm sonuçlarını tutmak için liste kullanıyoruz.
 results_list = []
 sim_time = 0.0
@@ -1072,6 +1092,9 @@ df.update(df_results)
 # ==============================
 # SAVE OUTPUT
 # ==============================
+
+numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+df[numeric_cols] = df[numeric_cols].round(5)
 
 output_path = "kiln_simulation_output.csv"
 df.to_csv(output_path, index=False)
