@@ -47,7 +47,6 @@ for r, n in regime_series:
 
 df["Regime"] = regime_list[:N]
 
-
 # =============================================================
 # STABLE RESIDENCE TIME (FIXED)
 # =============================================================
@@ -59,11 +58,11 @@ def get_residence_time(kiln_rpm):
     rpm = max(0.1, kiln_rpm)
 
     # daha fiziksel RPM influence (log saturation değil, mild saturation)
-    rpm_eff = rpm / (0.5 + rpm)
+    rpm_eff = rpm / (0.6 + rpm)
 
     # corrected axial velocity scale (calibrated to industrial range)
     v_axial = (
-            5.74 * D * rpm_eff * (1.5 + 54.8 * slope)
+            7.42 * D * rpm_eff * (1.5 + 44.8 * slope)
     )
 
     residence = (L / (v_axial + 1e-6)) * 60.0
@@ -105,7 +104,7 @@ def step(x, t, regime):
     # RPM
     rpm_current = x.get("kiln_rpm", 1.0)
     rpm_setpoint = x.get("rpm_setpoint", 1.8)
-    alpha = 0.02
+    alpha = 0.005
 
     rpm_next = rpm_current + alpha * (rpm_setpoint - rpm_current)
     x_next["kiln_rpm"] = max(0.1, rpm_next)
