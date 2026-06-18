@@ -74,9 +74,8 @@ def get_residence_time(kiln_rpm, filling_rate=0.10):
 
     return residence
 
-
 # =============================================================
-# STEP FUNCTION
+# STEP FUNCTION (OPEN-LOOP PLANT MODEL)
 # =============================================================
 def step(x, t, regime):
 
@@ -96,15 +95,20 @@ def step(x, t, regime):
         1.0 - x.get("Petcoke", 0.0) - x.get("Alternative_Fuel", 0.0)
     )
 
-    # Inputs
-    f_rate = max(0.1, x.get("Fuel_rate", 2.5))
+    # ---------------------------------------------------------
+    # INPUT TRAJECTORIES (OPEN-LOOP DRIVERS - NO CONTROL LOOP)
+    # ---------------------------------------------------------
     feed = x.get("Feed_rate", 40.0)
-
     x_next["Feed_rate"] = feed + (120.0 - feed) * 0.0005 * dt
     x_next["Air_flow"] = 45000.0 + (95000.0 - 45000.0) * (1.0 - np.exp(-t / 120.0))
     x_next["Cooler_air_flow"] = 8000.0 + (83000.0 - 8000.0) * (1.0 - np.exp(-t / 140.0))
     x_next["ID_fan_speed"] = 900.0 + (2550.0 - 900.0) * (1.0 - np.exp(-t / 110.0))
     x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-t / 25.0)
+
+    # Saf eksponansiyel rampa ile 2.5 ton/h'den makul hedef olan 6.5 ton/h'ye sürülüyor.
+
+    x_next["Fuel_rate"] = 2.5 + (6.8 - 2.5) * (1.0 - np.exp(-t / 35.0))
+    f_rate = max(0.1, x_next["Fuel_rate"])
 
     # RPM
     rpm_current = x.get("kiln_rpm", 1.0)
@@ -136,11 +140,9 @@ def step(x, t, regime):
     m_sol = (x_next["Feed_rate"] * 1000.0) / 3600.0
 
     # Fiziksel İyileştirme: Sıcaklıktan bağımsız kütle çıkışı ve kalite ayrımı
-    # conversion_factor (%89) ile Kiln_solid_out üzerinden klinker çıkışı hesaplandı
     conversion_factor = 0.89
     x_next["Clinker_output"] = kiln_out * conversion_factor
     
-    # Kalite parametresi termal verimliliği izlemek için ayrı tutuldu
     temp_eff = np.clip((Ts - 800.0) / 400.0, 0.1, 1.0)
     x_next["Clinker_quality"] = temp_eff
 
@@ -168,14 +170,8 @@ def step(x, t, regime):
         21.0
     )
 
-    fuel_req = (max(5.0, x_next["Clinker_output"]) * 3400.0 / 25000.0) + (1450.0 - Ts) * 0.02
-
-    x_next["Fuel_rate"] = f_rate + (dt / 10.0) * (max(0.5, fuel_req) - f_rate)
-
     x.update(x_next)
     x["t"] = t + dt
-
-    
 
     
     
@@ -435,18 +431,6 @@ def step(x, t, regime):
     
     Ts_next_cool = (C_solid_cool * x.get("Ts_Cooling", 400.0) + dt * b_s_cool) / (C_solid_cool + dt * a_s_cool)
     x_next["Ts_Cooling"] = Ts_next_cool
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
                        
                 
     # -------------------------
