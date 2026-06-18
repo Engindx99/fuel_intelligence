@@ -63,7 +63,7 @@ def get_residence_time(kiln_rpm):
 
     # corrected axial velocity scale (calibrated to industrial range)
     v_axial = (
-            5.74 * D * rpm_eff * (1.5 + 34.8 * slope)
+            5.74 * D * rpm_eff * (1.5 + 54.8 * slope)
     )
 
     residence = (L / (v_axial + 1e-6)) * 60.0
@@ -104,7 +104,7 @@ def step(x, t, regime):
 
     # RPM
     rpm_current = x.get("kiln_rpm", 1.0)
-    rpm_setpoint = x.get("rpm_setpoint", 2.2)
+    rpm_setpoint = x.get("rpm_setpoint", 1.8)
     alpha = 0.02
 
     rpm_next = rpm_current + alpha * (rpm_setpoint - rpm_current)
@@ -1012,8 +1012,8 @@ x_current["C4AF"] = 1e-6
 # -------------------------
 # CONTROL INPUTS
 # -------------------------
-x_current["kiln_rpm"] = 1.3
-x_current["Residence"] = get_residence_time(1.3)
+x_current["kiln_rpm"] = 1.0
+x_current["Residence"] = get_residence_time(1.0)
 x_current["Petcoke"] = 0.03
 x_current["Alternative_Fuel"] = 0.07
 x_current["Lignite_Coal"] = 0.90
