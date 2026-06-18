@@ -945,14 +945,14 @@ x_current["Tg_burning"] = 1245.088639
 x_current["Tg_Cooling"] = 1582.903
 
 
-x_current["Air_flow"] = 50000.0
-x_current["Cooling_air_flow"] = 10000.0
+x_current["Air_flow"] = 45100
+x_current["Cooling_air_flow"] = 172440.0
 x_current["ID_fan_speed"] = 900.0
 
 # -------------------------
 # SOLID PHASE INITIALIZATION
 # -------------------------
-x_current["Feed_rate"] = 41.50
+x_current["Feed_rate"] = 43.00
 x_current["Kiln_solid_out"] = 0.1
 x_current["Material_acc"] = 0.0
 
@@ -988,8 +988,8 @@ x_current["Lignite_Coal"] = 0.90
 
 # 1. Fiziksel stok ve akış
 x_current["Material_acc"] = 15.0
-x_current["Clinker_output"] = 36.5 
-x_current["Kiln_solid_out"] = 41.0 
+x_current["Clinker_output"] = 11.13
+x_current["Kiln_solid_out"] = 12.50
 
 # 2. Basınç Profili (Pa)
 x_current["P_preheater"] = 12.0
@@ -1004,14 +1004,14 @@ x_current["Damper_position"] = 33.0
 # ---------------------------------------------------------
 
 # Enerji akışları (Q) [MW veya kW cinsinden, simülasyon birimine göre]
-x_current["Q_in"] = 55000.0      # Giriş yakıt enerjisi
-x_current["Q_out"] = 50000.0     # Çıkış (baca + klinker ile giden)
-x_current["Q_acc"] = 500.0       # Termal birikim
-x_current["Q_loss"] = 4500.0     # Gövde ısı kaybı
-x_current["Q_reaction"] = 1800.0 # Kalsinasyon reaksiyon ısısı
+x_current["Q_in"] = 35575.0      # Giriş yakıt enerjisi
+x_current["Q_out"] = 24285.0     # Çıkış (baca + klinker ile giden)
+x_current["Q_acc"] = 1669.0      # Termal birikim
+x_current["Q_loss"] = 22600.0     # Gövde ısı kaybı
+x_current["Q_reaction"] = 15.175 # Kalsinasyon reaksiyon ısısı
 
 # Enerji taşıyıcıları
-x_current["Q_gas"] = 35000.0     # Gaz fazındaki ısı
+x_current["Q_gas"] = 3524.0     # Gaz fazındaki ısı
 x_current["Q_clinker"] = 15000.0 # Klinker fazındaki ısı
 
 # Performans Göstergeleri
