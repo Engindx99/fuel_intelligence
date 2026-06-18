@@ -105,7 +105,7 @@ def step(x, t, regime):
     x_next["ID_fan_speed"] = 900.0 + (2550.0 - 900.0) * (1.0 - np.exp(-t / 110.0))
     x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-t / 25.0)
 
-    # Saf eksponansiyel rampa ile 2.5 ton/h'den makul hedef olan 6.5 ton/h'ye sürülüyor.
+    # Saf Eksponansiyel Fuel Rampa:
 
     x_next["Fuel_rate"] = 2.5 + (6.8 - 2.5) * (1.0 - np.exp(-t / 35.0))
     f_rate = max(0.1, x_next["Fuel_rate"])
