@@ -482,29 +482,59 @@ def step(x, t, regime):
             + (-180.0 + 406.0) * np.exp(-t / 20)
         )
 
-    # ---------------------------------------------------------
-    # 1. CaCO3 Kalsinasyonu (Kinetik model doğru)
-    # ---------------------------------------------------------
+    # =========================================================================
+    # İŞLETME NOKTASI (OPERATING POINT) TABANLI AÇIK SİSTEM MODELİ
+    # =========================================================================
+    
+    # Başlangıç şartı (t==0) artık kilitlenen (80, 0, 0) yerine 
+    # Belirttiğin dinamik işletme noktasına (Operating Point) set edilir.
     if t == 0:
-        x_next["CaCO3"] = 80.0
+        x_next["CaCO3"] = 40.0
+        x_next["CaO"] = 22.412
+        x_next["CO2"] = 17.588
     else:
+        # ---------------------------------------------------------
+        # 1. CaCO3 Kalsinasyonu (Kinetik model - BİREBİR KORUNDU)
+        # ---------------------------------------------------------
         T_kelvin = x["Ts_calcination"] + 273.15
         k = 1e7 * np.exp(-160000 / (8.314 * T_kelvin)) if T_kelvin > 873.15 else 0.0
+        
+        # Bu adımda reaksiyona giren CaCO3 miktarının kinetik hesabı
         x_next["CaCO3"] = float(round(x["CaCO3"] * np.exp(-k * dt), 6))
 
-    # ---------------------------------------------------------
-    # 2. CaO (Kütle Korunumu)
-    # ---------------------------------------------------------
-    # Oluşan CaO, parçalanan CaCO3 miktarı ile doğrudan ilişkilidir.
-    dCaCO3 = x["CaCO3"] - x_next["CaCO3"]  # Parçalanan CaCO3 (Pozitif)
-    x_next["CaO"] = x["CaO"] + (dCaCO3 * 0.5603) 
+        # ---------------------------------------------------------
+        # 2. CaO (Kütle Korunumu - BİREBİR KORUNDU)
+        # ---------------------------------------------------------
+        dCaCO3 = x["CaCO3"] - x_next["CaCO3"]  # Parçalanan CaCO3 (Pozitif)
+        x_next["CaO"] = x["CaO"] + (dCaCO3 * 0.5603) 
 
-    # ---------------------------------------------------------
-    # 3. CO2 (Kütle Korunumu)
-    # ---------------------------------------------------------
-    # CO2, CaCO3'ün parçalanmasıyla açığa çıkan gazdır.
-    # CO2_gen = dCaCO3 * 0.4397 (Stoikiyometrik oran)
-    x_next["CO2"] = x["CO2"] + (dCaCO3 * 0.4397)
+        # ---------------------------------------------------------
+        # 3. CO2 (Cebirsel Kapatma Kuralı - BİREBİR KORUNDU)
+        # ---------------------------------------------------------
+        # İşletme noktası tabanlı olduğu için bu formül artık hep pozitif ve kararlıdır.
+        x_next["CO2"] = float(round(80.0 - (x_next["CaCO3"] + x_next["CaO"]), 6))
+
+        # ---------------------------------------------------------
+        # 4. Fırın İçi Kütle Transferi ve Akış Dengesi (Operating Point Maintenance)
+        # ---------------------------------------------------------
+        # Fırın sürekli döndüğü ve beslendiği için:
+        # Arka bölgeden taze farin (CaCO3) gelir, oluşan CaO ve CO2 bir sonraki bölgeye/baya transfer olur.
+        
+        # Giriş Akışı: Tükenen CaCO3 kadar taze besleme sisteme girer
+        caco3_feed = dCaCO3
+        x_next["CaCO3"] += caco3_feed
+        
+        # Çıkış Akışı: Oluşan CaO sinterleme bölgesine aktarılır (Kalsinasyon zonundan eksilir)
+        cao_output = dCaCO3 * 0.5603
+        x_next["CaO"] -= cao_output
+        
+        # Gaz Çıkışı: Açığa çıkan CO2 bacaya/ön ısıtıcıya doğru fırından ayrılır
+        co2_output = dCaCO3 * 0.4397
+        x_next["CO2"] -= co2_output
+        
+        # İsteğe bağlı: Kontrolör (MPC) için sonraki zonlara aktarılan kütle akış hızları kaydedilebilir
+        x_next["mass_flow_to_sintering"] = cao_output
+        x_next["gas_flow_to_exhaust"] = co2_output
         
     # -------------------------
     # dCaO_calcination
@@ -964,9 +994,9 @@ x_current["Ts_Cooling"] = 1450.0
 # -------------------------
 # CHEMISTRY INITIALIZATION
 # -------------------------
-x_current["CaCO3"] = 80.0
-x_current["CaO"] = 1e-6
-x_current["CO2"] = 1e-6
+x_current["CaCO3"] = 40.000
+x_current["CaO"] = 22.412
+x_current["CO2"] = 17.588
 
 x_current["SiO2"] = 13.0
 x_current["Al2O3"] = 4.0
