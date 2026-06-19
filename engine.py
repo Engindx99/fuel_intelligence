@@ -80,39 +80,83 @@ class StepExecutor:
     def __init__(self, dt=0.05):
         self.dt = dt
 
-    def perform_step(self, x: KilnState, t: float) -> KilnState:
+    def perform_step(self, x: KilnState, t: float, inputs: dict = None) -> KilnState:
+        """
+        Tek bir zaman adımı için fiziksel simülasyonu ilerletir.
+
+        Args:
+            x: Mevcut fırın durumu (KilnState).
+            t: Mevcut simülasyon zamanı (saat).
+            inputs: (Opsiyonel) MPC veya RL kontrolcüsünden gelen kontrol girdileri.
+                    Desteklenen anahtarlar: Fuel_rate, Feed_rate, Air_flow,
+                    Cooling_air_flow, ID_fan_speed, Damper_position, kiln_rpm,
+                    Petcoke, Alternative_Fuel.
+                    Verilmeyen anahtarlar için open-loop (açık çevrim) 
+                    varsayılan değer kullanılır.
+
+        Returns:
+            x_next: Bir sonraki zaman adımındaki fırın durumu (KilnState).
+        """
+        if inputs is None:
+            inputs = {}
+        dt = self.dt
         x_next = x.copy()
         Tg_calcination = x.get("Tg_calcination", 850.0)
-        
-        # Fuel composition
-        x_next["Petcoke"] = x.get("Petcoke", 0.0)
-        x_next["Alternative_Fuel"] = x.get("Alternative_Fuel", 0.0)
+
+        # ---------------------------------------------------------
+        # FUEL COMPOSITION
+        # ---------------------------------------------------------
+        x_next["Petcoke"] = inputs.get("Petcoke", x.get("Petcoke", 0.0))
+        x_next["Alternative_Fuel"] = inputs.get("Alternative_Fuel", x.get("Alternative_Fuel", 0.0))
         x_next["Lignite_Coal"] = max(
             0.0,
             1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
         )
 
         # ---------------------------------------------------------
-        # INPUT TRAJECTORIES (OPEN-LOOP DRIVERS - NO CONTROL LOOP)
+        # CONTROL INPUTS (MPC/RL override veya Open-Loop fallback)
         # ---------------------------------------------------------
-        feed = x.get("Feed_rate", 40.0)
-        x_next["Feed_rate"] = feed + (120.0 - feed) * 0.0005 * dt
-        x_next["Air_flow"] = 45000.0 + (95000.0 - 45000.0) * (1.0 - np.exp(-t / 120.0))
-        x_next["Cooling_air_flow"] = 8000.0 + (83000.0 - 8000.0) * (1.0 - np.exp(-t / 140.0))
-        x_next["ID_fan_speed"] = 900.0 + (2550.0 - 900.0) * (1.0 - np.exp(-t / 110.0))
-        x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-t / 25.0)
+        if "Feed_rate" in inputs:
+            x_next["Feed_rate"] = inputs["Feed_rate"]
+        else:
+            feed = x.get("Feed_rate", 40.0)
+            x_next["Feed_rate"] = feed + (120.0 - feed) * 0.0005 * dt
 
-        # Saf Eksponansiyel Fuel Rampa:
-        x_next["Fuel_rate"] = 2.5 + (6.8 - 2.5) * (1.0 - np.exp(-t / 35.0))
+        if "Air_flow" in inputs:
+            x_next["Air_flow"] = inputs["Air_flow"]
+        else:
+            x_next["Air_flow"] = 45000.0 + (95000.0 - 45000.0) * (1.0 - np.exp(-t / 120.0))
+
+        if "Cooling_air_flow" in inputs:
+            x_next["Cooling_air_flow"] = inputs["Cooling_air_flow"]
+        else:
+            x_next["Cooling_air_flow"] = 8000.0 + (83000.0 - 8000.0) * (1.0 - np.exp(-t / 140.0))
+
+        if "ID_fan_speed" in inputs:
+            x_next["ID_fan_speed"] = inputs["ID_fan_speed"]
+        else:
+            x_next["ID_fan_speed"] = 900.0 + (2550.0 - 900.0) * (1.0 - np.exp(-t / 110.0))
+
+        if "Damper_position" in inputs:
+            x_next["Damper_position"] = inputs["Damper_position"]
+        else:
+            x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-t / 25.0)
+
+        if "Fuel_rate" in inputs:
+            x_next["Fuel_rate"] = inputs["Fuel_rate"]
+        else:
+            x_next["Fuel_rate"] = 2.5 + (6.8 - 2.5) * (1.0 - np.exp(-t / 35.0))
         f_rate = max(0.1, x_next["Fuel_rate"])
 
         # RPM
-        rpm_current = x.get("kiln_rpm", 1.0)
-        rpm_setpoint = 2.4
-        alpha = 0.005
-
-        rpm_next = rpm_current + alpha * (rpm_setpoint - rpm_current)
-        x_next["kiln_rpm"] = max(0.1, rpm_next)
+        if "kiln_rpm" in inputs:
+            x_next["kiln_rpm"] = max(0.1, inputs["kiln_rpm"])
+        else:
+            rpm_current = x.get("kiln_rpm", 1.0)
+            rpm_setpoint = 2.4
+            alpha = 0.005
+            rpm_next = rpm_current + alpha * (rpm_setpoint - rpm_current)
+            x_next["kiln_rpm"] = max(0.1, rpm_next)
 
         # Residence
         res_min = KilnPhysicsEngine.get_residence_time(x_next["kiln_rpm"])
@@ -932,7 +976,7 @@ for t_idx in range(N):
     # 2) Fiziksel adımlar
     for sub in range(STEPS_PER_REPORT):
         step_time = sim_time + (dt * (sub + 1))
-        x_current = executor.perform_step(x_current, step_time)
+        x_current = executor.perform_step(x_current, step_time, inputs=None)
 
     # 3) df'i satır satır güncelle (Hızlı ve güvenli)
     # Dataclass nesnesini sözlüğe çevirip doğrudan satıra yazıyoruz
