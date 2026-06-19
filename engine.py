@@ -230,10 +230,8 @@ def step(x, t, regime):
     # -------------------------------------------------------------
     # Tg_preheater (°C) - Gaz Fazı
     # -------------------------------------------------------------
-    a_gas_pre = (m_gas * Cp_g) + UA_pre
-    b_gas_pre = (m_gas * Cp_g * x["Tg_burning"]) + (UA_pre * x["Ts_preheater"])
     
-    Tg_next_pre = (C_gas_pre * x["Tg_preheater"] + dt * b_gas_pre) / (C_gas_pre + dt * a_gas_pre)
+    Tg_next_pre = 680.0 + np.random.normal(0, 1.2)
     x_next["Tg_preheater"] = Tg_next_pre
 
     # -------------------------------------------------------------
@@ -247,129 +245,111 @@ def step(x, t, regime):
         
 
     # -------------------------------------------------------------
-    # Ts_calcination (°C) - Katı Faz (Enerji Alıcı)
+    # Tg_calcination (°C) - Gaz Fazı (Stokastik Rezervuar)
+    # -------------------------------------------------------------
+    Tg_calcination = 1180.0 + np.random.normal(0, 1.2)
+    x_next["Tg_calcination"] = Tg_calcination
+    
+    # -------------------------------------------------------------
+    # Ts_calcination (°C) - Katı Faz (Dinamik Reaksiyon Bölgesi)
     # -------------------------------------------------------------
     Cp_s = 1050.0            
-    m_solid = x["Feed_rate"] 
     h_gs = 165.0             
     A_s = 840.0             
-    Ts_calcination = x["Ts_calcination"]
+    Ts_curr = x["Ts_calcination"]
     
-    # Reaksiyon yükü: Sigmoid throttle + Dinamik oran (1000C üstünde tam kapasite)
-    delta_H_rxn = 1700.0   
-    base_rate = 0.05
-    max_rate = 0.15
-    dynamic_rate = base_rate + (max_rate - base_rate) * (1.0 / (1.0 + np.exp(-0.02 * (Ts_calcination - 1000.0))))
-    reaction_throttle = 1.0 / (1.0 + np.exp(-0.08 * (Ts_calcination - 850.0)))
-    
-    Q_calcination_load = m_solid * 1000.0 * dynamic_rate * reaction_throttle * delta_H_rxn
-    
-    C_solid = (m_solid * 1000.0) * Cp_s / 3600.0
-    a_s = h_gs * A_s
-    b_s = (h_gs * A_s * Tg_calcination) - Q_calcination_load
-    
-    Ts_next = (C_solid * Ts_calcination + dt * b_s) / (C_solid + dt * a_s)
-    x_next["Ts_calcination"] = Ts_next
-
-    # -------------------------------------------------------------
-    # Tg_calcination (°C) - Gaz Fazı (Enerji Kaynağı)
-    # -------------------------------------------------------------
-    Cp_g = 1150.0            
-    A_c = 13.85             
-    h_c = 1.5                
-    m_air = x["Air_flow"] * 0.001270  
-    
-    Tg_preheater = x.get("Tg_preheater", 400.0) 
-    T_tertiary_nominal = 950.0  
-    unit_conversion = 1000.0  
-    
-    chi_gas = 0.75           
-    Q_in_effective = x["Q_in"] * unit_conversion * chi_gas
-    
-    rho_V_g_effective = 1000.0 
-    C_gas = rho_V_g_effective * Cp_g 
-
-    Q_gs_factor = h_gs * A_s 
-    a_gas = (m_air * Cp_g) + (h_c * A_c) + Q_gs_factor
-    
-    # Gaz dengesi: Ts_next ile coupled (Bağlı) denge
-    b_gas = (m_air * Cp_g * T_tertiary_nominal) + Q_in_effective + \
-            (h_c * A_c * Tg_preheater) + (Q_gs_factor * Ts_next * 1.02)
-    
-    Tg_next = (C_gas * Tg_calcination + dt * b_gas) / (C_gas + dt * a_gas)
-    x_next["Tg_calcination"] = Tg_next
-    
-                
-# -------------------------------------------------------------
-    # Tg_burning & Ts_burning (°C) - Birinci İlkeler Modeli
-    # -------------------------------------------------------------
-    
-    # Sabitler ve Boyutsal Çevrimler
-    Cp_g = 1250.0  # J/(kg·K)
-    Cp_s = 1150.0  # J/(kg·K)
-    A_c = 13.85    # Kayıp yüzey alanı m²
-    h_c = 0.05     # Çevreye kayıp katsayısı kW/(m²·K)
-    
-    # Alan tanımlaması (Eğer fırın geometrisinden gelmiyorsa güvenli default)
-    A_s = x.get("A_s", 25.0) 
-    
-    # Akışların Saatlikten Saniyelik (kg/s) Birimine Çevrilmesi (Fiziksel Tutarlılık)
-    # x["Air_flow"] Nm³/h -> kg/s çevrimi
-    m_air_s = (x["Air_flow"] * 1.293) / 3600.0  
-    # x["Feed_rate"] ton/h -> kg/s çevrimi
+    # Akışların Saatlikten Saniyelik (kg/s) Birimine Çevrilmesi
     m_solid_s = (x["Feed_rate"] * 1000.0) / 3600.0 
     
-    # Enerji Girdisi (Q_in kW cinsinden kabul edilmiştir, Watt'a çevrilir)
-    Q_burn_in_W = x.get("Q_in", 0.0) * 1000.0 
+    # KALSİNASYON ZONU STATİK KÜTLE HESABI (Hold-up Eylemsizliği)
+    # Zon içinde o an durmakta olan toplam malzeme kütlesi (Örn: 6500 kg)
+    M_solid_calcination_zone = 6500.0 
+    C_solid_total = M_solid_calcination_zone * Cp_s # J/K (Gerçek termal kapasite)
     
-    # FIRIN İÇİ STATİK KÜTLE HESABI (Sıfıra bölmeyi önleyen eylemsizlik)
-    # Fırının o bölgesinde her an çakılı duran malzeme ve gaz kütlesi:
-    M_gas_zone = 120.0    # kg (Fırın içi anlık gaz kütlesi)
-    M_solid_zone = 4500.0 # kg (Fırın içi anlık malzeme kütlesi - Hold-up kütlesi)
+    # Reaksiyon yükü kinetiği: Sigmoid throttle + Dinamik oran
+    delta_H_rxn = 1700.0   # kJ/kg cinsinden kalsinasyon entalpisi
+    base_rate = 0.05
+    max_rate = 0.15
+    dynamic_rate = base_rate + (max_rate - base_rate) * (1.0 / (1.0 + np.exp(-0.02 * (Ts_curr - 1000.0))))
+    reaction_throttle = 1.0 / (1.0 + np.exp(-0.08 * (Ts_curr - 850.0)))
     
-    C_gas_total = M_gas_zone * Cp_g      # J/K (Gazın gerçek termal kapasitesi)
-    C_solid_total = M_solid_zone * Cp_s  # J/K (Katının gerçek termal kapasitesi)
+    # Saniyelik Gerçek Isı Yükü (Watt = kg/s * J/kg)
+    # delta_H_rxn kJ olduğu için 1000 ile çarpılarak Joule'e çevrildi
+    Q_calcination_load_W = m_solid_s * dynamic_rate * reaction_throttle * (delta_H_rxn * 1000.0)
     
-    # Mevcut Sıcaklık Durumları
-    Tg_curr = x["Tg_burning"]
-    Ts_curr = x["Ts_burning"]
+    # Kalsinasyon Bölgesi Isı Akıları (Watt)
+    Q_gas_to_solid = h_gs * A_s * (Tg_calcination - Ts_curr)     # Gazdan gelen ısı (+)
+    Q_solid_advection = m_solid_s * Cp_s * (Ts_curr - 600.0)     # Preheater'dan 600°C'de giriyor (-)
+    
+    # Katı Diferansiyel Denklemi (Türev: Net Güç / Isı Sığası)
+    dTs_dt = (Q_gas_to_solid - Q_calcination_load_W - Q_solid_advection) / C_solid_total
+    
+    # Sayısal İntegrasyon (Açık Euler)
+    Ts_next = Ts_curr + dTs_dt * dt
+    
+    # İkinci Termodinamik Kanun Koruması
+    if Ts_next > Tg_calcination:
+        Ts_next = Tg_calcination - 5.0
+        
+    x_next["Ts_calcination"] = Ts_next
+
+    
+                
+    # =============================================================
+    # Tg_burning & Ts_burning (°C) - SABİT GAZ & DİNAMİK KATI MODELİ
+    # =============================================================
+    # Gaz fazı diferansiyel olarak çözülmez; stokastik bir termal rezervuar (1500°C + gürültü) kabul edilir.
+    # Asıl ısıl eylemsizlik ve diferansiyel denklemler katı fazda yürür.
+    
+    # -------------------------------------------------------------
+    # 1. GAZ FAZI TANIMLANMASI (Dinamik Değişken Değil)
+    # -------------------------------------------------------------
+    # Gaz sıcaklığı diferansiyel denklemlerden bağımsız olarak doğrudan üretilir
+    Tg_next = 1500.0 + np.random.normal(0, 1.2)
+    
+    # -------------------------------------------------------------
+    # 2. KATI FAZI DENGESİ (Fiziksel Dinamik Korunuyor)
+    # -------------------------------------------------------------
+    # Sabitler ve Kapasiteler
+    Cp_s = 1150.0          # J/(kg·K)
+    M_solid_zone = 4500.0  # kg (Fırın içi anlık malzeme kütlesi - Hold-up kütlesi)
+    C_solid_total = M_solid_zone * Cp_s
+    
+    A_s_burn = x.get("A_s", 25.0)                  # Isı transfer yüzey alanı (m²)
+    Tg_curr = x["Tg_burning"]                      # Katının o an hissettiği mevcut gaz sıcaklığı
+    Ts_curr = x["Ts_burning"]                      # Mevcut katı sıcaklığı
     
     # Dinamik Isı Transfer Katsayısı
     h_gs_burn = 220.0 if Tg_curr > 1000.0 else 50.0 # W/(m²·K)
     
-    # -------------------------------------------------------------
-    # Gelişmiş Enerji Dengesi Denklemleri (Karşılıklı Etkileşimli)
-    # -------------------------------------------------------------
+    # Gaz fazından katıya geçen anlık konvektif ve radyatif ısı akısı (Watt)
+    # Katı, üstteki gazın sıcaklığına (Tg_curr) göre beslenmeye devam eder
+    Q_gas_to_solid = h_gs_burn * A_s_burn * (Tg_curr - Ts_curr)
     
-    # A. Gaz Bölgesi Akıları (Watt)
-    Q_gas_to_solid = h_gs_burn * A_s * (Tg_curr - Ts_curr)
-    Q_gas_loss_ambient = (h_c * 1000.0) * A_c * (Tg_curr - 30.0) # h_c kW'dan W'a çekildi
-    Q_gas_advection = m_air_s * Cp_g * (Tg_curr - 400.0) # Giriş havası 400°C kabul edildi
+    # Akışların Saatlikten Saniyelik (kg/s) Birimine Çevrilmesi
+    m_solid_s = (x["Feed_rate"] * 1000.0) / 3600.0 # ton/h -> kg/s çevrimi
     
-    # Gaz Türevi (Net Isı / Termal Kapasite)
-    dTg_dt = (Q_burn_in_W - Q_gas_to_solid - Q_gas_loss_ambient - Q_gas_advection) / C_gas_total
-    
-    # B. Katı Bölgesi Akıları (Watt)
-    # Klinker ekzotermik reaksiyon ısısı (Sadece kalsinasyon üstü sıcaklıklarda tetiklenir)
+    # Klinker ekzotermik reaksiyon ısısı (Watt)
     Q_exo_W = 0.0
     if Ts_curr > 1200.0:
         # Reaksiyon hızı sıcaklıkla orantılı (Maksimum 350 kW ekzotermik katkı)
-        Q_exo_W = min(350000.0, m_solid_s * 500000.0 * (1.0 + (Ts_curr - 1200.0)/250.0))
+        Q_exo_W = min(350000.0, m_solid_s * 500000.0 * (1.0 + (Ts_curr - 1200.0) / 250.0))
         
     # Malzeme akışının taşıdığı duyu sıcaklığı kaybı (Advection)
     Q_solid_advection = m_solid_s * Cp_s * (Ts_curr - 900.0) # Kalsinasyondan 900°C'de giriyor
     
-    # Katı Türevi
+    # Katı Diferansiyel Denklemi (Türev)
+    # Gazdan gelen ısı ve ekzotermik reaksiyon (+) girer, adveksiyon akışı (-) çıkar
     dTs_dt = (Q_gas_to_solid + Q_exo_W - Q_solid_advection) / C_solid_total
     
-    # -------------------------------------------------------------
-    # Sayısal İntegrasyon (Yarı-%100 Kararlı Örtük Yaklaşım sönümlemesi)
-    # -------------------------------------------------------------
-    Tg_next = Tg_curr + dTg_dt * dt
+    # Katı Sayısal İntegrasyonu (Açık Euler adımı)
     Ts_next = Ts_curr + dTs_dt * dt
-    
-    # İkinci Termodinamik Kanun Koruması: Isı soğuktan sıcağa akamaz.
-    # Çözücü adımı kaçırsa bile katı gazı geçemez.
+
+    # -------------------------------------------------------------
+    # 3. TERMODİNAMİK KORUMA VE DURUM GÜNCELLEME
+    # -------------------------------------------------------------
+    # İkinci Termodinamik Kanun Koruması: Rastgele üretilen gaz sıcaklığı, 
+    # katının altına düşerse fiziksel tutarlılık için katıyı limitle.
     if Ts_next > Tg_next:
         Ts_next = Tg_next - 5.0
         
@@ -969,10 +949,10 @@ x_current["CO_ppm"] = 900.0
 # GAS PHASE INITIALIZATION
 # -------------------------
 
-x_current["Tg_preheater"] = 400.0
-x_current["Tg_calcination"] = 848.374628
-x_current["Tg_burning"] = 1245.088639
-x_current["Tg_Cooling"] = 1582.903
+x_current["Tg_preheater"] = 680.0
+x_current["Tg_calcination"] = 1180.0
+x_current["Tg_burning"] = 1500.0
+x_current["Tg_Cooling"] = 1100.0
 
 
 x_current["Air_flow"] = 45100
