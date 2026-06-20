@@ -294,57 +294,122 @@ class StepExecutor:
         x_next["Ts_preheater"] = (300000.0 * x.get("Ts_preheater", 25.0) + dt_sec * b_s_pre) / (300000.0 + dt_sec * a_s_pre)
 
         # -------------------------------------------------------------
-        # 4. ZON: COOLING (Sistem içi tutarlılık)
+        # 4. ZON: COOLING
+        # İki Fazlı (Katı-Gaz) Enerji Dengesi
         # -------------------------------------------------------------
-        Cp_g_cool = 1150.0            
-        Cp_s_cool = 1150.0            
-        T_air_in = 25.0          
+        Cp_g_cool = 1100.0
+        Cp_s_cool = 950.0
+        T_air_in = 25.0
 
-        C_gas_cool = 200000.0    
-        C_solid_cool = 220000.0  
+        C_gas_cool = 200000.0
+        C_solid_cool = 220000.0
 
-        m_gas_cool_s = (x_next["Cooling_air_flow"] * 1.293) / 3600.0 * 0.5
-        m_solid_cool_s = (x_next["Feed_rate"] * 1000.0) / 3600.0
+        h_cool = 150.0
+        A_cool = 40.0
+        Tamb = 130.0
 
-        res_val = x_next["Residence"]
-        epsilon = min(0.75 * (res_val / 30.0), 0.9)
+        m_gas_cool_s = (
+            x_next["Cooling_air_flow"] * 1.293
+        ) / 3600.0 * 0.5
 
-        delta_T_max = x_next["Ts_burning"] - T_air_in
-        Q_max = m_solid_cool_s * Cp_s_cool * delta_T_max
-        Q_transfer = epsilon * Q_max
+        m_solid_cool_s = (
+            x_next["Feed_rate"] * 1000.0
+        ) / 3600.0
 
         dt_sec = dt * 3600.0
 
-        a_g_cool = (m_gas_cool_s * Cp_g_cool)
-        b_g_cool = (m_gas_cool_s * Cp_g_cool * T_air_in) + Q_transfer
+        # -------------------------------------------------------------
+        # Mevcut zon sıcaklıkları
+        # -------------------------------------------------------------
+        Ts_old = x.get("Ts_Cooling", 400.0)
+        Tg_old = x.get("Tg_Cooling", 225.0)
+
+        # -------------------------------------------------------------
+        # Katı -> Gaz Isı Transferi
+        # -------------------------------------------------------------
+        Q_transfer = h_cool * A_cool * (Ts_old - Tg_old)
+
+        # -------------------------------------------------------------
+        # Gaz Fazı
+        # Cg*dTg/dt =
+        # mCp(T_air_in - Tg) + hA(Ts - Tg)
+        # -------------------------------------------------------------
+        a_g_cool = (
+            m_gas_cool_s * Cp_g_cool
+            + h_cool * A_cool
+        )
+
+        b_g_cool = (
+            m_gas_cool_s
+            * Cp_g_cool
+            * T_air_in
+            + h_cool
+            * A_cool
+            * Ts_old
+        )
 
         Tg_next_cool = (
-            C_gas_cool * x.get("Tg_Cooling", 25.0)
+            C_gas_cool * Tg_old
             + dt_sec * b_g_cool
-        ) / (C_gas_cool + dt_sec * a_g_cool)
+        ) / (
+            C_gas_cool
+            + dt_sec * a_g_cool
+        )
 
         x_next["Tg_Cooling"] = Tg_next_cool
 
-
-        a_s_cool = (m_solid_cool_s * Cp_s_cool) + 150000.0
+        # -------------------------------------------------------------
+        # Katı Fazı
+        # Cs*dTs/dt =
+        # mCp(Ts_burning - Ts) - hA(Ts - Tg)
+        # -------------------------------------------------------------
+        a_s_cool = (
+            m_solid_cool_s * Cp_s_cool
+            + h_cool * A_cool
+        )
 
         b_s_cool = (
-            m_solid_cool_s * Cp_s_cool * x_next["Ts_burning"]
-            - Q_transfer
-            + 150000.0 * 25.0
+            m_solid_cool_s
+            * Cp_s_cool
+            * x_next["Ts_burning"]
+            + h_cool
+            * A_cool
+            * Tg_old
         )
 
         Ts_next_cool = (
-            C_solid_cool * x.get("Ts_Cooling", 400.0)
+            C_solid_cool * Ts_old
             + dt_sec * b_s_cool
-        ) / (C_solid_cool + dt_sec * a_s_cool)
+        ) / (
+            C_solid_cool
+            + dt_sec * a_s_cool
+        )
 
-        x_next["Ts_Cooling"] = Ts_next_cool
+        # Fiziksel alt sınır
+        x_next["Ts_Cooling"] = max(Tamb, Ts_next_cool)
+
+        # -------------------------------------------------------------
+        # GLOBAL ENERGY BALANCE & KÜTLE ÇIKIŞI
+        # -------------------------------------------------------------
+        # Baca gazı çıkışı (Preheater çıkışı)
+        Q_total_out = (m_gas_pre * 1150.0 * x_next["Tg_preheater"])
+        x_next["Energy_Residual"] = Q_in_total - Q_total_out
+        
+        # Klinker Çıkış Hesabı
+        loss_on_ignition = 0.38
+        Clinker_output_rate = (x_next["Feed_rate"] * (1.0 - loss_on_ignition))
+        x_next["Clinker_output"] = (0.95 * x.get("Clinker_output", Clinker_output_rate)) + (0.05 * Clinker_output_rate)
         
         # Energy Check
         Q_total_out = (m_gas_pre * 1150.0 * x_next["Tg_preheater"]) # Gaz fazı baca kaybı
         # Eğer Q_total_out, Q_in_total'den çok farklıysa sistemde enerji sızıntısı var demektir.
         x_next["Energy_Residual"] = Q_in_total - Q_total_out
+        
+        loss_on_ignition = 0.38
+        
+        Clinker_output_rate = (x_next["Feed_rate"] * (1.0 - loss_on_ignition))
+        
+        x_next["Clinker_output"] = (0.95 * x.get("Clinker_output", Clinker_output_rate)) + (0.05 * Clinker_output_rate)
 
 
         # -------------------------------------------------------------
@@ -577,7 +642,7 @@ def run_simulation():
     x_current["Tg_preheater"] = 400.0
     x_current["Tg_calcination"] = 848.374628
     x_current["Tg_burning"] = 1245.088639
-    x_current["Tg_Cooling"] = 1582.903
+    x_current["Tg_Cooling"] = 250.0
     
     
     x_current["Air_flow"] = 45100
@@ -587,7 +652,7 @@ def run_simulation():
     # -------------------------
     # SOLID PHASE INITIALIZATION
     # -------------------------
-    x_current["Feed_rate"] = 43.00
+    x_current["Feed_rate"] = 71.00
     x_current["Kiln_solid_out"] = 0.1
     x_current["Material_acc"] = 0.0
     
