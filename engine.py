@@ -293,23 +293,47 @@ class StepExecutor:
         b_s_pre = (m_solid_pre * 1000.0 * 25.0) + (UA_pre * x_next["Tg_preheater"])
         x_next["Ts_preheater"] = (300000.0 * x.get("Ts_preheater", 25.0) + dt_sec * b_s_pre) / (300000.0 + dt_sec * a_s_pre)
         
+# -------------------------------------------------------------
+        # 4. ZON: COOLING (Fiziksel Enerji Dengesi - Birim Uyumlu Model)
         # -------------------------------------------------------------
-        # 4. ZON: COOLING (İteratif Referans Modeli)
-        # -------------------------------------------------------------
-        # Önceki adımdaki sıcaklıkları al (eğer yoksa başlangıç değerlerini kullan)
-        Tg_current = x.get("Tg_Cooling", 1550.0)
+        Tamb = 130.0  # Ortam (Cooling air inlet)
+        Cp_solid = 1150.0 # J/kgK
+        Cp_gas = 1050.0   # J/kgK
+        rho_air = 1.2     # kg/m³ (Nm3/h -> kg/s dönüşümü için)
+
+        # 1. Durum Değişkenleri
         Ts_current = x.get("Ts_Cooling", 1450.0)
-        Tamb = 130.0
+        Tg_current = x.get("Tg_Cooling", 1550.0)
+
+        # 2. Birim Dönüşümlü Akış Verileri
+        # m_air: Nm3/h -> kg/s
+        m_air_nm3h = x.get("Cooling_air_flow", 80000.0)
+        m_air_kgs = (m_air_nm3h / 3600.0) * rho_air
         
-        # İterasyon katsayısı (dt'ye bağlı olarak değişebilir)
-        alpha = 0.024 
+        # m_solid: Ton -> kg
+        m_solid_tons = x.get("m_solid", 50.0)
+        m_solid_kg = m_solid_tons * 1000.0
+
+        # 3. Enerji Dengesi (Termal Zaman Sabiti - Tau)
+        # tau = (Isıl Atalet) / (Isıl İletim Kapasitesi)
+        # k_transfer: Fırın soğutma zonu verim katsayısı (0.1 - 0.5 arası)
+        k_transfer = 0.2 
+        thermal_capacity = m_air_kgs * Cp_gas * k_transfer
+        tau_solid = (m_solid_kg * Cp_solid) / (thermal_capacity + 1e-6)
         
-        # Her adımda bir önceki değeri güncelleyerek ilerle
-        Tg_next_cool = Tg_current - alpha * (Tg_current - Tamb)
-        x_next["Tg_Cooling"] = Tg_next_cool
+        self.dt = dt_sec 
+
+        # 4. Diferansiyel Denklem (Newton Cooling Law - Stabilized)
+        # cooling_factor, zaman adımı ile sistemin zaman sabitini oranlar
+        cooling_factor = self.dt / (tau_solid + self.dt)
         
-        Ts_next_cool = Ts_current - alpha * (Ts_current - Tamb)
-        x_next["Ts_Cooling"] = Ts_next_cool
+        Ts_next = Ts_current - cooling_factor * (Ts_current - Tamb)
+        Tg_next = Tg_current - cooling_factor * 0.5 * (Tg_current - Tamb)
+
+        x_next["Ts_Cooling"] = Ts_next
+        x_next["Tg_Cooling"] = Tg_next
+
+
 
 
 
