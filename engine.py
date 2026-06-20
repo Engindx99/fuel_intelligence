@@ -294,26 +294,22 @@ class StepExecutor:
         x_next["Ts_preheater"] = (300000.0 * x.get("Ts_preheater", 25.0) + dt_sec * b_s_pre) / (300000.0 + dt_sec * a_s_pre)
         
         # -------------------------------------------------------------
-        # 4. ZON: COOLING (Newtonyen Soğuma Modeli)
+        # 4. ZON: COOLING (İteratif Referans Modeli)
         # -------------------------------------------------------------
-        Tamb = 130.0  # Ortam/Tahliye sıcaklığı
-        h_cool = 150.0  # Isı transfer katsayısı (W/m2K)
-        A_cool = 40.0   # Etkin soğutma alanı (m2)
+        # Önceki adımdaki sıcaklıkları al (eğer yoksa başlangıç değerlerini kullan)
+        Tg_current = x.get("Tg_Cooling", 1550.0)
+        Ts_current = x.get("Ts_Cooling", 1450.0)
+        Tamb = 130.0
         
-        # 1. Isı transferi (Q = h * A * dT)
-        # Klinker (Burning çıkışı) ile ortam arasındaki farka göre transfer
-        Q_transfer = h_cool * A_cool * (x_next["Ts_burning"] - Tamb)
+        # İterasyon katsayısı (dt'ye bağlı olarak değişebilir)
+        alpha = 0.024 
         
-        # 2. Katı Faz Soğuması (Klinker enerjisi Q_transfer kadar azalır)
-        # Katı enerji denge: Q_in_solid - Q_transfer = Q_out_solid
-        # Ts_next = (C * Ts_curr + dt * (m_dot_in * Cp * T_in - Q_transfer)) / (C + dt * m_dot_out * Cp)
-        Ts_next_cool = (300000.0 * x.get("Ts_Cooling", 400.0) + dt_sec * (m_solid_s * 1150.0 * x_next["Ts_burning"] - Q_transfer)) / (300000.0 + dt_sec * (m_solid_s * 1150.0))
-        x_next["Ts_Cooling"] = max(Tamb, Ts_next_cool)
-
-        # 3. Gaz Fazı Isınması (Klinkerden alınan ısı gaz fazına geçer)
-        # Gaz enerji denge: Q_in_air + Q_transfer = Q_out_gas
-        Tg_next_cool = (200000.0 * x.get("Tg_Cooling", 25.0) + dt_sec * (m_air_s * 1150.0 * 25.0 + Q_transfer)) / (200000.0 + dt_sec * (m_air_s * 1150.0))
+        # Her adımda bir önceki değeri güncelleyerek ilerle
+        Tg_next_cool = Tg_current - alpha * (Tg_current - Tamb)
         x_next["Tg_Cooling"] = Tg_next_cool
+        
+        Ts_next_cool = Ts_current - alpha * (Ts_current - Tamb)
+        x_next["Ts_Cooling"] = Ts_next_cool
 
 
 
