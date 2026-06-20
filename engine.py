@@ -292,101 +292,31 @@ class StepExecutor:
         a_s_pre = (m_solid_pre * 1000.0) + UA_pre
         b_s_pre = (m_solid_pre * 1000.0 * 25.0) + (UA_pre * x_next["Tg_preheater"])
         x_next["Ts_preheater"] = (300000.0 * x.get("Ts_preheater", 25.0) + dt_sec * b_s_pre) / (300000.0 + dt_sec * a_s_pre)
-
+        
         # -------------------------------------------------------------
-        # 4. ZON: COOLING
-        # İki Fazlı (Katı-Gaz) Enerji Dengesi
+        # 4. ZON: COOLING (Newtonyen Soğuma Modeli)
         # -------------------------------------------------------------
-        Cp_g_cool = 1100.0
-        Cp_s_cool = 950.0
-        T_air_in = 25.0
+        Tamb = 130.0  # Ortam/Tahliye sıcaklığı
+        h_cool = 150.0  # Isı transfer katsayısı (W/m2K)
+        A_cool = 40.0   # Etkin soğutma alanı (m2)
+        
+        # 1. Isı transferi (Q = h * A * dT)
+        # Klinker (Burning çıkışı) ile ortam arasındaki farka göre transfer
+        Q_transfer = h_cool * A_cool * (x_next["Ts_burning"] - Tamb)
+        
+        # 2. Katı Faz Soğuması (Klinker enerjisi Q_transfer kadar azalır)
+        # Katı enerji denge: Q_in_solid - Q_transfer = Q_out_solid
+        # Ts_next = (C * Ts_curr + dt * (m_dot_in * Cp * T_in - Q_transfer)) / (C + dt * m_dot_out * Cp)
+        Ts_next_cool = (300000.0 * x.get("Ts_Cooling", 400.0) + dt_sec * (m_solid_s * 1150.0 * x_next["Ts_burning"] - Q_transfer)) / (300000.0 + dt_sec * (m_solid_s * 1150.0))
+        x_next["Ts_Cooling"] = max(Tamb, Ts_next_cool)
 
-        C_gas_cool = 200000.0
-        C_solid_cool = 220000.0
-
-        h_cool = 150.0
-        A_cool = 40.0
-        Tamb = 130.0
-
-        m_gas_cool_s = (
-            x_next["Cooling_air_flow"] * 1.293
-        ) / 3600.0 * 0.5
-
-        m_solid_cool_s = (
-            x_next["Feed_rate"] * 1000.0
-        ) / 3600.0
-
-        dt_sec = dt * 3600.0
-
-        # -------------------------------------------------------------
-        # Mevcut zon sıcaklıkları
-        # -------------------------------------------------------------
-        Ts_old = x.get("Ts_Cooling", 400.0)
-        Tg_old = x.get("Tg_Cooling", 225.0)
-
-        # -------------------------------------------------------------
-        # Katı -> Gaz Isı Transferi
-        # -------------------------------------------------------------
-        Q_transfer = h_cool * A_cool * (Ts_old - Tg_old)
-
-        # -------------------------------------------------------------
-        # Gaz Fazı
-        # Cg*dTg/dt =
-        # mCp(T_air_in - Tg) + hA(Ts - Tg)
-        # -------------------------------------------------------------
-        a_g_cool = (
-            m_gas_cool_s * Cp_g_cool
-            + h_cool * A_cool
-        )
-
-        b_g_cool = (
-            m_gas_cool_s
-            * Cp_g_cool
-            * T_air_in
-            + h_cool
-            * A_cool
-            * Ts_old
-        )
-
-        Tg_next_cool = (
-            C_gas_cool * Tg_old
-            + dt_sec * b_g_cool
-        ) / (
-            C_gas_cool
-            + dt_sec * a_g_cool
-        )
-
+        # 3. Gaz Fazı Isınması (Klinkerden alınan ısı gaz fazına geçer)
+        # Gaz enerji denge: Q_in_air + Q_transfer = Q_out_gas
+        Tg_next_cool = (200000.0 * x.get("Tg_Cooling", 25.0) + dt_sec * (m_air_s * 1150.0 * 25.0 + Q_transfer)) / (200000.0 + dt_sec * (m_air_s * 1150.0))
         x_next["Tg_Cooling"] = Tg_next_cool
 
-        # -------------------------------------------------------------
-        # Katı Fazı
-        # Cs*dTs/dt =
-        # mCp(Ts_burning - Ts) - hA(Ts - Tg)
-        # -------------------------------------------------------------
-        a_s_cool = (
-            m_solid_cool_s * Cp_s_cool
-            + h_cool * A_cool
-        )
 
-        b_s_cool = (
-            m_solid_cool_s
-            * Cp_s_cool
-            * x_next["Ts_burning"]
-            + h_cool
-            * A_cool
-            * Tg_old
-        )
 
-        Ts_next_cool = (
-            C_solid_cool * Ts_old
-            + dt_sec * b_s_cool
-        ) / (
-            C_solid_cool
-            + dt_sec * a_s_cool
-        )
-
-        # Fiziksel alt sınır
-        x_next["Ts_Cooling"] = max(Tamb, Ts_next_cool)
 
         # -------------------------------------------------------------
         # GLOBAL ENERGY BALANCE & KÜTLE ÇIKIŞI
