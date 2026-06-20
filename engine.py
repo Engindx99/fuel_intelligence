@@ -17,15 +17,15 @@ class KilnState:
     Air_flow: float = 45000.0
     Cooling_air_flow: float = 80000.0
     ID_fan_speed: float = 900.0
-    Fuel_rate: float = 2.5
+    Fuel_rate: float = 4.0
     Tg_preheater: float = 350.0
-    Ts_preheater: float = 80.0
+    Ts_preheater: float = 100.0
     Tg_calcination: float = 850.0
-    Ts_calcination: float = 800.0
-    Tg_burning: float = 1200.0
-    Ts_burning: float = 1050.0
-    Tg_Cooling: float = 25.0
-    Ts_Cooling: float = 400.0
+    Ts_calcination: float = 780
+    Tg_burning: float = 1450.0
+    Ts_burning: float = 1400.0
+    Tg_Cooling: float = 1550.0
+    Ts_Cooling: float = 1450.0
     O2: float = 3.5
     CO_ppm: float = 0.0
     P_preheater: float = -120.0
@@ -146,7 +146,7 @@ class StepExecutor:
         if "Fuel_rate" in inputs:
             x_next["Fuel_rate"] = inputs["Fuel_rate"]
         else:
-            x_next["Fuel_rate"] = 4.0 + (6.8 - 2.5) * (1.0 - np.exp(-t / 35.0))
+            x_next["Fuel_rate"] = 4.0 + 1.5 * (1.0 - np.exp(-t / 35.0))
         f_rate = max(0.1, x_next["Fuel_rate"])
 
         # RPM & Residence
@@ -185,32 +185,60 @@ class StepExecutor:
         Q_in_total = x_next["Q_in"] * 1000.0
 
         feed_factor = x_next["Feed_rate"] / 100.0
-        Q_burning = Q_in_total * 0.60
+        Q_burning = Q_in_total * 0.56
         Q_calcination = Q_in_total * (0.30 * min(feed_factor, 1.2))
 
         dt_sec = self.dt * 3600.0
 
-        # BURNING ZONE
-        Cp_g_burn, Cp_s_burn, A_c_burn, h_c_burn, A_s_burn = 1250.0, 1150.0, 13.85, 0.05, 25.0
+# BURNING ZONE (Güncellenmiş Parametreler)
+        Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
+        A_c_burn, h_c_burn = 13.85, 0.05
+        
+        # Etkileşim Alanları
+        A_s_burn = 25.0    # Gaz-Katı (Üst Yüzey)
+        A_w_burn = 120.0   # Gaz-Duvar (Açıkta kalan refrakter yüzeyi)
+        A_ws_burn = 15.0   # Katı-Duvar Temas Alanı (Malzemenin tuğlaya oturduğu yay uzunluğu)
+
         m_air_s = (x_next["Air_flow"] * 1.293) / 3600.0
         m_solid_s = (x_next["Feed_rate"] * 1000.0) / 3600.0
-        C_gas_total = 120.0 * Cp_g_burn
+        
+        C_gas_total = 140.0 * Cp_g_burn
         C_solid_total = 4500.0 * Cp_s_burn
+        C_wall_total = 15000.0 * Cp_w_burn
 
         Tg_curr = x.get("Tg_burning", 1200.0)
         Ts_curr = x.get("Ts_burning", 1050.0)
-        h_gs_burn = 1500.0 if Tg_curr > 1000.0 else 500.0
+        Tw_curr = x.get("Tw_burning", 1100.0)
 
-        a_gas_burn = (h_gs_burn * A_s_burn) + (h_c_burn * 1000.0 * A_c_burn) + (m_air_s * Cp_g_burn)
-        b_gas_burn = (Q_burning) + (h_c_burn * 1000.0 * A_c_burn * 30.0) + (m_air_s * Cp_g_burn * 400.0) + (h_gs_burn * A_s_burn * Ts_curr)
+        # Isı Transfer Katsayıları
+        h_gs_burn = 850.0  # Gaz -> Katı
+        h_gw_burn = 350.0  # Gaz -> Duvar
+        h_ws_burn = 400.0  # Duvar -> Katı (Yeni: Kondüksiyon baskın)
+
+        # 1. Gaz Fazı (Değişiklik yok)
+        a_gas_burn = (h_gs_burn * A_s_burn) + (h_gw_burn * A_w_burn) + (h_c_burn * 1000.0 * A_c_burn) + (m_air_s * Cp_g_burn)
+        b_gas_burn = (Q_burning) + (h_gw_burn * A_w_burn * Tw_curr) + (h_c_burn * 1000.0 * A_c_burn * 30.0) + (m_air_s * Cp_g_burn * 400.0) + (h_gs_burn * A_s_burn * Ts_curr)
         Tg_next_burn = (C_gas_total * Tg_curr + dt_sec * b_gas_burn) / (C_gas_total + dt_sec * a_gas_burn)
 
-        Q_exo_W = min(350000.0, m_solid_s * 500000.0 * (1.0 + max(0, Ts_curr - 1200.0) / 250.0)) if Ts_curr > 1200.0 else 0.0
-        a_sol_burn = (h_gs_burn * A_s_burn) + (m_solid_s * Cp_s_burn)
-        b_sol_burn = Q_exo_W + (m_solid_s * Cp_s_burn * 900.0) + (h_gs_burn * A_s_burn * Tg_curr)
+        # 2. Duvar Fazı (Katıya verilen ısıyı duvardan DÜŞÜYORUZ)
+        Q_loss_wall = 15.0 * A_w_burn * (Tw_curr - 25.0) 
+        Q_wall_to_solid = h_ws_burn * A_ws_burn * (Tw_curr - Ts_curr) # Yeni Enerji Çıkışı
+        
+        Tw_next_burn = Tw_curr + (dt_sec / C_wall_total) * (h_gw_burn * A_w_burn * (Tg_next_burn - Tw_curr) - Q_loss_wall - Q_wall_to_solid)
+
+        # 3. Katı Fazı (Duvardan gelen ısıyı katıya EKLİYORUZ)
+        Q_exo_base = min(350000.0, m_solid_s * 500000.0 * (1.0 + max(0.0, Ts_curr - 1200.0) / 250.0))
+        Q_exo_W = Q_exo_base * float(Ts_curr > 1200.0)
+        
+        # Payda: h_ws_burn * A_ws_burn eklendi (Implicit stabilite freni)
+        a_sol_burn = (h_gs_burn * A_s_burn) + (h_ws_burn * A_ws_burn) + (m_solid_s * Cp_s_burn)
+        
+        # Pay: h_ws_burn * A_ws_burn * Tw_next_burn eklendi (Duvardan gelen enerji)
+        b_sol_burn = Q_exo_W + (m_solid_s * Cp_s_burn * 900.0) + (h_gs_burn * A_s_burn * Tg_next_burn) + (h_ws_burn * A_ws_burn * Tw_next_burn)
+        
         Ts_next_burn = (C_solid_total * Ts_curr + dt_sec * b_sol_burn) / (C_solid_total + dt_sec * a_sol_burn)
 
-        x_next["Tg_burning"], x_next["Ts_burning"] = Tg_next_burn, Ts_next_burn
+        x_next["Tg_burning"], x_next["Ts_burning"], x_next["Tw_burning"] = Tg_next_burn, Ts_next_burn, Tw_next_burn
 
         # CALCINATION ZONE
         h_gs, A_s = 110.0, 840.0
@@ -388,7 +416,7 @@ def run_simulation():
     # --- Başlangıç Koşulları (t=0.0) ---
     x_current = KilnState()
     x_current.t = 0.0
-    x_current.Fuel_rate, x_current.O2, x_current.CO_ppm = 2.5, 6.0, 900.0
+    x_current.Fuel_rate, x_current.O2, x_current.CO_ppm = 4.0, 6.0, 900.0
     x_current.Tg_preheater, x_current.Tg_calcination, x_current.Tg_burning, x_current.Tg_Cooling = 350.0, 850.0, 1450.0, 1550.0
     x_current.Air_flow, x_current.Cooling_air_flow, x_current.ID_fan_speed = 45100, 172440.0, 900.0
     x_current.Feed_rate, x_current.Kiln_solid_out, x_current.Material_acc = 71.00, 0.1, 0.0
