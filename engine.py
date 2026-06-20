@@ -201,16 +201,25 @@ class StepExecutor:
         # bunları burada m_gas_pre/m_solid_pre'ye atayabilirsiniz.
 
         # -------------------------------------------------------------
-        # 3. ZON: PREHEATER ZONE (Calcination gazı ile beslenir)
-        # -------------------------------------------------------------
-        UA_pre = 570000
-        # Artık m_gas_pre ve m_solid_pre tanımlı olduğu için hata vermeyecektir
-        a_gas_pre = (m_gas_pre * 1150.0) + UA_pre
-        # ...
-        # -------------------------------------------------------------
         # GLOBAL ENERGY SOURCE (TEK NOKTA)
         # -------------------------------------------------------------
         Q_in_total = x_next["Q_in"] * 1000.0  # W
+        
+        # -------------------------------------------------------------
+        # DİNAMİK ENERJİ PAYLAŞIMI (Energy Allocation)
+        # -------------------------------------------------------------
+        # Fırın içindeki toplam ısıl yükü besleme hızıyla ilişkilendiriyoruz
+        feed_factor = x_next.get("Feed_rate", 10.0) / 100.0 
+        
+        # Yanma zonu (Burning) en büyük payı alır (Alev enerjisi)
+        Q_burning = Q_in_total * 0.60 
+        
+        # Kalsinasyon zonu (Reaksiyon yüküne bağlı kısmi pay)
+        # Eğer besleme yüksekse kalsinasyon yükü artar
+        Q_calcination = Q_in_total * (0.30 * min(feed_factor, 1.2))
+        
+        # Preheater zonu (Kalan enerji recovery için)
+        Q_preheater = Q_in_total - Q_burning - Q_calcination
 
         # -------------------------------------------------------------
         # 1. ZON: BURNING ZONE (PRIMARY ENERGY SOURCE)
@@ -234,7 +243,7 @@ class StepExecutor:
         
         # Gaz Fazı Dengesi
         a_gas_burn = (h_gs_burn * A_s_burn) + (h_c_burn * 1000.0 * A_c_burn) + (m_air_s * Cp_g_burn)
-        b_gas_burn = (0.65 * Q_in_total) + (h_c_burn * 1000.0 * A_c_burn * 30.0) + (m_air_s * Cp_g_burn * 400.0) + (h_gs_burn * A_s_burn * Ts_curr)
+        b_gas_burn = (Q_burning) + (h_c_burn * 1000.0 * A_c_burn * 30.0) + (m_air_s * Cp_g_burn * 400.0) + (h_gs_burn * A_s_burn * Ts_curr)
         Tg_next_burn = (C_gas_total * Tg_curr + dt_sec * b_gas_burn) / (C_gas_total + dt_sec * a_gas_burn)
 
         # Katı Faz Dengesi
@@ -261,13 +270,13 @@ class StepExecutor:
         
         # Katı Faz
         C_solid_calc_total = (m_solid_calc * 1000.0 * 1050.0) / 3600.0
-        b_s = (h_gs * A_s * x.get("Tg_calcination", 900.0)) + (0.25 * Q_in_total / 3600.0) - Q_calc_load - ((m_solid_calc * 1000.0 / 3600.0) * 1050.0 * (Ts_calc_curr - 25.0))
+        b_s = (h_gs * A_s * x.get("Tg_calcination", 900.0)) + (Q_calcination / 3600.0) - Q_calc_load - ((m_solid_calc * 1000.0 / 3600.0) * 1050.0 * (Ts_calc_curr - 25.0))
         x_next["Ts_calcination"] = min((C_solid_calc_total * Ts_calc_curr + dt_sec * b_s) / (C_solid_calc_total + dt_sec * (h_gs * A_s)), 1200.0)
 
         # Gaz Fazı (Burning'den gelen Tg_next_burn kullanıldı)
         m_air_calc = x_next["Air_flow"] * 0.001270
         a_gas_calc = (m_air_calc * 1150.0) + (4.0 * 13.85) + (h_gs * A_s)
-        b_gas_calc = (m_air_calc * 1150.0 * Tg_next_burn) + (0.25 * Q_in_total) + (4.0 * 13.85 * x.get("Tg_preheater", 350.0)) + (h_gs * A_s * x_next["Ts_calcination"])
+        b_gas_calc = (m_air_calc * 1150.0 * Tg_next_burn) + (Q_calcination) + (4.0 * 13.85 * x.get("Tg_preheater", 350.0)) + (h_gs * A_s * x_next["Ts_calcination"])
         x_next["Tg_calcination"] = min((1000.0 * 1150.0 * x.get("Tg_calcination", 900.0) + dt_sec * (b_gas_calc - (m_air_calc * 1150.0 * x.get("Tg_calcination", 900.0)))) / (1000.0 * 1150.0 + dt_sec * a_gas_calc), 1300.0)
 
         # -------------------------------------------------------------
@@ -331,6 +340,11 @@ class StepExecutor:
         ) / (C_solid_cool + dt_sec * a_s_cool)
 
         x_next["Ts_Cooling"] = Ts_next_cool
+        
+        # Energy Check
+        Q_total_out = (m_gas_pre * 1150.0 * x_next["Tg_preheater"]) # Gaz fazı baca kaybı
+        # Eğer Q_total_out, Q_in_total'den çok farklıysa sistemde enerji sızıntısı var demektir.
+        x_next["Energy_Residual"] = Q_in_total - Q_total_out
 
 
         # -------------------------------------------------------------
