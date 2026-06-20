@@ -81,28 +81,21 @@ class StepExecutor:
         self.dt = dt
 
     def perform_step(self, x: KilnState, t: float, inputs: dict = None) -> KilnState:
-        """
-        Tek bir zaman adımı için fiziksel simülasyonu ilerletir.
-
-        Args:
-            x: Mevcut fırın durumu (KilnState).
-            t: Mevcut simülasyon zamanı (saat).
-            inputs: (Opsiyonel) MPC veya RL kontrolcüsünden gelen kontrol girdileri.
-                    Desteklenen anahtarlar: Fuel_rate, Feed_rate, Air_flow,
-                    Cooling_air_flow, ID_fan_speed, Damper_position, kiln_rpm,
-                    Petcoke, Alternative_Fuel.
-                    Verilmeyen anahtarlar için open-loop (açık çevrim) 
-                    varsayılan değer kullanılır.
-
-        Returns:
-            x_next: Bir sonraki zaman adımındaki fırın durumu (KilnState).
-        """
-        if inputs is None:
-            inputs = {}
-        dt = self.dt
+            # Girdileri güvenli bir şekilde al
+        inputs = inputs or {}
+            
+            # Yeni state'i kopyala
         x_next = x.copy()
-        Tg_calcination = x.get("Tg_calcination", 850.0)
-
+            
+            # Regime bilgisini al
+        regime = inputs.get("regime", "R1_HEATING_STABILIZATION")
+            
+            # Kontrol girdilerini güncelle (Eğer inputs içinde varsa)
+            # Bu kısım eksikti, bu sayede dışarıdan gelen (MPC/RL) komutlar işlenir
+        for key in ["Fuel_rate", "Feed_rate", "Air_flow", "kiln_rpm", "Petcoke", "Alternative_Fuel"]:
+            if key in inputs:
+                setattr(x_next, key, inputs[key])
+        
         # ---------------------------------------------------------
         # FUEL COMPOSITION
         # ---------------------------------------------------------
@@ -195,213 +188,104 @@ class StepExecutor:
         x_next["P_preheater"] = -269.0 + 149.0 * np.exp(-t / 15.0)
 
         #===================================== Operational Zones =====================================
-        
+
+        # -------------------------------------------------------------
+        # ZON HESAPLAMALARI ÖNCESİ GEREKLİ TANIMLAR
+        # -------------------------------------------------------------
+        # Kütle akışlarını x_next içinden veya hesaplayarak tanımlayın:
+        # Örnek: Eğer x_next içinde bu anahtarlar varsa:
+        m_gas_pre = x_next.get("Air_flow", 0.0) * 0.001293
+        m_solid_pre = x_next.get("Feed_rate", 0.0)
+
+        # Veya daha önce hesapladığınız bir değer varsa (örn: m_air_s, m_solid_s gibi) 
+        # bunları burada m_gas_pre/m_solid_pre'ye atayabilirsiniz.
+
+        # -------------------------------------------------------------
+        # 3. ZON: PREHEATER ZONE (Calcination gazı ile beslenir)
+        # -------------------------------------------------------------
+        UA_pre = 570000
+        # Artık m_gas_pre ve m_solid_pre tanımlı olduğu için hata vermeyecektir
+        a_gas_pre = (m_gas_pre * 1150.0) + UA_pre
+        # ...
         # -------------------------------------------------------------
         # GLOBAL ENERGY SOURCE (TEK NOKTA)
         # -------------------------------------------------------------
         Q_in_total = x_next["Q_in"] * 1000.0  # W
 
-        # Fuel allocation (physical split assumption)
-        Q_burning = 0.65 * Q_in_total
-        Q_calcination = 0.25 * Q_in_total
-        Q_preheater = 0.10 * Q_in_total
-
-
         # -------------------------------------------------------------
-        # Sabitlerin Tanımlanması (Zon Başında)
-        # -------------------------------------------------------------
-        Cp_g = 1150.0            
-        Cp_s = 1000.0            
-        T_ambient = 25.0         
-
-        C_gas_pre = 200000.0
-        C_solid_pre = 300000.0
-
-        m_gas_pre = x_next["Air_flow"] * 0.001293
-        m_solid_pre = x_next["Feed_rate"]
-
-        UA_pre = 570000  
-
-
-        # -------------------------------------------------------------
-        # Tg_preheater (Gaz Fazı) - HEAT RECOVERY ONLY
-        # -------------------------------------------------------------
-        a_gas_pre = (m_gas_pre * Cp_g) + UA_pre
-
-        b_gas_pre = (
-            m_gas_pre * Cp_g * x_next["Tg_calcination"]   # upstream now corrected
-            + UA_pre * x.get("Ts_preheater", 25.0)
-        )
-
-        Tg_next_pre = (
-            C_gas_pre * x.get("Tg_preheater", 350.0)
-            + dt * b_gas_pre
-        ) / (C_gas_pre + dt * a_gas_pre)
-
-        x_next["Tg_preheater"] = Tg_next_pre
-
-
-        # -------------------------------------------------------------
-        # Ts_preheater (Katı Faz)
-        # -------------------------------------------------------------
-        a_s_pre = (m_solid_pre * Cp_s) + UA_pre
-
-        b_s_pre = (
-            m_solid_pre * Cp_s * T_ambient
-            + UA_pre * Tg_next_pre
-        )
-
-        Ts_next_pre = (
-            C_solid_pre * x.get("Ts_preheater", 25.0)
-            + dt * b_s_pre
-        ) / (C_solid_pre + dt * a_s_pre)
-
-        x_next["Ts_preheater"] = Ts_next_pre
-
-
-# -------------------------------------------------------------
-        # Ts_calcination (Katı Faz) - Endotermik Reaksiyon ve Isıl Kayıplar
-        # -------------------------------------------------------------
-        Cp_s_calc = 1050.0            
-        m_solid_calc = x_next["Feed_rate"] 
-        h_gs = 100.0            
-        A_s = 840.0            
-        Ts_calcination_curr = x.get("Ts_calcination", 800.0)
-        delta_H_rxn = 1700.0   
-
-        # Reaksiyon kinetiği
-        dynamic_rate = 0.05 + 0.10 * (1.0 / (1.0 + np.exp(-0.02 * (Ts_calcination_curr - 1000.0))))
-        reaction_throttle = 1.0 / (1.0 + np.exp(-0.08 * (Ts_calcination_curr - 850.0)))
-        Q_calcination_load = (m_solid_calc / 3600.0) * dynamic_rate * reaction_throttle * delta_H_rxn * 1000.0
-
-        C_solid_calc_total = (m_solid_calc * 1000.0) * Cp_s_calc / 3600.0
-        dt_sec = dt * 3600.0
-        
-        # Isı Dengesi: Giren + Reaksiyon Yükü - Katı Faz Adveksiyon Kaybı
-        a_s = h_gs * A_s
-        b_s = (h_gs * A_s * x.get("Tg_calcination", 900.0)) + (Q_calcination / 3600.0) - Q_calcination_load 
-        b_s -= (m_solid_calc * 1000.0 / 3600.0) * Cp_s_calc * (Ts_calcination_curr - T_ambient)
-
-        Ts_next_calc = (C_solid_calc_total * Ts_calcination_curr + dt_sec * b_s) / (C_solid_calc_total + dt_sec * a_s)
-        x_next["Ts_calcination"] = min(Ts_next_calc, 1200.0) # Termal tavan
-
-
-        # -------------------------------------------------------------
-        # Tg_calcination (Gaz Fazı) - Burning Beslemesi ve Adveksiyon Çıkışı
-        # -------------------------------------------------------------
-        Cp_g_calc = 1150.0            
-        A_c_calc = 13.85            
-        h_c_calc = 4.0                
-        m_air_calc = x_next["Air_flow"] * 0.001270  
-        Tg_preheater_val = x_next["Tg_preheater"] 
-        
-        # Burning zonundan gelen gerçek sıcaklık
-        T_gas_inflow = x_next["Tg_burning"] 
-
-        C_gas_calc_total = 1000.0 * Cp_g_calc 
-        Q_gs_factor = h_gs * A_s 
-
-        # Gaz fazı denklemi: a_gas (zonda tutulan + adveksiyonla çıkan)
-        a_gas = (m_air_calc * Cp_g_calc) + (h_c_calc * A_c_calc) + Q_gs_factor
-        
-        # b_gas: Enerji girişi (Burning) - Isı çıkışları (Adveksiyon ve Cidar)
-        b_gas = (
-            m_air_calc * Cp_g_calc * T_gas_inflow
-            + Q_calcination 
-            + h_c_calc * A_c_calc * Tg_preheater_val
-            + Q_gs_factor * x_next["Ts_calcination"]
-        )
-        # Gaz zonu terk ederken enerji taşır (Adveksiyon düzeltmesi)
-        b_gas -= (m_air_calc * Cp_g_calc * x.get("Tg_calcination", 900.0))
-
-        Tg_next_calc = (C_gas_calc_total * x.get("Tg_calcination", 900.0) + dt_sec * b_gas) / (C_gas_calc_total + dt_sec * a_gas)
-        x_next["Tg_calcination"] = min(Tg_next_calc, 1300.0) # Termal tavan
-
-
-        # -------------------------------------------------------------
-        # Tg_burning & Ts_burning (PRIMARY ENERGY ZONE)
+        # 1. ZON: BURNING ZONE (PRIMARY ENERGY SOURCE)
         # -------------------------------------------------------------
         Cp_g_burn = 1250.0  
         Cp_s_burn = 1150.0  
-
         A_c_burn = 13.85    
-        h_c_burn = 0.05     
-
+        h_c_burn = 0.05    
         A_s_burn = 25.0 
 
         m_air_s = (x_next["Air_flow"] * 1.293) / 3600.0  
         m_solid_s = (x_next["Feed_rate"] * 1000.0) / 3600.0 
-
-        M_gas_zone = 120.0    
-        M_solid_zone = 4500.0 
-
-        C_gas_total = M_gas_zone * Cp_g_burn      
-        C_solid_total = M_solid_zone * Cp_s_burn  
+        C_gas_total = 120.0 * Cp_g_burn       
+        C_solid_total = 4500.0 * Cp_s_burn  
 
         Tg_curr = x.get("Tg_burning", 1200.0)
         Ts_curr = x.get("Ts_burning", 1050.0)
-
         h_gs_burn = 1500.0 if Tg_curr > 1000.0 else 500.0 
 
-
-        # --- ENERGY INPUT FIXED ---
-        Q_burn_in_W = Q_burning
-
-
-        Q_gas_to_solid = h_gs_burn * A_s_burn * (Tg_curr - Ts_curr)
-        Q_gas_loss_ambient = (h_c_burn * 1000.0) * A_c_burn * (Tg_curr - 30.0)
-        Q_gas_advection = m_air_s * Cp_g_burn * (Tg_curr - 400.0)
-
         dt_sec = dt * 3600.0
+        
+        # Gaz Fazı Dengesi
+        a_gas_burn = (h_gs_burn * A_s_burn) + (h_c_burn * 1000.0 * A_c_burn) + (m_air_s * Cp_g_burn)
+        b_gas_burn = (0.65 * Q_in_total) + (h_c_burn * 1000.0 * A_c_burn * 30.0) + (m_air_s * Cp_g_burn * 400.0) + (h_gs_burn * A_s_burn * Ts_curr)
+        Tg_next_burn = (C_gas_total * Tg_curr + dt_sec * b_gas_burn) / (C_gas_total + dt_sec * a_gas_burn)
 
-        a_gas_burn = (
-            h_gs_burn * A_s_burn
-            + (h_c_burn * 1000.0 * A_c_burn)
-            + (m_air_s * Cp_g_burn)
-        )
-
-        b_gas_burn = (
-            Q_burn_in_W
-            + h_c_burn * 1000.0 * A_c_burn * 30.0
-            + m_air_s * Cp_g_burn * 400.0
-            + h_gs_burn * A_s_burn * Ts_curr
-        )
-
-        Tg_next_burn = (
-            C_gas_total * Tg_curr
-            + dt_sec * b_gas_burn
-        ) / (C_gas_total + dt_sec * a_gas_burn)
-
-
-        # --- SOLID SIDE ---
-        Q_exo_W = 0.0
-        if Ts_curr > 1200.0:
-            Q_exo_W = min(
-                350000.0,
-                m_solid_s * 500000.0 * (1.0 + (Ts_curr - 1200.0)/250.0)
-            )
-
-        Q_solid_advection = m_solid_s * Cp_s_burn * (Ts_curr - 900.0)
-
-        a_sol_burn = h_gs_burn * A_s_burn + (m_solid_s * Cp_s_burn)
-
-        b_sol_burn = (
-            Q_exo_W
-            + m_solid_s * Cp_s_burn * 900.0
-            + h_gs_burn * A_s_burn * Tg_curr
-        )
-
-        Ts_next_burn = (
-            C_solid_total * Ts_curr
-            + dt_sec * b_sol_burn
-        ) / (C_solid_total + dt_sec * a_sol_burn)
+        # Katı Faz Dengesi
+        Q_exo_W = min(350000.0, m_solid_s * 500000.0 * (1.0 + max(0, Ts_curr - 1200.0)/250.0)) if Ts_curr > 1200.0 else 0.0
+        a_sol_burn = (h_gs_burn * A_s_burn) + (m_solid_s * Cp_s_burn)
+        b_sol_burn = Q_exo_W + (m_solid_s * Cp_s_burn * 900.0) + (h_gs_burn * A_s_burn * Tg_curr)
+        Ts_next_burn = (C_solid_total * Ts_curr + dt_sec * b_sol_burn) / (C_solid_total + dt_sec * a_sol_burn)
 
         x_next["Tg_burning"] = Tg_next_burn
         x_next["Ts_burning"] = Ts_next_burn
 
+        # -------------------------------------------------------------
+        # 2. ZON: CALCINATION ZONE (Burning gazı ile beslenir)
+        # -------------------------------------------------------------
+        h_gs = 110.0
+        A_s = 840.0
+        m_solid_calc = x_next["Feed_rate"]
+        Ts_calc_curr = x.get("Ts_calcination", 800.0)
+        
+        # Kalsinasyon yükü
+        dynamic_rate = 0.05 + 0.10 * (1.0 / (1.0 + np.exp(-0.02 * (Ts_calc_curr - 1000.0))))
+        reaction_throttle = 1.0 / (1.0 + np.exp(-0.08 * (Ts_calc_curr - 850.0)))
+        Q_calc_load = (m_solid_calc / 3600.0) * dynamic_rate * reaction_throttle * 1700.0 * 1000.0
+        
+        # Katı Faz
+        C_solid_calc_total = (m_solid_calc * 1000.0 * 1050.0) / 3600.0
+        b_s = (h_gs * A_s * x.get("Tg_calcination", 900.0)) + (0.25 * Q_in_total / 3600.0) - Q_calc_load - ((m_solid_calc * 1000.0 / 3600.0) * 1050.0 * (Ts_calc_curr - 25.0))
+        x_next["Ts_calcination"] = min((C_solid_calc_total * Ts_calc_curr + dt_sec * b_s) / (C_solid_calc_total + dt_sec * (h_gs * A_s)), 1200.0)
+
+        # Gaz Fazı (Burning'den gelen Tg_next_burn kullanıldı)
+        m_air_calc = x_next["Air_flow"] * 0.001270
+        a_gas_calc = (m_air_calc * 1150.0) + (4.0 * 13.85) + (h_gs * A_s)
+        b_gas_calc = (m_air_calc * 1150.0 * Tg_next_burn) + (0.25 * Q_in_total) + (4.0 * 13.85 * x.get("Tg_preheater", 350.0)) + (h_gs * A_s * x_next["Ts_calcination"])
+        x_next["Tg_calcination"] = min((1000.0 * 1150.0 * x.get("Tg_calcination", 900.0) + dt_sec * (b_gas_calc - (m_air_calc * 1150.0 * x.get("Tg_calcination", 900.0)))) / (1000.0 * 1150.0 + dt_sec * a_gas_calc), 1300.0)
 
         # -------------------------------------------------------------
-        # Cooling Zone (UNCHANGED ENERGY SOURCE, only consistency)
+        # 3. ZON: PREHEATER ZONE (Calcination gazı ile beslenir)
+        # -------------------------------------------------------------
+        UA_pre = 570000
+        # Gaz fazı (Calcination çıkışı ile besleme)
+        a_gas_pre = (m_gas_pre * 1150.0) + UA_pre
+        b_gas_pre = (m_gas_pre * 1150.0 * x_next["Tg_calcination"]) + (UA_pre * x.get("Ts_preheater", 25.0))
+        x_next["Tg_preheater"] = (200000.0 * x.get("Tg_preheater", 350.0) + dt_sec * b_gas_pre) / (200000.0 + dt_sec * a_gas_pre)
+
+        # Katı faz
+        a_s_pre = (m_solid_pre * 1000.0) + UA_pre
+        b_s_pre = (m_solid_pre * 1000.0 * 25.0) + (UA_pre * x_next["Tg_preheater"])
+        x_next["Ts_preheater"] = (300000.0 * x.get("Ts_preheater", 25.0) + dt_sec * b_s_pre) / (300000.0 + dt_sec * a_s_pre)
+
+        # -------------------------------------------------------------
+        # 4. ZON: COOLING (Sistem içi tutarlılık)
         # -------------------------------------------------------------
         Cp_g_cool = 1150.0            
         Cp_s_cool = 1150.0            
@@ -643,38 +527,31 @@ class StepExecutor:
         if t == 0:
             x_next["SCALE"] = 1.0                                                                                                          
         return x_next
-        
 
 def run_simulation():
     # --- SİMÜLASYON BAŞLATMA VE KONFİGÜRASYON ---
-    executor = StepExecutor() # StepExecutor sınıfınızın örneği
+    executor = StepExecutor() 
     sim_time = 0.0
     
-    reporting_dt = 1/6  # 10 dakika (saat cinsinden)
+    reporting_dt = 1/6  # 10 dakika
     STEPS_PER_REPORT = int(reporting_dt / dt) 
     
     REGIME_FEED_MULT = {
-        "R1_HEATING_STABILIZATION": 0.6,
-        "R2_EARLY_CALCINATION": 0.75,
-        "R3_ACTIVE_CALCINATION": 0.85,
-        "R4_TRANSITION_TO_CLINKERIZATION": 0.92,
-        "R5_EARLY_CLINKERIZATION": 0.97,
+        "R1_HEATING_STABILIZATION": 1.0,
+        "R2_EARLY_CALCINATION": 1.0,
+        "R3_ACTIVE_CALCINATION": 1.0,
+        "R4_TRANSITION_TO_CLINKERIZATION": 1.0,
+        "R5_EARLY_CLINKERIZATION": 1.0,
         "R6_STEADY_CLINKERIZATION": 1.0,
-        "R7_FUEL_SWITCH_TRANSIENT": 1.03,
-        "R8_RESTABILIZATION": 0.9,
+        "R7_FUEL_SWITCH_TRANSIENT": 1.0,
+        "R8_RESTABILIZATION": 1.0,
     }
-    
+
     # ==============================
     # INITIAL STATE ALLOCATION
     # ==============================
-    
-    # Tüm değişkenleri başlangıçta 0.0 olarak atıyoruz
     x_current = KilnState()
-    
-    # -------------------------------------
-    # Explicit Physical initial Conditions
-    # -------------------------------------
-    
+        
     x_current["Fuel_rate"] = 2.5
     x_current["O2"] = 6.0
     x_current["CO_ppm"] = 900.0
@@ -767,17 +644,24 @@ def run_simulation():
     x_current["Global_Energy_Closure"] = 1.0
     x_current["Energy_error"] = 0.0  # Başlangıçta hata 0 olmalı
     
-    # Residence time başlangıç değeri atanıyor
     x_current.Residence = KilnPhysicsEngine.get_residence_time(1.0)
-    
+
     # ==============================
     # INPUT LAYER (CONTROL SYSTEM)
     # ==============================
-    
-    def input_layer(t: float, regime: str) -> dict[str, float]:
+    def input_layer(t: float, regime: str, initial_state: KilnState = None) -> dict[str, float]:
         """
         Zamana ve rejime bağlı kontrol girdilerini hesaplar.
+        t=0 anında başlangıç değerlerini korumak için korumalıdır.
         """
+        # BAŞLANGIÇ KORUMASI: t=0 anında manuel değerleri ezme
+        if t < 1e-4 and initial_state is not None:
+            return {
+                "Petcoke": initial_state.Petcoke,
+                "Alternative_Fuel": initial_state.Alternative_Fuel,
+                "Feed_rate": initial_state.Feed_rate
+            }
+
         D = 0.03 + (0.1 - 0.03) * (1 - np.exp(-t / 80.0))
         E = 0.07 + (0.14 - 0.07) * (1 - np.exp(-t / 100.0))
     
@@ -789,32 +673,32 @@ def run_simulation():
         return {
             "Petcoke": D,
             "Alternative_Fuel": E,
-            "Feed_rate": base_feed * REGIME_FEED_MULT.get(regime, 1.0) # Fallback katsayısı eklendi
+            "Feed_rate": base_feed * REGIME_FEED_MULT.get(regime, 1.0)
         }
     
+    # ==============================
+    # MAIN SIMULATION LOOP
+    # ==============================
     for t_idx in range(N): 
         current_regime = df.at[t_idx, "Regime"]
         sim_time = df.at[t_idx, "t"]
         
-        # 1) Girdileri al ve nesneye işle
-        inputs = input_layer(sim_time, current_regime)
-        x_current.Petcoke = inputs["Petcoke"]
-        x_current.Alternative_Fuel = inputs["Alternative_Fuel"]
-        x_current.Feed_rate = inputs["Feed_rate"]
-        x_current.Regime = current_regime 
-    
-        # 2) Fiziksel adımlar
+        # 1) Girdileri al (Başlangıç durumunu referans gönderiyoruz)
+        inputs = input_layer(sim_time, current_regime, initial_state=x_current)
+        inputs["regime"] = current_regime
+        
+        # 2) Fiziksel adımlar (StepExecutor içinde fiziksel güncellemeler gerçekleşiyor)
         for sub in range(STEPS_PER_REPORT):
             step_time = sim_time + (dt * (sub + 1))
-            x_current = executor.perform_step(x_current, step_time, inputs=None)
-    
-        # 3) df'i satır satır güncelle (Hızlı ve güvenli)
-        # Dataclass nesnesini sözlüğe çevirip doğrudan satıra yazıyoruz
+            x_current = executor.perform_step(x_current, step_time, inputs=inputs)
+        
+        # 3) df'i satır satır güncelle
         state_dict = asdict(x_current)
         for col, val in state_dict.items():
             if col in df.columns:
                 df.at[t_idx, col] = val
         
     df.to_csv("engine.csv", index=False)
+
 if __name__ == '__main__':
     run_simulation()
