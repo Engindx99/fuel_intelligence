@@ -360,11 +360,15 @@ class StepExecutor:
         return x_next
 
 
+import numpy as np
+import pandas as pd
+from dataclasses import asdict, dataclass
+
 def run_simulation():
-    # --- MÜHENDİSLİK YAPILANDIRMASI (Tanımlanmayan Değişkenler Eklendi) ---
-    sim_duration = 100.0  # Toplam simülasyon süresi (saat)
-    dt = 0.05             # Fiziksel entegrasyon zaman adımı (saat)
-    reporting_dt = 1 / 6  # Veri kaydetme frekansı (10 dakika)
+    # --- MÜHENDİSLİK YAPILANDIRMASI ---
+    sim_duration = 72.0      # Toplam simülasyon süresi (saat)
+    dt = 0.05                # Fiziksel entegrasyon zaman adımı (saat)
+    reporting_dt = 1/6       # Veri kaydetme frekansı (10 dakika)
     
     executor = StepExecutor(dt=dt)
     STEPS_PER_REPORT = max(1, int(reporting_dt / dt))
@@ -381,13 +385,14 @@ def run_simulation():
         "R8_RESTABILIZATION": 1.0,
     }
 
-    # Başlangıç Koşulları
+    # --- Başlangıç Koşulları (t=0.0) ---
     x_current = KilnState()
+    x_current.t = 0.0
     x_current.Fuel_rate, x_current.O2, x_current.CO_ppm = 2.5, 6.0, 900.0
-    x_current.Tg_preheater, x_current.Tg_calcination, x_current.Tg_burning, x_current.Tg_Cooling = 400.0, 848.37, 1245.08, 250.0
+    x_current.Tg_preheater, x_current.Tg_calcination, x_current.Tg_burning, x_current.Tg_Cooling = 350.0, 850.0, 1450.0, 1550.0
     x_current.Air_flow, x_current.Cooling_air_flow, x_current.ID_fan_speed = 45100, 172440.0, 900.0
     x_current.Feed_rate, x_current.Kiln_solid_out, x_current.Material_acc = 71.00, 0.1, 0.0
-    x_current.Ts_preheater, x_current.Ts_calcination, x_current.Ts_burning, x_current.Ts_Cooling = 100.0, 802.02, 1060.03, 1450.0
+    x_current.Ts_preheater, x_current.Ts_calcination, x_current.Ts_burning, x_current.Ts_Cooling = 100.0, 780.0, 1400.0, 1450.0
     x_current.CaCO3, x_current.CaO, x_current.CO2 = 80.0, 1e-6, 1e-6
     x_current.SiO2, x_current.Al2O3, x_current.Fe2O3 = 13.0, 4.0, 3.0
     x_current.C2S, x_current.C3S, x_current.C3A, x_current.C4AF = 1e-6, 1e-6, 1e-6, 1e-6
@@ -402,6 +407,7 @@ def run_simulation():
     x_current.Clinker_yield = 0.65
     x_current.Normalized_Energy_Index, x_current.Global_Energy_Closure, x_current.Energy_error = 1.0, 1.0, 0.0
 
+    # Yardımcı Fonksiyonlar
     def input_layer(t: float, regime: str, initial_state: KilnState = None) -> dict:
         if t < 1e-4 and initial_state is not None:
             return {
@@ -412,7 +418,6 @@ def run_simulation():
         D = 0.03 + (0.1 - 0.03) * (1 - np.exp(-t / 80.0))
         E = 0.07 + (0.14 - 0.07) * (1 - np.exp(-t / 100.0))
         base_feed = 132.0 if t >= 72.0 else 72.0 + 60.0 * ((1.0 / (1.0 + np.exp(-0.065 * (t - 36.0)))) - 0.09) / 0.82
-        
         return {
             "Petcoke": D,
             "Alternative_Fuel": E,
@@ -420,18 +425,23 @@ def run_simulation():
         }
 
     def determine_regime(t):
-        # Dinamik DataFrame olmadığı için zaman bağımlı rejim jeneratörü
         if t < 20.0: return "R1_HEATING_STABILIZATION"
         elif t < 40.0: return "R3_ACTIVE_CALCINATION"
         else: return "R6_STEADY_CLINKERIZATION"
 
-    # ==============================
-    # STABİL SİMÜLASYON DÖNGÜSÜ (List Accumulation)
-    # ==============================
+    # ========================================================
+    # DÜZELTİLMİŞ SİMÜLASYON DÖNGÜSÜ (IC Korumalı)
+    # ========================================================
     simulation_records = []
+    
+    # 1. Başlangıç Koşulunu t=0.0 için kaydet
+    x_current.t = 0.0
+    simulation_records.append(asdict(x_current))
+    
     sim_time = 0.0
 
     for step_idx in range(N_total_reports):
+        # Rejim ve girişleri belirle
         current_regime = determine_regime(sim_time)
         inputs = input_layer(sim_time, current_regime, initial_state=x_current)
         inputs["regime"] = current_regime
@@ -441,14 +451,15 @@ def run_simulation():
             step_time = sim_time + (dt * (sub + 1))
             x_current = executor.perform_step(x_current, step_time, inputs=inputs)
 
-        # Raporlama zamanı (veri biriktirme)
+        # Zamanı ilerlet ve kaydet
         sim_time += reporting_dt
+        x_current.t = sim_time
         simulation_records.append(asdict(x_current))
 
-    # O(N) karmaşıklığı ile tek seferde Dataframe oluşturma (Güvenli Yöntem)
+    # Dataframe oluşturma ve dosya kaydı
     df_results = pd.DataFrame(simulation_records)
     df_results.to_csv("engine.csv", index=False)
-    print(f"Simülasyon tamamlandı. Toplam {len(df_results)} satır veri 'engine.csv' dosyasına kaydedildi.")
+    print(f"Simülasyon başarıyla tamamlandı. t=0.0 başlangıçlı {len(df_results)} satır veri kaydedildi.")
 
 if __name__ == "__main__":
     run_simulation()
