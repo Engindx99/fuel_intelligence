@@ -1,8 +1,7 @@
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, asdict
 
-# 1. Veri Yapısı
 @dataclass
 class KilnState:
     t: float = 0.0
@@ -51,7 +50,7 @@ class KilnState:
     Q_reaction: float = 0.0
     Q_gas: float = 0.0
     Q_clinker: float = 0.0
-    Clinker_yield: float = 0.65  # Fiziksel kütle dengesi gereği (CO2 kaybı) 0.89'dan 0.65'e güncellendi
+    Clinker_yield: float = 0.65
     dTg_burning: float = 0.0
     Normalized_Energy_Index: float = 1.0
     Global_Energy_Closure: float = 1.0
@@ -65,6 +64,7 @@ class KilnState:
     Mass_Balance_Error: float = 0.0
     SCALE: float = 1.0
     Energy_Residual: float = 0.0
+    Tw_burning: float = 1200.0  # <--- Hatanın sebebi buradaki eksiklikti
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -190,7 +190,7 @@ class StepExecutor:
 
         dt_sec = self.dt * 3600.0
 
-# BURNING ZONE (Güncellenmiş Parametreler)
+        # BURNING ZONE (Güncellenmiş Parametreler)
         Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
         A_c_burn, h_c_burn = 13.85, 0.05
         
