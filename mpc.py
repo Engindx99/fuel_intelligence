@@ -1,10 +1,8 @@
 import casadi as ca
 import numpy as np
+import csv
+import os
 from engine import KilnState, StepExecutor
-
-# ==========================================
-# 1. MPC BEYNİ (SEMBOLİK MODEL)
-# ==========================================
 
 class MPCModel:
     def __init__(self, dt_hours=0.05):
@@ -104,20 +102,45 @@ if __name__ == "__main__":
     model = MPCModel(dt_hours=0.05)
     controller = MPCController(model, N=10)
 
-    # Başlangıç sıcaklıklarını operasyonel seviyeye çektik
     current_state = KilnState(
         Tg_burning=1450.0, Ts_burning=1400.0, Tw_burning=1300.0, Ts_Cooling=800.0,
         Fuel_rate=4.0, Feed_rate=40.0, Air_flow=45000.0, kiln_rpm=1.5, Cooling_air_flow=80000.0
     )
 
     target_temps = [1500.0, 1400.0, 1250.0, 100.0]
-    print("--- MPC Kontrol Döngüsü Başlıyor (NaN Korumalı) ---")
+    
+    # CSV dosyası hazırlığı
+    csv_file = "control.csv"
+    headers = ["Time", "Fuel", "Feed", "RPM", "Ts_burning", "Tg_burning", "Target"]
+    
+    with open(csv_file, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+
+    print("--- MPC Kontrol Döngüsü Başlıyor (CSV Kayıtlı) ---")
 
     for t in np.arange(0, 5.0, 0.05):
+        # 1. Set-point değişikliği (1 saat civarı)
+        if 0.95 < t < 1.05:
+            target_temps[1] = 1450.0
+
+        # 2. MPC Kararı
         x0 = [current_state["Tg_burning"], current_state["Ts_burning"], current_state["Tw_burning"], current_state["Ts_Cooling"]]
         u_opt = controller.solve(x0, target_temps)
+        
         inputs = {"Fuel_rate": float(u_opt[0]), "Feed_rate": float(u_opt[1]), "Air_flow": float(u_opt[2]), 
                   "kiln_rpm": float(u_opt[3]), "Cooling_air_flow": float(u_opt[4])}
         
+        # 3. Fizik motoru update
         current_state = executor.perform_step(current_state, t, inputs)
-        print(f"Saat: {t:4.2f}h | Yakıt: {inputs['Fuel_rate']:4.2f} t/h | RPM: {inputs['kiln_rpm']:4.2f} | Katı Sıc.: {current_state['Ts_burning']:6.1f}°C")
+        
+        # 4. CSV Kaydı
+        with open(csv_file, mode='a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([f"{t:.2f}", f"{inputs['Fuel_rate']:.4f}", f"{inputs['Feed_rate']:.2f}", 
+                             f"{inputs['kiln_rpm']:.2f}", f"{current_state['Ts_burning']:.2f}", 
+                             f"{current_state['Tg_burning']:.2f}", f"{target_temps[1]:.2f}"])
+
+        # 5. Log
+        print(f"Saat: {t:4.2f}h | Yakıt: {inputs['Fuel_rate']:4.2f} | RPM: {inputs['kiln_rpm']:4.2f} | "
+              f"Katı Sıc.: {current_state['Ts_burning']:6.1f}°C | Hedef: {target_temps[1]:.1f}°C")
