@@ -94,7 +94,7 @@ class KilnPhysicsEngine:
 
 # 3. İcra Edici
 class StepExecutor:
-    def __init__(self, dt=0.05):
+    def __init__(self, dt=0.01):
         self.dt = dt  # saat cinsinden (0.05 saat = 180 saniye)
 
     def perform_step(self, x: KilnState, t: float, inputs: dict = None) -> KilnState:
@@ -233,7 +233,7 @@ class StepExecutor:
         
         x_next["Tg_burning"], x_next["Ts_burning"], x_next["Tw_burning"] = Tg_next_burn, Ts_next_burn, Tw_next_burn
 
-# --- CALCINATION ZONE (Ardışık Enerji Akışı ve Kaynak Yönetimi) ---
+        # --- CALCINATION ZONE (Ardışık Enerji Akışı ve Kaynak Yönetimi) ---
         h_gs, A_s = 320.0, 950.0 
         m_solid_calc = x_next["Feed_rate"]
         Ts_calc_curr = x.get("Ts_calcination", 800.0)
@@ -301,32 +301,61 @@ class StepExecutor:
         tau_solid_pre = C_solid_pre / (UA_pre + 1e-6)
         x_next["Ts_preheater"] = x.get("Ts_preheater", 25.0) + (dt_sec / tau_solid_pre) * (x_next["Tg_preheater"] - x.get("Ts_preheater", 25.0))
         
-
-                # COOLING ZONE
-        T_amb_cooling, Cp_solid, Cp_gas, h_gs_cool, A_s_cool, M_solid_bed = 30.0, 1150.0, 1050.0, 120.0, 45.0, 12000.0
-        Ts_cool_curr = x.Ts_Cooling if x.Ts_Cooling > 0.0 else x_next["Ts_burning"]
-
-        m_air_cool_kgs = (x_next["Cooling_air_flow"] * 1.2) / 3600.0
-        m_solid_cool_kgs = max(0.1, (x_next["Kiln_solid_out"] * 1000.0) / 3600.0)
-
-        W_g = m_air_cool_kgs * Cp_gas
-        W_s = m_solid_cool_kgs * Cp_solid
-        UA_eff = (h_gs_cool * A_s_cool * W_g) / (W_g + h_gs_cool * A_s_cool + 1e-6)
-
-        coeff_A = W_s + UA_eff
-        coeff_B = W_s * x_next["Ts_burning"] + UA_eff * T_amb_cooling
-
-        Ts_steady_state = coeff_B / (coeff_A + 1e-6)
-        tau_solid = (M_solid_bed * Cp_solid) / (coeff_A + 1e-6)
-
-        Ts_cool_next = Ts_steady_state + (Ts_cool_curr - Ts_steady_state) * np.exp(-dt_sec / tau_solid)
-        Tg_cool_next = (W_g * T_amb_cooling + h_gs_cool * A_s_cool * Ts_cool_next) / (W_g + h_gs_cool * A_s_cool + 1e-6)
-
-        x_next["Ts_Cooling"] = np.clip(Ts_cool_next, T_amb_cooling, x_next["Ts_burning"])
-        x_next["Tg_Cooling"] = np.clip(Tg_cool_next, T_amb_cooling, x_next["Ts_burning"])
         
         
+        # --- COOLING ZONE (Ataletli Newton Soğuma & Isı Transferi) ---
+        # Ön tanımlar ve varsayılanlar
+        Tamb_solid = 130.0
+        Tamb_gas = 510.0
+        Ts_cool_curr = x.get("Ts_Cooling", x_next.get("Ts_burning", 1450.0))
+        Tg_cool_curr = x.get("Tg_Cooling", x_next.get("Tg_burning", 1490.0))
 
+        # Fiziksel Atalet Parametreleri
+        tau_klinker = 9700.0
+        tau_gas = 3800.0
+
+        # Isı transfer katsayısı (Katıdan gaza transfer verimliliği)
+        h_transfer = 0.15
+
+        # Isıl kapasiteler (J/K)
+        Cp_solid = 1150.0
+        Cp_gas = 1050.0
+
+        m_solid = (x["Feed_rate"] * 1000.0) / 3600.0
+        m_gas = x["Cooling_air_flow"] * 0.001293
+
+        C_solid = max(m_solid * Cp_solid, 1.0)
+        C_gas = max(m_gas * Cp_gas, 1.0)
+
+        # 1. Klinker Sıcaklığı (Katı Ataletli Güncelleme)
+        # Katı, ortamla soğurken aynı zamanda gaza da ısı verir
+        dTs_cool = (Tamb_solid - Ts_cool_curr) * (1.0 - np.exp(-dt_sec / tau_klinker))
+
+        Q_transfer = (
+            h_transfer
+            * (Ts_cool_curr - Tg_cool_curr)
+            * dt_sec
+        )
+
+        dTs_transfer = -Q_transfer / C_solid
+        Ts_cool_next = Ts_cool_curr + dTs_cool + dTs_transfer
+
+        # 2. Gaz Sıcaklığı (Katıya göre daha dinamik)
+        # Gaz, ortamla soğurken katıdan aldığı ısı ile ısınır
+        dTg_cool = (Tamb_gas - Tg_cool_curr) * (1.0 - np.exp(-dt_sec / tau_gas))
+
+        dTg_transfer = Q_transfer / C_gas
+        Tg_cool_next = Tg_cool_curr + dTg_cool + dTg_transfer
+
+        # 3. Sonuçları güvenli bir şekilde kaydet
+        x_next["Ts_Cooling"] = Ts_cool_next
+        x_next["Tg_cool_next"] = Tg_cool_next
+        x_next["Tg_Cooling"] = Tg_cool_next
+
+        
+    
+    
+    
 
         # GLOBAL BALANCE & YIELD
         Q_total_out = m_gas_pre * 1150.0 * x_next["Tg_preheater"]
@@ -454,7 +483,7 @@ def run_simulation():
     x_current.Tg_preheater, x_current.Tg_calcination, x_current.Tg_burning, x_current.Tg_Cooling = 650.0, 950.0, 1450.0, 1550.0
     x_current.Air_flow, x_current.Cooling_air_flow, x_current.ID_fan_speed = 45100, 172440.0, 900.0
     x_current.Feed_rate, x_current.Kiln_solid_out, x_current.Material_acc = 71.00, 0.1, 0.0
-    x_current.Ts_preheater, x_current.Ts_calcination, x_current.Ts_burning, x_current.Ts_Cooling = 200.0, 850.0, 1400.0, 1450.0
+    x_current.Ts_preheater, x_current.Ts_calcination, x_current.Ts_burning, x_current.Ts_Cooling = 300.0, 850.0, 1420.0, 1450.0
     x_current.CaCO3, x_current.CaO, x_current.CO2 = 80.0, 1e-6, 1e-6
     x_current.SiO2, x_current.Al2O3, x_current.Fe2O3 = 13.0, 4.0, 3.0
     x_current.C2S, x_current.C3S, x_current.C3A, x_current.C4AF = 1e-6, 1e-6, 1e-6, 1e-6
