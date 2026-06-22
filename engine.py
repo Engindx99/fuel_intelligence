@@ -223,7 +223,9 @@ class StepExecutor:
 
         dt_sec = self.dt * 3600.0
 
-        # --- BURNING ZONE ---
+        # ------------------------------------------------------
+        # BURNING ZONE
+        # ------------------------------------------------------
         Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
         A_c_burn, h_c_burn = 13.85, 0.05
         A_s_burn, A_w_burn, A_ws_burn = 82.0, 70.0, 57.0
@@ -320,84 +322,150 @@ class StepExecutor:
         x_next["Ts_burning"] = Ts_next_burn
         x_next["Tw_burning"] = Tw_next_burn
 
-        # --- CALCINATION ZONE ---
+        # ------------------------------------------------------
+        # CALCINATION ZONE (ENERGY-CONSISTENT VERSION)
+        # ------------------------------------------------------
+
+        import numpy as np
+
         h_gs, A_s = 320.0, 950.0
+
         m_solid_calc = x_next["Feed_rate"]
+
         Ts_calc_curr = x.get("Ts_calcination", 800.0)
         Tg_calc_curr = x.get("Tg_calcination", 900.0)
 
-        # Kalsinasyon Yükü (Clamp: Budget ile sınırla)
-        dynamic_rate = 0.05 + 0.50 * (
-            1.0 / (1.0 + np.exp(-0.08 * (Ts_calc_curr - 850.0)))
-        )
-        Q_calc_raw = (m_solid_calc / 3600.0) * dynamic_rate * 1700.0 * 1000.0
-        Q_calc_load = min(
-            Q_calc_raw, Q_calcination_budget / dt_sec
-        )  # Bütçe ile kısıtlı
+        # -------------------------------
+        # CALCINATION HEAT DEMAND (SMOOTH + PHYSICS-BASED)
+        # -------------------------------
+        Cp_solid_calc = 1050.0
 
-        # Enerji Akışı
-        m_air_kiln = (x_next["Air_flow"] * 1.293) / 3600.0
-        Q_from_burning = m_air_kiln * 1150.0 * (Tg_next_burn * 0.78)
-        Q_from_tertiary = m_air_tertiary * 1150.0 * 800.0
+        activation = 1.0 / (1.0 + np.exp(-0.08 * (Ts_calc_curr - 850.0)))
+
+        # reaction enthalpy (kJ/kg → W scaling)
+        Q_reaction_rate = 1700.0 * 1000.0  # J/kg
+
+        Q_calc_raw = (m_solid_calc / 3600.0) * activation * Q_reaction_rate
+
+        # budget constraint (consistent with burning zone allocation)
+        Q_calc_load = min(Q_calc_raw, Q_calcination_budget / max(dt_sec, 1e-6))
+
+        # -------------------------------
+        # ENERGY INPUTS (NO DOUBLE COUNTING FIX)
+        # -------------------------------
+
+        m_air_kiln = x_next["Air_flow"] * AIR_DENSITY / 3600.0
+
+        # burning gas contribution (already thermally upgraded)
+        Q_from_burning = m_air_kiln * Cp_air * (Tg_next_burn - T_ref)
+
+        # tertiary air ONLY as enthalpy transport (NOT generation)
+        Q_from_tertiary = m_air_tertiary * Cp_air * (400.0 - T_ref)
+
         Q_calc_total_in = Q_from_burning + Q_from_tertiary
 
-        # Katı Güncelleme
-        C_solid_calc_total = (m_solid_calc * 1000.0 * 1050.0) / 3600.0
-        b_s = (
-            (h_gs * A_s * Tg_calc_curr)
-            + (Q_calcination_budget / 3600.0)
-            - Q_calc_load
-            - ((m_solid_calc * 1000.0 / 3600.0) * 1050.0 * (Ts_calc_curr - 25.0))
-        )
-        x_next["Ts_calcination"] = (
-            C_solid_calc_total * Ts_calc_curr + dt_sec * b_s
-        ) / (C_solid_calc_total + dt_sec * (h_gs * A_s))
+        # -------------------------------
+        # SOLID ENERGY BALANCE
+        # -------------------------------
+        C_solid_calc_total = (m_solid_calc * 1000.0 * Cp_solid_calc) / 3600.0
 
-        # Gaz Güncelleme
-        C_gas_calc_total = 100.0 * 1150.0
-        a_gas_calc = (
-            ((m_air_kiln + m_air_tertiary) * 1150.0) + (4.0 * 13.85) + (h_gs * A_s)
+        a_solid_calc = h_gs * A_s + (m_solid_calc * 1000.0 / 3600.0) * Cp_solid_calc
+
+        b_solid_calc = (
+            Q_calc_load
+            + (h_gs * A_s * Tg_calc_curr)
+            - (m_solid_calc * 1000.0 / 3600.0) * Cp_solid_calc * (Ts_calc_curr - T_ref)
         )
+
+        Ts_calc_next = (C_solid_calc_total * Ts_calc_curr + dt_sec * b_solid_calc) / (
+            C_solid_calc_total + dt_sec * a_solid_calc
+        )
+
+        x_next["Ts_calcination"] = Ts_calc_next
+
+        # -------------------------------
+        # GAS ENERGY BALANCE (CONSISTENT FORM)
+        # -------------------------------
+        C_gas_calc_total = 100.0 * Cp_air
+
+        wall_term = 4.0 * 13.85
+
+        a_gas_calc = (m_air_kiln + m_air_tertiary) * Cp_air + wall_term + h_gs * A_s
+
         b_gas_calc = (
             Q_calc_total_in
             + Q_calcination_budget
-            + (4.0 * 13.85 * x.get("Tg_preheater", 350.0))
-            + (h_gs * A_s * x_next["Ts_calcination"])
-        )
-        x_next["Tg_calcination"] = (
-            C_gas_calc_total * Tg_calc_curr + dt_sec * b_gas_calc
-        ) / (C_gas_calc_total + dt_sec * a_gas_calc)
-
-        # PREHEATER
-        # 1. Sıcaklık farkı ve teorik transfer potansiyeli
-        delta_T_pre = x_next["Tg_calcination"] - x.get("Ts_preheater", 25.0)
-        UA_pre = m_gas_pre * 1150.0 * 0.24
-
-        # 2. Enerji Bütçesi ile Kısıtlı Isı Transferi
-        # Teorik olarak transfer edilebilecek ısıyı hesapla
-        theoretical_heat = UA_pre * delta_T_pre
-
-        # Q_preheater_budget (yukarıdaki tanımın) ile teorik ısıyı kıyasla
-        # Transfer, bütçeyi (limit) geçemez
-        heat_transferred = min(theoretical_heat, Q_preheater_budget)
-
-        # 3. Gaz Entalpi Dengesi:
-        gas_capacity = m_gas_pre * 1150.0 + 1e-6
-        x_next["Tg_preheater"] = x_next["Tg_calcination"] - (
-            heat_transferred / gas_capacity
+            + wall_term * x.get("Tg_preheater", 350.0)
+            + h_gs * A_s * Ts_calc_next
         )
 
-        # 4. Katı Atalet Dengesi:
-        # Bütçeyle kısıtlanmış heat_transferred kullanılıyor
-        C_solid_pre = (m_solid_pre * 3000.0) * 1150.0  # Kapasite (kJ/C)
+        Tg_calc_next = (C_gas_calc_total * Tg_calc_curr + dt_sec * b_gas_calc) / (
+            C_gas_calc_total + dt_sec * a_gas_calc
+        )
 
-        # Isı transferinin katı sıcaklığına etkisi: dTs = Q / C
-        # Zaman adımı (dt_sec) ile entegre ediyoruz
-        dTs_pre = (heat_transferred / C_solid_pre) * dt_sec
-        x_next["Ts_preheater"] = x.get("Ts_preheater", 25.0) + dTs_pre
+        x_next["Tg_calcination"] = Tg_calc_next
 
-        # --- COOLING ZONE (Ataletli Newton Soğuma & Isı Transferi) ---
-        # Ön tanımlar ve varsayılanlar
+        # ------------------------------------------------------
+        # PREHEATER ZONE (FINAL STABLE + ENERGY CONSISTENT)
+        # ------------------------------------------------------
+
+        Cp_gas_pre = 1150.0
+        Cp_solid_pre = 1050.0
+
+        Tg_in = x_next["Tg_calcination"]
+        Ts_pre = x.get("Ts_preheater", 25.0)
+
+        m_gas_pre = x_next["Air_flow"] * AIR_DENSITY / 3600.0
+        m_solid_pre = x_next["Feed_rate"]
+
+        # -------------------------------
+        # HEAT TRANSFER STRUCTURE
+        # -------------------------------
+        h_pre = 18.0
+        A_pre = 120.0
+        UA_pre = h_pre * A_pre
+
+        dT = Tg_in - Ts_pre
+
+        # -------------------------------
+        # THERMAL CAPACITIES
+        # -------------------------------
+        C_gas = m_gas_pre * Cp_gas_pre + 1e-9
+        C_solid = (m_solid_pre * 1000.0 * Cp_solid_pre) / 3600.0 + 1e-9
+
+        # -------------------------------
+        # TIME CONSTANT BASED STABILITY
+        # -------------------------------
+        tau_g = C_gas / (UA_pre + 1e-9)
+        tau_s = C_solid / (UA_pre + 1e-9)
+
+        tau_eff = min(tau_g, tau_s)
+
+        # implicit relaxation factor (anti-oscillation core)
+        alpha = dt_sec / (dt_sec + tau_eff)
+        alpha = min(alpha, 0.35)  # hard damping ceiling
+
+        # -------------------------------
+        # HEAT TRANSFER (STABLE FORM)
+        # -------------------------------
+        Q_preheater = alpha * UA_pre * dT
+
+        # -------------------------------
+        # ENERGY BALANCE (SYMMETRIC BUT STABLE)
+        # -------------------------------
+        Tg_next = Tg_in - (Q_preheater / C_gas)
+        Ts_next = Ts_pre + (Q_preheater / C_solid)
+
+        # -------------------------------
+        # STATE UPDATE
+        # -------------------------------
+        x_next["Tg_preheater"] = Tg_next
+        x_next["Ts_preheater"] = Ts_next
+
+        # ------------------------------------------------------
+        # COOLING ZONE
+        # ------------------------------------------------------
+
         Tamb_solid = 130.0
         Tamb_gas = 510.0
         Ts_cool_curr = x.get("Ts_Cooling", x_next.get("Ts_burning", 1450.0))
