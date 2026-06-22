@@ -463,51 +463,84 @@ class StepExecutor:
         x_next["Ts_preheater"] = Ts_next
 
         # ------------------------------------------------------
-        # COOLING ZONE
+        # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION)
         # ------------------------------------------------------
+        import numpy as np
 
         Tamb_solid = 130.0
         Tamb_gas = 510.0
+
         Ts_cool_curr = x.get("Ts_Cooling", x_next.get("Ts_burning", 1450.0))
         Tg_cool_curr = x.get("Tg_Cooling", x_next.get("Tg_burning", 1490.0))
 
-        # Fiziksel Atalet Parametreleri
-        tau_klinker = 9700.0
-        tau_gas = 3800.0
-
-        # Isı transfer katsayısı (Katıdan gaza transfer verimliliği)
-        h_transfer = 0.15
-
-        # Isıl kapasiteler (J/K)
+        # -------------------------------
+        # MASS FLOWS
+        # -------------------------------
+        AIR_DENSITY = 1.293
         Cp_solid = 1150.0
         Cp_gas = 1050.0
 
         m_solid = (x["Feed_rate"] * 1000.0) / 3600.0
-        m_gas = x["Cooling_air_flow"] * 0.001293
+        m_gas = x["Cooling_air_flow"] * AIR_DENSITY / 3600.0
 
-        C_solid = max(m_solid * Cp_solid, 1.0)
-        C_gas = max(m_gas * Cp_gas, 1.0)
+        # -------------------------------
+        # THERMAL CAPACITIES
+        # -------------------------------
+        C_solid = m_solid * Cp_solid + 1e-9
+        C_gas = m_gas * Cp_gas + 1e-9
 
-        # 1. Klinker Sıcaklığı (Katı Ataletli Güncelleme)
-        # Katı, ortamla soğurken aynı zamanda gaza da ısı verir
-        dTs_cool = (Tamb_solid - Ts_cool_curr) * (1.0 - np.exp(-dt_sec / tau_klinker))
+        # -------------------------------
+        # TIME CONSTANTS (INERTIAL PHYSICS)
+        # -------------------------------
+        tau_klinker = 9700.0
+        tau_gas = 3800.0
 
-        Q_transfer = h_transfer * (Ts_cool_curr - Tg_cool_curr) * dt_sec
+        # -------------------------------
+        # HEAT TRANSFER COUPLING
+        # -------------------------------
+        h_transfer = 0.15
+        A_transfer = 500.0
+        UA = h_transfer * A_transfer
 
-        dTs_transfer = -Q_transfer / C_solid
-        Ts_cool_next = Ts_cool_curr + dTs_cool + dTs_transfer
+        dT = Ts_cool_curr - Tg_cool_curr
 
-        # 2. Gaz Sıcaklığı (Katıya göre daha dinamik)
-        # Gaz, ortamla soğurken katıdan aldığı ısı ile ısınır
-        dTg_cool = (Tamb_gas - Tg_cool_curr) * (1.0 - np.exp(-dt_sec / tau_gas))
+        # -------------------------------
+        # INTERNAL ENERGY TRANSFER (PHYSICAL CORE)
+        # -------------------------------
+        Q_transfer = UA * dt_sec * np.tanh(dT / 250.0)
 
-        dTg_transfer = Q_transfer / C_gas
-        Tg_cool_next = Tg_cool_curr + dTg_cool + dTg_transfer
+        # -------------------------------
+        # SOLID DYNAMICS (INERTIAL + COUPLED)
+        # -------------------------------
+        dTs_ambient = (Tamb_solid - Ts_cool_curr) * (
+            1.0 - np.exp(-dt_sec / tau_klinker)
+        )
 
-        # 3. Sonuçları güvenli bir şekilde kaydet
+        Ts_cool_next = Ts_cool_curr + dTs_ambient - (Q_transfer / C_solid)
+
+        # -------------------------------
+        # GAS DYNAMICS (FLOW + COUPLING)
+        # -------------------------------
+        dTg_ambient = (Tamb_gas - Tg_cool_curr) * (1.0 - np.exp(-dt_sec / tau_gas))
+
+        # GAS GAINS HEAT FROM SOLID (BUT LESS SINK DOMINATED)
+        coupling_gain = 1.15
+
+        Tg_cool_next = Tg_cool_curr + dTg_ambient + coupling_gain * (Q_transfer / C_gas)
+
+        # -------------------------------
+        # ENERGY RECOVERY (PHYSICAL LOOP CLOSURE)
+        # -------------------------------
+        Q_secondary_air = m_gas * Cp_gas * max(Tg_cool_curr - 200.0, 0.0)
+
+        Q_burning_pool = x_next.get("Q_burning_pool", 0.0) + Q_secondary_air
+
+        # -------------------------------
+        # STATE UPDATE
+        # -------------------------------
         x_next["Ts_Cooling"] = Ts_cool_next
-        x_next["Tg_cool_next"] = Tg_cool_next
         x_next["Tg_Cooling"] = Tg_cool_next
+        x_next["Q_burning_pool"] = Q_burning_pool
 
         # Global Denge & Klinker Verimi
 
