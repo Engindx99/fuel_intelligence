@@ -615,6 +615,205 @@ class StepExecutor:
         x_next["CaO"] = x.get("CaO", 0.0) + CaO_generated
         x_next["CO2"] = x.get("CO2", 0.0) + CO2_generated_phys
 
+        # ----------------------------------------------------------
+        # KALSİNASYON SONRASI GİRİŞLER
+        # ----------------------------------------------------------
+
+        T_burn = x["Ts_burning"] + 273.15
+
+        # 🔥 TEK CaO HAVUZU
+        CaO_pool = x["CaO"] + CaO_generated
+
+        SiO2 = x["SiO2"]
+        Al2O3 = x["Al2O3"]
+        Fe2O3 = x["Fe2O3"]
+
+        # ==========================================================
+        # C2S FORMASYONU
+        # ==========================================================
+
+        if SiO2 <= 1e-6 or T_burn < 1000.0:
+            dC2S = 0.0
+        else:
+            k = 50000000.0 * np.exp(-170000.0 / (8.314 * T_burn))
+            kinetic = 1.0 - np.exp(-k * self.dt)
+
+            stoich_limit = min(
+                SiO2 / 0.3488,
+                max(0.0, CaO_pool) / 0.6512,
+            )
+
+            dC2S = stoich_limit * kinetic
+
+        CaO_pool -= dC2S * 0.6512
+        CaO_pool = max(0.0, CaO_pool)
+
+        # ==========================================================
+        # C3S FORMASYONU
+        # ==========================================================
+
+        if x["C2S"] + dC2S <= 1e-6 or T_burn < 1473.15:
+            dC3S = 0.0
+        else:
+            k = 228000000.0 * np.exp(-200000.0 / (8.314 * T_burn))
+            kinetic = 1.0 - np.exp(-k * self.dt)
+
+            stoich_limit = min(
+                (x["C2S"] + dC2S) / 0.7544,
+                max(0.0, CaO_pool) / 0.2456,
+            )
+
+            dC3S = stoich_limit * kinetic
+
+        CaO_pool -= dC3S * 0.2456
+        CaO_pool = max(0.0, CaO_pool)
+
+        # ==========================================================
+        # C3A FORMASYONU
+        # ==========================================================
+
+        if Al2O3 <= 1e-6 or T_burn < 1100.0:
+            dC3A = 0.0
+        else:
+            k = 100000.0 * np.exp(-120000.0 / (8.314 * T_burn))
+            kinetic = 1.0 - np.exp(-k * self.dt)
+
+            stoich_limit = min(
+                Al2O3 / 0.3773,
+                max(0.0, CaO_pool) / 0.6227,
+            )
+
+            dC3A = stoich_limit * kinetic
+
+        CaO_pool -= dC3A * 0.6227
+        CaO_pool = max(0.0, CaO_pool)
+
+        # ==========================================================
+        # C4AF FORMASYONU
+        # ==========================================================
+
+        if Fe2O3 <= 1e-6 or T_burn < 1100.0:
+            dC4AF = 0.0
+        else:
+            k = 200000.0 * np.exp(-150000.0 / (8.314 * T_burn))
+            kinetic = 1.0 - np.exp(-k * self.dt)
+
+            Al2O3_remaining = max(
+                0.0,
+                Al2O3 - dC3A * 0.3773,
+            )
+
+            stoich_limit = min(
+                Fe2O3 / 0.3286,
+                Al2O3_remaining / 0.2098,
+                max(0.0, CaO_pool) / 0.4616,
+            )
+
+            dC4AF = stoich_limit * kinetic
+
+        CaO_pool -= dC4AF * 0.4616
+        CaO_pool = max(0.0, CaO_pool)
+
+        # ==========================================================
+        # STATE UPDATE
+        # ==========================================================
+
+        x_next["C2S"] = x["C2S"] + dC2S - dC3S * 0.7544
+        x_next["C3S"] = x["C3S"] + dC3S
+        x_next["C3A"] = x["C3A"] + dC3A
+        x_next["C4AF"] = x["C4AF"] + dC4AF
+
+        x_next["SiO2"] = max(
+            0.0,
+            x["SiO2"] - dC2S * 0.3488,
+        )
+
+        x_next["Al2O3"] = max(
+            0.0,
+            x["Al2O3"] - dC3A * 0.3773 - dC4AF * 0.2098,
+        )
+
+        x_next["Fe2O3"] = max(
+            0.0,
+            x["Fe2O3"] - dC4AF * 0.3286,
+        )
+
+        # 🔥 TEK CaO KAPANIŞI
+        x_next["CaO"] = max(0.0, CaO_pool)
+
+        # ----------------------------------------------------------
+        # CO2 CEBİRSEL KAPANIŞI
+        # ----------------------------------------------------------
+
+        Ca_inventory = (
+            x_next["CaCO3"]
+            + x_next["CaO"]
+            + 0.6512 * x_next["C2S"]
+            + 0.7368 * x_next["C3S"]
+            + 0.6227 * x_next["C3A"]
+            + 0.4616 * x_next["C4AF"]
+        )
+
+        x_next["CO2"] = max(
+            0.0,
+            80.0 - Ca_inventory,
+        )
+
+        # ----------------------------------------------------------
+        # MASS BALANCE CHECK
+        # ----------------------------------------------------------
+
+        x_next["Mass_Balance_Error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
+
+        # ==========================================================
+        # OPTIONAL: MASS CHECK (DEBUG ONLY)
+        # ==========================================================
+
+        x_next["CaO_balance_error"] = abs(
+            (x["CaO"] + CaO_generated)
+            - (
+                dC2S * 0.6512
+                + dC3S * 0.2456
+                + dC3A * 0.6227
+                + dC4AF * 0.4616
+                + x_next["CaO"]
+            )
+        )
+
+        # ==========================================================
+        # MASS CHECK (corrected)
+        # ==========================================================
+
+        CaO_in = x["CaO"] + CaO_generated
+
+        CaO_out = x_next["CaO"]
+
+        CaO_consumed = dC2S * 0.6512 + dC3S * 0.2456 + dC3A * 0.6227 + dC4AF * 0.4616
+
+        x_next["Mass_Balance_Error"] = abs(CaO_in - (CaO_out + CaO_consumed))
+
+        x_next["Q_acc"] = x_next["Clinker_output"] * 150.0
+        x_next["Q_loss"] = (
+            0.0016 * 5.67e-8 * 0.8 * 110 * (x_next["Tg_burning"] ** 4 - 25**4)
+        )
+        x_next["Q_reaction"] = x_next["Feed_rate"] * (1 - x_next["Clinker_yield"]) * 3.2
+        x_next["Q_out"] = x_next["Q_acc"] + x_next["Q_loss"] + x_next["Q_reaction"]
+        x_next["Q_gas"] = x_next["Fuel_rate"] * 1.1 * (x_next["Tg_burning"] - 25.0)
+
+        clinker_safe = max(x_next["Clinker_output"], 1e-6)
+        x_next["Normalized_Energy_Index"] = x_next["Q_in"] / clinker_safe
+        x_next["Global_Energy_Closure"] = (
+            x_next["Q_in"] - x_next["Q_out"] + x_next["Q_reaction"] - x_next["Q_acc"]
+        )
+
+        q_in_safe = max(x_next["Q_in"], 1e-6)
+        x_next["Energy_error"] = (x_next["Global_Energy_Closure"] / q_in_safe) * 100.0
+
+        if t == 0:
+            x_next["SCALE"] = 1.0
+
+        # Kritik Dönüş İşlemi: None Type Error bu satırın eklenmesi ile çözüldü.
+
         return x_next
 
 
