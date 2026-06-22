@@ -405,63 +405,75 @@ class StepExecutor:
 
         x_next["Tg_calcination"] = Tg_calc_next
 
-        # ------------------------------------------------------
-        # PREHEATER ZONE (FINAL STABLE + ENERGY CONSISTENT)
-        # ------------------------------------------------------
+        # ==============================================================================
+        # PREHEATER ZONE (TIME-CONSTANT BASED / MPC COMPLIANT / STRICTLY DIFFERENTIABLE)
+        # ==============================================================================
 
-        Cp_gas_pre = 1150.0
-        Cp_solid_pre = 1050.0
+        # Isıl kapasite katsayıları
+        Cp_gas_pre = 1150.0  # J/(kg.K)
+        Cp_solid_pre = 1050.0  # J/(kg.K)
 
         Tg_in = x_next["Tg_calcination"]
         Ts_pre = x.get("Ts_preheater", 25.0)
 
-        m_gas_pre = x_next["Air_flow"] * AIR_DENSITY / 3600.0
-        m_solid_pre = x_next["Feed_rate"]
+        # Akış Isıl Kapasite Debileri (W/K)
+        m_gas_pre = (x_next["Air_flow"] * AIR_DENSITY) / 3600.0
+        m_solid_pre = (x_next["Feed_rate"] * 1000.0) / 3600.0
 
-        # -------------------------------
-        # HEAT TRANSFER STRUCTURE
-        # -------------------------------
-        h_pre = 18.0
-        A_pre = 120.0
-        UA_pre = h_pre * A_pre
+        C_gas_flow = m_gas_pre * Cp_gas_pre + 1e-4
+        C_solid_flow = m_solid_pre * Cp_solid_pre + 1e-4
+
+        # Yapısal Isı Transferi (h_pre artık zaman sabitini doğrudan etkiler)
+        h_pre = 18.0  # W/(m^2.K)
+        A_pre = 120.0  # m^2
+        UA_pre = h_pre * A_pre  # W/K
 
         dT = Tg_in - Ts_pre
 
-        # -------------------------------
-        # THERMAL CAPACITIES
-        # -------------------------------
-        C_gas = m_gas_pre * Cp_gas_pre + 1e-9
-        C_solid = (m_solid_pre * 1000.0 * Cp_solid_pre) / 3600.0 + 1e-9
+        # ------------------------------------------------------------------------------
+        # FİZİKSEL ZAMAN SABİTLERİ (Birim: Saniye)
+        # ------------------------------------------------------------------------------
+        # Ön ısıtıcı bölgesindeki anlık malzeme ve gaz kütle tutumu (Holdup Mass - kg)
+        M_gas_hold = 150.0  # Bölge içindeki anlık gaz kütlesi
+        M_solid_hold = 3000.0  # Bölge içindeki anlık katı kütlesi
 
-        # -------------------------------
-        # TIME CONSTANT BASED STABILITY
-        # -------------------------------
-        tau_g = C_gas / (UA_pre + 1e-9)
-        tau_s = C_solid / (UA_pre + 1e-9)
+        C_gas_bulk = M_gas_hold * Cp_gas_pre
+        C_solid_bulk = M_solid_hold * Cp_solid_pre
 
-        tau_eff = min(tau_g, tau_s)
+        tau_g = C_gas_bulk / (UA_pre + 1e-4)  # saniye
+        tau_s = C_solid_bulk / (UA_pre + 1e-4)  # saniye
 
-        # implicit relaxation factor (anti-oscillation core)
-        alpha = dt_sec / (dt_sec + tau_eff)
-        alpha = min(alpha, 0.35)  # hard damping ceiling
+        # ------------------------------------------------------------------------------
+        # PÜRÜZSÜZ GEVŞEME FAKTÖRÜ (NO IF-ELSE / NO MIN-MAX)
+        # ------------------------------------------------------------------------------
+        eps_smooth = 1e-4  # Gradyan sürekliliği için yumuşatma parametresi
 
-        # -------------------------------
-        # HEAT TRANSFER (STABLE FORM)
-        # -------------------------------
-        Q_preheater = alpha * UA_pre * dT
+        # 1. tau_eff = min(tau_g, tau_s) fonksiyonunun pürüzsüz analitik karşılığı
+        tau_eff = 0.5 * (tau_g + tau_s - np.sqrt((tau_g - tau_s) ** 2 + eps_smooth))
 
-        # -------------------------------
-        # ENERGY BALANCE (SYMMETRIC BUT STABLE)
-        # -------------------------------
-        Tg_next = Tg_in - (Q_preheater / C_gas)
-        Ts_next = Ts_pre + (Q_preheater / C_solid)
+        # Fiziksel kararlılık sağlayan implicit alpha çarpanı
+        alpha = dt_sec / (dt_sec + tau_eff + 1e-4)
 
-        # -------------------------------
-        # STATE UPDATE
-        # -------------------------------
+        # 2. alpha = min(alpha, 0.35) tavan kısıtlamasının pürüzsüz analitik karşılığı
+        alpha_max = 0.35
+        alpha_stable = 0.5 * (
+            alpha + alpha_max - np.sqrt((alpha - alpha_max) ** 2 + eps_smooth)
+        )
+
+        # ------------------------------------------------------------------------------
+        # ENERJİ BALANSI VE DURUM GÜNCELLEME
+        # ------------------------------------------------------------------------------
+        # Isı akısı hesaplanırken alpha_stable doğrudan UA_pre hassasiyetini taşır
+        Q_preheater = alpha_stable * UA_pre * dT
+
+        # Akış bazlı kararlı sıcaklık değişimleri
+        Tg_next = Tg_in - (Q_preheater / C_gas_flow)
+        Ts_next = Ts_pre + (Q_preheater / C_solid_flow)
+
+        # State sözlüğüne pürüzsüz verilerin yazılması
         x_next["Tg_preheater"] = Tg_next
         x_next["Ts_preheater"] = Ts_next
-
+        x_next["Q_dot_preheater"] = Q_preheater
         # ------------------------------------------------------
         # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION)
         # ------------------------------------------------------
