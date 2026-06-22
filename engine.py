@@ -576,132 +576,45 @@ class StepExecutor:
 
         x_next["P_calcination"] = -406.0 + 226.0 * np.exp(-t / 20.0)
 
-        # Kimyasal Reaksiyonlar
+        # ----------------------------------------------------------
+        # KALSİNASYON (STOKİYOMETRİK + KÜTLE KAPALI MODEL)
+        # CaCO3 -> CaO + CO2
+        # ----------------------------------------------------------
+
         T_calc = x["Ts_calcination"] + 273.15
-        k_calc = 1e7 * np.exp(-160000.0 / (8.314 * T_calc)) if T_calc > 873.15 else 0.0
-        x_next["CaCO3"] = x["CaCO3"] * np.exp(-k_calc * self.dt)
 
-        dCaCO3 = x["CaCO3"] - x_next["CaCO3"]
-        CaO_generated = dCaCO3 * 0.5603
+        if T_calc > 873.15:
+            k_calc = 1e7 * np.exp(-160000.0 / (8.314 * T_calc))
+        else:
+            k_calc = 0.0
+
+        CaCO3_in = x["CaCO3"]
+
+        # Reaksiyon ilerleme
+        reacted = CaCO3_in * (1.0 - np.exp(-k_calc * self.dt))
+        reacted = np.clip(reacted, 0.0, CaCO3_in)
+
+        # Stoikiyometrik ürünler
+        CaCO3_out = CaCO3_in - reacted
+        CaO_generated = reacted * 0.5603
+        CO2_generated_phys = reacted * 0.4397
+
+        # State update
+        x_next["CaCO3"] = CaCO3_out
+
+        # Diagnostic flux outputs
+        x_next["CaO_generated"] = CaO_generated
+        x_next["CO2_generated"] = CO2_generated_phys
+
+        # Hız çıktıları
         x_next["dCaO_calcination"] = CaO_generated / self.dt if self.dt > 0 else 0.0
-
-        T_burn = x["Ts_burning"] + 273.15
-
-        if x["SiO2"] <= 1e-6 or T_burn < 1000.0:
-            x_next["dC2S"] = 0.0
-        else:
-            kinetic = 1.0 - np.exp(
-                -(50000000.0 * np.exp(-170000.0 / (8.314 * T_burn))) * self.dt
-            )
-            x_next["dC2S"] = max(
-                0.0,
-                min(x["SiO2"] / 0.3488, (x["CaO"] + CaO_generated) / 0.6512) * kinetic,
-            )
-
-        if x["C2S"] <= 1e-6 or T_burn < 1473.15:
-            x_next["dC3S"] = 0.0
-        else:
-            kinetic = 1.0 - np.exp(
-                -(228000000.0 * np.exp(-200000.0 / (8.314 * T_burn))) * self.dt
-            )
-            x_next["dC3S"] = max(
-                0.0,
-                min(
-                    x["C2S"] / 0.7544,
-                    max(0.0, x["CaO"] + CaO_generated - x_next["dC2S"] * 0.6512)
-                    / 0.2456,
-                )
-                * kinetic,
-            )
-
-        if x["Al2O3"] <= 1e-6 or T_burn < 1100.0:
-            x_next["dC3A"] = 0.0
-        else:
-            kinetic = 1.0 - np.exp(
-                -(100000.0 * np.exp(-120000.0 / (8.314 * T_burn))) * self.dt
-            )
-            lim_ca = (
-                max(
-                    0.0,
-                    x["CaO"]
-                    + CaO_generated
-                    - x_next["dC2S"] * 0.6512
-                    - x_next["dC3S"] * 0.2456,
-                )
-                / 0.6227
-            )
-            x_next["dC3A"] = max(0.0, min(x["Al2O3"] / 0.3773, lim_ca) * kinetic)
-
-        if x["Fe2O3"] <= 1e-6 or T_burn < 1100.0:
-            x_next["dC4AF"] = 0.0
-        else:
-            kinetic = 1.0 - np.exp(
-                -(200000.0 * np.exp(-150000.0 / (8.314 * T_burn))) * self.dt
-            )
-            lim_al = max(0.0, x["Al2O3"] - x_next["dC3A"] * 0.3773) / 0.2098
-            lim_ca = (
-                max(
-                    0.0,
-                    x["CaO"]
-                    + CaO_generated
-                    - x_next["dC2S"] * 0.6512
-                    - x_next["dC3S"] * 0.2456
-                    - x_next["dC3A"] * 0.6227,
-                )
-                / 0.4616
-            )
-            x_next["dC4AF"] = max(
-                0.0, min(x["Fe2O3"] / 0.3286, lim_al, lim_ca) * kinetic
-            )
-
-        x_next["C2S"] = max(0.0, x["C2S"] + x_next["dC2S"] - (x_next["dC3S"] * 0.7544))
-        x_next["C3S"] = x["C3S"] + x_next["dC3S"]
-        x_next["C3A"] = x["C3A"] + x_next["dC3A"]
-        x_next["C4AF"] = x["C4AF"] + x_next["dC4AF"]
-
-        x_next["SiO2"] = max(0.0, x["SiO2"] - (x_next["dC2S"] * 0.3488))
-        x_next["Al2O3"] = max(
-            0.0, x["Al2O3"] - (x_next["dC3A"] * 0.3773) - (x_next["dC4AF"] * 0.2098)
-        )
-        x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - (x_next["dC4AF"] * 0.3286))
-
-        CaO_consumed = (
-            (x_next["dC2S"] * 0.6512)
-            + (x_next["dC3S"] * 0.2456)
-            + (x_next["dC3A"] * 0.6227)
-            + (x_next["dC4AF"] * 0.4616)
-        )
-        x_next["CaO"] = max(0.0, x["CaO"] + CaO_generated - CaO_consumed)
-        x_next["CO2"] = 80.0 - (x_next["CaCO3"] + x_next["CaO"])
-
-        x_next["LSF"] = x_next["CaO"] / (
-            2.8 * x_next["SiO2"] + 1.2 * x_next["Al2O3"] + 0.65 * x_next["Fe2O3"] + 1e-9
-        )
-        x_next["Mass_Balance_Error"] = abs(
-            (x_next["CaO"] - x["CaO"]) - (CaO_generated - CaO_consumed)
+        x_next["dCO2_calcination"] = (
+            CO2_generated_phys / self.dt if self.dt > 0 else 0.0
         )
 
-        x_next["Q_acc"] = x_next["Clinker_output"] * 150.0
-        x_next["Q_loss"] = (
-            0.0016 * 5.67e-8 * 0.8 * 110 * (x_next["Tg_burning"] ** 4 - 25**4)
-        )
-        x_next["Q_reaction"] = x_next["Feed_rate"] * (1 - x_next["Clinker_yield"]) * 3.2
-        x_next["Q_out"] = x_next["Q_acc"] + x_next["Q_loss"] + x_next["Q_reaction"]
-        x_next["Q_gas"] = x_next["Fuel_rate"] * 1.1 * (x_next["Tg_burning"] - 25.0)
+        x_next["CaO"] = x.get("CaO", 0.0) + CaO_generated
+        x_next["CO2"] = x.get("CO2", 0.0) + CO2_generated_phys
 
-        clinker_safe = max(x_next["Clinker_output"], 1e-6)
-        x_next["Normalized_Energy_Index"] = x_next["Q_in"] / clinker_safe
-        x_next["Global_Energy_Closure"] = (
-            x_next["Q_in"] - x_next["Q_out"] + x_next["Q_reaction"] - x_next["Q_acc"]
-        )
-
-        q_in_safe = max(x_next["Q_in"], 1e-6)
-        x_next["Energy_error"] = (x_next["Global_Energy_Closure"] / q_in_safe) * 100.0
-
-        if t == 0:
-            x_next["SCALE"] = 1.0
-
-        # Kritik Dönüş İşlemi: None Type Error bu satırın eklenmesi ile çözüldü.
         return x_next
 
 
@@ -814,6 +727,19 @@ def run_simulation():
 
     df_results = pd.DataFrame(simulation_records)
     df_results.to_csv("engine.csv", index=False)
+
+    # ----------------------------------------------------------
+    # FLOAT FORMAT (5 DIGIT PRECISION)
+    # ----------------------------------------------------------
+
+    df_results = pd.DataFrame(simulation_records)
+
+    float_cols = df_results.select_dtypes(include=["float", "float64"]).columns
+
+    df_results[float_cols] = df_results[float_cols].round(5)
+
+    df_results.to_csv("engine.csv", index=False)
+
     print(
         f"Simülasyon başarıyla tamamlandı. t=0.0 başlangıçlı {len(df_results)} satır veri kaydedildi."
     )
