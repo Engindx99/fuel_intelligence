@@ -196,21 +196,28 @@ class StepExecutor:
         x_next["P_preheater"] = -269.0 + 149.0 * np.exp(-t / 15.0)
 
         # --- ENERJİ DAĞILIMI (Cascade & Source-Based) ---
-        m_gas_pre = x_next["Air_flow"] * 0.001293
+
+        AIR_DENSITY = 1.293
+        Cp_air = 1005.0
+        T_ref = 25.0
+
+        m_gas_pre = x_next["Air_flow"] * AIR_DENSITY / 3600.0
         m_solid_pre = x_next["Feed_rate"]
         Q_in_total = x_next["Q_in"] * 1000.0
 
-        # Tersiyer Hava Desteği (Dinamik Enerji Girişi)
-        m_air_tertiary = x_next.get("Tertiary_air_flow", 0.0) * 1.293 / 3600.0
-        Q_tertiary_cost = (
-            m_air_tertiary * 1150.0 * 800.0
-        )  # Burning Zone'dan çekilen maliyet
-        Q_tertiary = m_air_tertiary * 1150.0 * 800.0
+        # -------------------------------
+        # TERSİYER HAVA (CORRECTED PHYSICS)
+        # -------------------------------
+        m_air_tertiary = x_next.get("Tertiary_air_flow", 0.0) * AIR_DENSITY / 3600.0
+
+        Q_tertiary_sink = m_air_tertiary * Cp_air * (1400.0 - T_ref)
+        Q_tertiary_enthalpy = m_air_tertiary * Cp_air * (400.0 - T_ref)
 
         feed_factor = x_next["Feed_rate"] / 100.0
 
-        # Enerji Havuzu: Tersiyer maliyeti düşülmüş net Burning Zone havuzu
-        Q_burning_pool = (Q_in_total * 0.56) + Q_tertiary - Q_tertiary_cost
+        # Enerji havuzu (mass-consistent)
+        Q_burning_pool = Q_in_total * 0.56 - Q_tertiary_sink + Q_tertiary_enthalpy
+
         Q_calcination_budget = Q_in_total * (0.26 * min(feed_factor, 1.2))
         Q_preheater_budget = Q_in_total * 0.18
 
@@ -221,69 +228,97 @@ class StepExecutor:
         A_c_burn, h_c_burn = 13.85, 0.05
         A_s_burn, A_w_burn, A_ws_burn = 82.0, 70.0, 57.0
 
-        m_air_s = (x_next["Air_flow"] * 1.293) / 3600.0
+        m_air_s = x_next["Air_flow"] * AIR_DENSITY / 3600.0
         m_solid_s = (x_next["Feed_rate"] * 1000.0) / 3600.0
 
-        C_gas_total = 220.0 * Cp_g_burn
-        C_solid_total = 6500.0 * Cp_s_burn
-        C_wall_total = 15000.0 * Cp_w_burn
+        # lumped capacities (explicit mass assumption)
+        gas_mass = 220.0
+        solid_mass = 6500.0
+        wall_mass = 15000.0
+
+        C_gas_total = gas_mass * Cp_g_burn
+        C_solid_total = solid_mass * Cp_s_burn
+        C_wall_total = wall_mass * Cp_w_burn
 
         Tg_curr, Ts_curr, Tw_curr = (
             x.get("Tg_burning", 1450.0),
             x.get("Ts_burning", 1400.0),
             x.get("Tw_burning", 1300.0),
         )
+
         h_gs_burn, h_gw_burn, h_ws_burn = 1450.0, 350.0, 400.0
 
+        # -------------------------------
+        # GAS ENERGY BALANCE
+        # -------------------------------
         a_gas_burn = (
             (h_gs_burn * A_s_burn)
             + (h_gw_burn * A_w_burn)
             + (h_c_burn * 1000.0 * A_c_burn)
             + (m_air_s * Cp_g_burn)
         )
+
         b_gas_burn = (
-            (Q_burning_pool * 1.1)
+            Q_burning_pool * 0.97  # efficiency corrected (no artificial +10%)
             + (h_gw_burn * A_w_burn * Tw_curr)
             + (h_c_burn * 1000.0 * A_c_burn * 30.0)
             + (m_air_s * Cp_g_burn * 400.0)
             + (h_gs_burn * A_s_burn * Ts_curr)
         )
+
         Tg_next_burn = (C_gas_total * Tg_curr + dt_sec * b_gas_burn) / (
             C_gas_total + dt_sec * a_gas_burn
         )
 
-        # Duvar Fazı
-        Q_loss_wall = 15.0 * A_w_burn * (Tw_curr - 25.0)
+        # -------------------------------
+        # WALL ENERGY BALANCE (FIXED LOSS MODEL)
+        # -------------------------------
+        T_amb = 25.0
+        h_loss = 8.0
+
+        Q_loss_wall = h_loss * A_w_burn * (Tw_curr - T_amb)
         Q_wall_to_solid = h_ws_burn * A_ws_burn * (Tw_curr - Ts_curr)
+
         Tw_next_burn = Tw_curr + (dt_sec / C_wall_total) * (
             h_gw_burn * A_w_burn * (Tg_next_burn - Tw_curr)
             - Q_loss_wall
             - Q_wall_to_solid
         )
 
-        # Katı Fazı
+        # -------------------------------
+        # SOLID PHASE (SMOOTH EXOTHERMIC)
+        # -------------------------------
+        import numpy as np
+
         Q_exo_base = min(
             350000.0, m_solid_s * 500000.0 * (1.0 + max(0.0, Ts_curr - 1200.0) / 250.0)
         )
-        Q_exo_W = Q_exo_base * float(Ts_curr > 1200.0)
+
+        # smooth activation instead of step function
+        k = 0.05
+        Q_exo_W = Q_exo_base / (1.0 + np.exp(-k * (Ts_curr - 1200.0)))
+
         a_sol_burn = (
             (h_gs_burn * A_s_burn) + (h_ws_burn * A_ws_burn) + (m_solid_s * Cp_s_burn)
         )
+
         b_sol_burn = (
             Q_exo_W
             + (m_solid_s * Cp_s_burn * 900.0)
             + (h_gs_burn * A_s_burn * Tg_next_burn)
             + (h_ws_burn * A_ws_burn * Tw_next_burn)
         )
+
         Ts_next_burn = (C_solid_total * Ts_curr + dt_sec * b_sol_burn) / (
             C_solid_total + dt_sec * a_sol_burn
         )
 
-        x_next["Tg_burning"], x_next["Ts_burning"], x_next["Tw_burning"] = (
-            Tg_next_burn,
-            Ts_next_burn,
-            Tw_next_burn,
-        )
+        # -------------------------------
+        # STATE UPDATE
+        # -------------------------------
+        x_next["Tg_burning"] = Tg_next_burn
+        x_next["Ts_burning"] = Ts_next_burn
+        x_next["Tw_burning"] = Tw_next_burn
 
         # --- CALCINATION ZONE ---
         h_gs, A_s = 320.0, 950.0
