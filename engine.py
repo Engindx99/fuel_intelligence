@@ -168,13 +168,54 @@ class StepExecutor:
         res_min = KilnPhysicsEngine.get_residence_time(x_next["kiln_rpm"])
         x_next["Residence"] = res_min
 
-        # MASS BALANCE
-        mat_acc = x.get("Material_acc", 15.0)
-        kiln_out = mat_acc / (res_min / 60.0 + 1e-6)
-        x_next["Kiln_solid_out"] = kiln_out
-        x_next["Material_acc"] = (
-            mat_acc + (x_next["Feed_rate"] / 1.55 - kiln_out) * self.dt
+        # ==========================================================
+        # MASS BALANCE (STABLE INVENTORY–FLOW COUPLING)
+        # ==========================================================
+
+        # Inventory state (solid holdup in kiln)
+        mat_acc = x.get("Material_acc", 15.0)  # ton
+
+        # Feed (already consistent: ton/h)
+        feed_in = x_next["Feed_rate"]  # ton/h
+
+        # Residence-time based flow estimate (hours)
+        tau_res = max(res_min / 60.0, 1e-6)  # h
+
+        # ----------------------------------------
+        # OUTFLOW (diagnostic / not independent state)
+        # ----------------------------------------
+        kiln_out_raw = mat_acc / tau_res  # ton/h
+
+        # Optional numerical smoothing (MPC stability)
+        alpha_flow = 0.85
+        kiln_out = (
+            alpha_flow * x.get("Kiln_solid_out", kiln_out_raw)
+            + (1.0 - alpha_flow) * kiln_out_raw
         )
+
+        kiln_out = max(0.0, kiln_out)
+        x_next["Kiln_solid_out"] = kiln_out
+
+        # ----------------------------------------
+        # INVENTORY DYNAMICS (mass closure)
+        # ----------------------------------------
+        # dM/dt = Feed - Out
+        dmat_dt = feed_in - kiln_out
+
+        mat_next = mat_acc + dmat_dt * self.dt
+
+        # physical constraints
+        x_next["Material_acc"] = max(0.0, mat_next)
+
+        # ==========================================================
+        # 🔥 CRITICAL CONSISTENCY RULE (IMPORTANT ADDITION)
+        # ==========================================================
+
+        # ALL DOWNSTREAM PRODUCTS MUST USE FINAL kiln_out ONLY
+
+        yield_ratio = 1.0 / 1.55
+
+        x_next["Clinker_output"] = kiln_out * yield_ratio
 
         # O2 & HEAT INPUT (Q_in)
         air_fuel_ratio = x_next["Air_flow"] / (f_rate + 1e-6)
@@ -764,17 +805,6 @@ class StepExecutor:
             80.0 - Ca_inventory,
         )
 
-        # Global Denge & Klinker Verimi
-
-        Q_total_out = m_gas_pre * 1150.0 * x_next["Tg_preheater"]
-        x_next["Energy_Residual"] = Q_in_total - Q_total_out
-
-        loss_on_ignition = 1.0 - x_next["Clinker_yield"]
-        Clinker_output_rate = x_next["Feed_rate"] * (1.0 - loss_on_ignition)
-        x_next["Clinker_output"] = (
-            0.95 * x.get("Clinker_output", Clinker_output_rate)
-        ) + (0.05 * Clinker_output_rate)
-
         x_next["dTg_burning"] = (x_next["Tg_burning"] - x["Tg_burning"]) / self.dt
 
         # CO ppm
@@ -871,7 +901,7 @@ def run_simulation():
     )
     x_current.Feed_rate, x_current.Kiln_solid_out, x_current.Material_acc = (
         71.00,
-        0.1,
+        0.0,
         0.0,
     )
     (
