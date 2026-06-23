@@ -172,49 +172,134 @@ class StepExecutor:
         # MASS BALANCE (STABLE INVENTORY–FLOW COUPLING)
         # ==========================================================
 
-        # Inventory state (solid holdup in kiln)
+        # Inventory state
         mat_acc = x.get("Material_acc", 15.0)  # ton
 
-        # Feed (already consistent: ton/h)
         feed_in = x_next["Feed_rate"]  # ton/h
 
-        # Residence-time based flow estimate (hours)
         tau_res = max(res_min / 60.0, 1e-6)  # h
 
-        # ----------------------------------------
-        # OUTFLOW (diagnostic / not independent state)
-        # ----------------------------------------
-        kiln_out_raw = mat_acc / tau_res  # ton/h
+        # ==========================================================
+        # PHYSICAL BASE OUTFLOW MODEL
+        # ==========================================================
+        kiln_out_physical = mat_acc / tau_res  # ton/h
 
-        # Optional numerical smoothing (MPC stability)
+        # ==========================================================
+        # DYNAMIC CONSISTENCY CORRECTION
+        # ==========================================================
         alpha_flow = 0.85
-        kiln_out = (
-            alpha_flow * x.get("Kiln_solid_out", kiln_out_raw)
-            + (1.0 - alpha_flow) * kiln_out_raw
-        )
+
+        kiln_out_prev = x.get("Kiln_solid_out", kiln_out_physical)
+
+        kiln_out = alpha_flow * kiln_out_prev + (1.0 - alpha_flow) * kiln_out_physical
 
         kiln_out = max(0.0, kiln_out)
+
         x_next["Kiln_solid_out"] = kiln_out
 
-        # ----------------------------------------
-        # INVENTORY DYNAMICS (mass closure)
-        # ----------------------------------------
-        # dM/dt = Feed - Out
+        # ==========================================================
+        # INVENTORY DYNAMICS
+        # ==========================================================
         dmat_dt = feed_in - kiln_out
 
         mat_next = mat_acc + dmat_dt * self.dt
-
-        # physical constraints
         x_next["Material_acc"] = max(0.0, mat_next)
 
         # ==========================================================
-        # 🔥 CRITICAL CONSISTENCY RULE (IMPORTANT ADDITION)
+        # SAFETY: BASE REACTION RATES (NEVER MUTATE ORIGINALS)
         # ==========================================================
+        dC2S_0 = x.get("dC2S", 0.0)
+        dC3S_0 = x.get("dC3S", 0.0)
+        dC3A_0 = x.get("dC3A", 0.0)
+        dC4AF_0 = x.get("dC4AF", 0.0)
 
-        # ALL DOWNSTREAM PRODUCTS MUST USE FINAL kiln_out ONLY
+        # ==========================================================
+        # REACTION–FLOW COUPLING
+        # ==========================================================
+        flow_factor = kiln_out / max(feed_in, 1e-6)
 
+        thermal_factor = np.exp(-x_next["Tg_burning"] / 1200.0)
+
+        activity_factor = min(1.0, mat_acc / 50.0)
+
+        coupling = flow_factor * thermal_factor * activity_factor
+
+        dC2S_eff = dC2S_0 * coupling
+        dC3S_eff = dC3S_0 * coupling
+        dC3A_eff = dC3A_0 * coupling
+        dC4AF_eff = dC4AF_0 * coupling
+
+        # ==========================================================
+        # STATE UPDATE (COUPLED CHEMISTRY)
+        # ==========================================================
+        x_next["C2S"] = x["C2S"] + dC2S_eff - dC3S_eff * 0.7544
+        x_next["C3S"] = x["C3S"] + dC3S_eff
+        x_next["C3A"] = x["C3A"] + dC3A_eff
+        x_next["C4AF"] = x["C4AF"] + dC4AF_eff
+
+        # ==========================================================
+        # ELEMENT BALANCES
+        # ==========================================================
+        x_next["SiO2"] = max(0.0, x["SiO2"] - dC2S_eff * 0.3488)
+
+        x_next["Al2O3"] = max(0.0, x["Al2O3"] - dC3A_eff * 0.3773 - dC4AF_eff * 0.2098)
+
+        x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - dC4AF_eff * 0.3286)
+
+        # ==========================================================
+        # CaO BALANCE (FIXED — NO GHOST VARIABLES, NO DOUBLE COUNT)
+        # ==========================================================
+        CaO_consumed = (
+            dC2S_eff * 0.6512
+            + dC3S_eff * 0.2456
+            + dC3A_eff * 0.6227
+            + dC4AF_eff * 0.4616
+        )
+
+        CaO_in = x["CaO"] + CaO_consumed
+
+        x_next["CaO"] = max(0.0, CaO_in - CaO_consumed)
+
+        # ==========================================================
+        # CO2 CLOSURE
+        # ==========================================================
+        Ca_inventory = (
+            x_next["CaCO3"]
+            + x_next["CaO"]
+            + 0.6512 * x_next["C2S"]
+            + 0.7368 * x_next["C3S"]
+            + 0.6227 * x_next["C3A"]
+            + 0.4616 * x_next["C4AF"]
+        )
+
+        x_next["CO2"] = max(0.0, 80.0 - Ca_inventory)
+
+        # ==========================================================
+        # DYNAMIC SIGNALS
+        # ==========================================================
+        x_next["dTg_burning"] = (x_next["Tg_burning"] - x["Tg_burning"]) / self.dt
+
+        oxygen_deficit = max(0.0, 6.0 - x_next["O2"])
+
+        target_CO = 20.0 + 800.0 * oxygen_deficit * (
+            x_next["Fuel_rate"] / 6.0
+        ) * np.exp(-x_next["Tg_burning"] / 1200.0)
+
+        x_next["CO_ppm"] = x["CO_ppm"] + 0.25 * (target_CO - x["CO_ppm"])
+
+        x_next["P_calcination"] = -406.0 + 226.0 * np.exp(-t / 20.0)
+
+        # ==========================================================
+        # MASS BALANCE CHECKS
+        # ==========================================================
+        x_next["CO2_balance_error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
+
+        x_next["CaO_balance_error"] = abs(CaO_in - (x_next["CaO"] + CaO_consumed))
+
+        # ==========================================================
+        # DOWNSTREAM OUTPUT
+        # ==========================================================
         yield_ratio = 1.0 / 1.55
-
         x_next["Clinker_output"] = kiln_out * yield_ratio
 
         # O2 & HEAT INPUT (Q_in)
@@ -772,24 +857,74 @@ class StepExecutor:
         CaO_pool = max(0.0, CaO_pool)
 
         # ==========================================================
-        # STATE UPDATE
+        # STATE UPDATE (FLOW–COUPLED CHEMISTRY - CONSISTENT VERSION)
         # ==========================================================
 
-        x_next["C2S"] = x["C2S"] + dC2S - dC3S * 0.7544
-        x_next["C3S"] = x["C3S"] + dC3S
-        x_next["C3A"] = x["C3A"] + dC3A
-        x_next["C4AF"] = x["C4AF"] + dC4AF
-
-        x_next["SiO2"] = max(0.0, x["SiO2"] - dC2S * 0.3488)
-        x_next["Al2O3"] = max(0.0, x["Al2O3"] - dC3A * 0.3773 - dC4AF * 0.2098)
-        x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - dC4AF * 0.3286)
-
-        # 🔥 FINAL CaO CLOSURE (TEK NOKTA)
-        x_next["CaO"] = max(0.0, CaO_pool)
+        # ----------------------------------------------------------
+        # SAFETY: ensure reaction terms exist
+        # ----------------------------------------------------------
+        dC2S = locals().get("dC2S", 0.0)
+        dC3S = locals().get("dC3S", 0.0)
+        dC3A = locals().get("dC3A", 0.0)
+        dC4AF = locals().get("dC4AF", 0.0)
 
         # ----------------------------------------------------------
-        # CO2 CEBİRSEL KAPANIŞI
+        # FLOW COUPLING FACTOR (CRITICAL FIX)
         # ----------------------------------------------------------
+        flow_scale = x_next.get("Kiln_solid_out", 1e-6) / max(x["Feed_rate"], 1e-6)
+
+        thermal_factor = np.exp(-x_next["Tg_burning"] / 1200.0)
+
+        activity_factor = min(1.0, x_next["Material_acc"] / 50.0)
+
+        # ----------------------------------------------------------
+        # EFFECTIVE REACTION EXTENTS (PHYSICALLY CONSISTENT)
+        # ----------------------------------------------------------
+        dC2S_eff = dC2S * flow_scale * thermal_factor * activity_factor
+        dC3S_eff = dC3S * flow_scale * thermal_factor * activity_factor
+        dC3A_eff = dC3A * flow_scale * thermal_factor * activity_factor
+        dC4AF_eff = dC4AF * flow_scale * thermal_factor * activity_factor
+
+        # ==========================================================
+        # CLINKER PHASE UPDATE
+        # ==========================================================
+
+        x_next["C2S"] = x["C2S"] + dC2S_eff - dC3S_eff * 0.7544
+        x_next["C3S"] = x["C3S"] + dC3S_eff
+        x_next["C3A"] = x["C3A"] + dC3A_eff
+        x_next["C4AF"] = x["C4AF"] + dC4AF_eff
+
+        # ==========================================================
+        # ELEMENT BALANCES (FLOW-CONSISTENT)
+        # ==========================================================
+
+        x_next["SiO2"] = max(0.0, x["SiO2"] - dC2S_eff * 0.3488)
+
+        x_next["Al2O3"] = max(0.0, x["Al2O3"] - dC3A_eff * 0.3773 - dC4AF_eff * 0.2098)
+
+        x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - dC4AF_eff * 0.3286)
+
+        # ==========================================================
+        # 🔥 CaO CONSERVATION (FIXED & STABLE)
+        # ==========================================================
+
+        CaO_in = x["CaO"] + CaO_generated
+
+        CaO_consumed = (
+            dC2S_eff * 0.6512
+            + dC3S_eff * 0.2456
+            + dC3A_eff * 0.6227
+            + dC4AF_eff * 0.4616
+        )
+
+        CaO_out = x["CaO"]
+
+        CaO_next = CaO_in - CaO_consumed
+        x_next["CaO"] = max(0.0, CaO_next)
+
+        # ==========================================================
+        # CO2 CLOSURE (CONSISTENT MASS GRAPH)
+        # ==========================================================
 
         Ca_inventory = (
             x_next["CaCO3"]
@@ -800,76 +935,62 @@ class StepExecutor:
             + 0.4616 * x_next["C4AF"]
         )
 
-        x_next["CO2"] = max(
-            0.0,
-            80.0 - Ca_inventory,
-        )
+        x_next["CO2"] = max(0.0, 80.0 - Ca_inventory)
+
+        # ==========================================================
+        # DYNAMIC SIGNALS
+        # ==========================================================
 
         x_next["dTg_burning"] = (x_next["Tg_burning"] - x["Tg_burning"]) / self.dt
 
-        # CO ppm
         oxygen_deficit = max(0.0, 6.0 - x_next["O2"])
+
         target_CO = 20.0 + 800.0 * oxygen_deficit * (
             x_next["Fuel_rate"] / 6.0
         ) * np.exp(-x_next["Tg_burning"] / 1200.0)
+
         x_next["CO_ppm"] = x["CO_ppm"] + 0.25 * (target_CO - x["CO_ppm"])
 
         x_next["P_calcination"] = -406.0 + 226.0 * np.exp(-t / 20.0)
 
-        # ----------------------------------------------------------
-        # MASS BALANCE CHECK
-        # ----------------------------------------------------------
-
-        x_next["Mass_Balance_Error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
-
         # ==========================================================
-        # OPTIONAL: MASS CHECK (DEBUG ONLY)
+        # MASS BALANCE CHECKS
         # ==========================================================
 
-        x_next["CaO_balance_error"] = abs(
-            (x["CaO"] + CaO_generated)
-            - (
-                dC2S * 0.6512
-                + dC3S * 0.2456
-                + dC3A * 0.6227
-                + dC4AF * 0.4616
-                + x_next["CaO"]
-            )
-        )
+        x_next["CO2_balance_error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
+
+        x_next["CaO_balance_error"] = abs(CaO_in - (x_next["CaO"] + CaO_consumed))
 
         # ==========================================================
-        # MASS CHECK (corrected)
+        # ENERGY TERMS
         # ==========================================================
-
-        CaO_in = x["CaO"] + CaO_generated
-
-        CaO_out = x_next["CaO"]
-
-        CaO_consumed = dC2S * 0.6512 + dC3S * 0.2456 + dC3A * 0.6227 + dC4AF * 0.4616
-
-        x_next["Mass_Balance_Error"] = abs(CaO_in - (CaO_out + CaO_consumed))
-
-        x_next["Q_acc"] = x_next["Clinker_output"] * 150.0
         x_next["Q_loss"] = (
-            0.0016 * 5.67e-8 * 0.8 * 110 * (x_next["Tg_burning"] ** 4 - 25**4)
+            0.0016 * 5.67e-8 * 0.8 * 110 * (x_next["Tg_burning"] ** 4 - 25.0**4)
         )
-        x_next["Q_reaction"] = x_next["Feed_rate"] * (1 - x_next["Clinker_yield"]) * 3.2
+
+        x_next["Q_reaction"] = (
+            x_next["Feed_rate"] * (1.0 - x_next["Clinker_yield"]) * 3.2
+        )
+
         x_next["Q_out"] = x_next["Q_acc"] + x_next["Q_loss"] + x_next["Q_reaction"]
+
         x_next["Q_gas"] = x_next["Fuel_rate"] * 1.1 * (x_next["Tg_burning"] - 25.0)
 
-        clinker_safe = max(x_next["Clinker_output"], 1e-6)
-        x_next["Normalized_Energy_Index"] = x_next["Q_in"] / clinker_safe
-        x_next["Global_Energy_Closure"] = (
-            x_next["Q_in"] - x_next["Q_out"] + x_next["Q_reaction"] - x_next["Q_acc"]
-        )
+        # ==========================================================
+        # GLOBAL ENERGY CLOSURE
+        # ==========================================================
+        x_next["Global_Energy_Closure"] = x_next["Q_in"] - x_next["Q_out"]
 
         q_in_safe = max(x_next["Q_in"], 1e-6)
+
         x_next["Energy_error"] = (x_next["Global_Energy_Closure"] / q_in_safe) * 100.0
+
+        clinker_safe = max(x_next["Clinker_output"], 1e-6)
+
+        x_next["Normalized_Energy_Index"] = x_next["Q_in"] / clinker_safe
 
         if t == 0:
             x_next["SCALE"] = 1.0
-
-        # Kritik Dönüş İşlemi: None Type Error bu satırın eklenmesi ile çözüldü.
 
         return x_next
 
