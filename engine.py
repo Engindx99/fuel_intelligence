@@ -260,9 +260,9 @@ class StepExecutor:
 
         x_next["CaO"] = max(0.0, CaO_in - CaO_consumed)
 
-        # ==========================================================
+        # ---------------------------------
         # CO2 CLOSURE
-        # ==========================================================
+        # ---------------------------------
         Ca_inventory = (
             x_next["CaCO3"]
             + x_next["CaO"]
@@ -274,9 +274,9 @@ class StepExecutor:
 
         x_next["CO2"] = max(0.0, 80.0 - Ca_inventory)
 
-        # ==========================================================
+        # ---------------------------------
         # DYNAMIC SIGNALS
-        # ==========================================================
+        # ---------------------------------
         x_next["dTg_burning"] = (x_next["Tg_burning"] - x["Tg_burning"]) / self.dt
 
         oxygen_deficit = max(0.0, 6.0 - x_next["O2"])
@@ -289,24 +289,33 @@ class StepExecutor:
 
         x_next["P_calcination"] = -406.0 + 226.0 * np.exp(-t / 20.0)
 
-        # ==========================================================
+        # ---------------------------------
         # MASS BALANCE CHECKS
-        # ==========================================================
+        # ---------------------------------
         x_next["CO2_balance_error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
 
         x_next["CaO_balance_error"] = abs(CaO_in - (x_next["CaO"] + CaO_consumed))
 
-        # ==========================================================
+        # ---------------------------------
         # DOWNSTREAM OUTPUT
-        # ==========================================================
+        # ---------------------------------
         yield_ratio = 1.0 / 1.55
         x_next["Clinker_output"] = kiln_out * yield_ratio
 
+        # --------------------------------------------------------------
+        # ENERJİ DAĞILIMI (ENERGY PARTITIONED / CLOSED SYSTEM)
+        # --------------------------------------------------------------
+
         # O2 & HEAT INPUT (Q_in)
         air_fuel_ratio = x_next["Air_flow"] / (f_rate + 1e-6)
+
         o2_target = 2.5 + 4.5 * np.exp(-1.2 / (air_fuel_ratio / 20000.0 + 1e-3))
+
         x_next["O2"] = x.get("O2", 3.5) + 0.15 * (o2_target - x.get("O2", 3.5))
 
+        # ------------------------------------------------------------------
+        # TOTAL FUEL ENERGY INPUT
+        # ------------------------------------------------------------------
         x_next["Q_in"] = (
             (
                 x_next["Lignite_Coal"] * 15000.0
@@ -319,39 +328,63 @@ class StepExecutor:
 
         Q_in_total = x_next["Q_in"] * 1000.0
 
-        x_next["P_preheater"] = -269.0 + 149.0 * np.exp(-t / 15.0)
-
-        # --- ENERJİ DAĞILIMI (Cascade & Source-Based) ---
-
+        # ------------------------------------------------------------------
+        # CONSTANTS
+        # ------------------------------------------------------------------
         AIR_DENSITY = 1.293
         Cp_air = 1005.0
         T_ref = 25.0
 
-        m_gas_pre = x_next["Air_flow"] * AIR_DENSITY / 3600.0
-        m_solid_pre = x_next["Feed_rate"]
-        Q_in_total = x_next["Q_in"] * 1000.0
-
-        # -------------------------------
-        # TERSİYER HAVA (CORRECTED PHYSICS)
-        # -------------------------------
-        m_air_tertiary = x_next.get("Tertiary_air_flow", 0.0) * AIR_DENSITY / 3600.0
-
-        Q_tertiary_sink = m_air_tertiary * Cp_air * (1400.0 - T_ref)
-        Q_tertiary_enthalpy = m_air_tertiary * Cp_air * (400.0 - T_ref)
-
-        feed_factor = x_next["Feed_rate"] / 100.0
-
-        # Enerji havuzu (mass-consistent)
-        Q_burning_pool = Q_in_total * 0.56 - Q_tertiary_sink + Q_tertiary_enthalpy
-
-        Q_calcination_budget = Q_in_total * (0.26 * min(feed_factor, 1.2))
-        Q_preheater_budget = Q_in_total * 0.18
-
         dt_sec = self.dt * 3600.0
 
-        # ------------------------------------------------------
+        # ------------------------------------------------------------------
+        # FLOWS
+        # ------------------------------------------------------------------
+        m_gas_pre = x_next["Air_flow"] * AIR_DENSITY / 3600.0
+        m_solid_pre = x_next["Feed_rate"]
+
+        # ------------------------------------------------------------------
+        # TERSIYER AIR EFFECT (MODULATION ONLY)
+        # ------------------------------------------------------------------
+        m_air_tertiary = x_next.get("Tertiary_air_flow", 0.0) * AIR_DENSITY / 3600.0
+
+        # sadece sistem verimini etkileyen correction factor
+        tertiary_factor = 1.0 / (1.0 + 0.02 * m_air_tertiary)
+
+        # ------------------------------------------------------------------
+        # ENERGY PARTITIONING (RAW WEIGHTS)
+        # ------------------------------------------------------------------
+        feed_factor = x_next["Feed_rate"] / 100.0
+
+        w_burn_raw = 0.56 * tertiary_factor
+        w_calc_raw = 0.26 * min(feed_factor, 1.2)
+        w_pre_raw = 0.16
+        w_sec_raw = 0.04
+        w_ter_raw = 0.08 * (1.0 - tertiary_factor)
+
+        # ------------------------------------------------------------------
+        # NORMALIZATION (ENERGY CLOSURE)
+        # ------------------------------------------------------------------
+        w_sum = w_burn_raw + w_calc_raw + w_pre_raw + w_sec_raw + w_ter_raw
+
+        w_burn = w_burn_raw / (w_sum + 1e-12)
+        w_calc = w_calc_raw / (w_sum + 1e-12)
+        w_pre = w_pre_raw / (w_sum + 1e-12)
+        w_sec = w_sec_raw / (w_sum + 1e-12)
+        w_ter = w_ter_raw / (w_sum + 1e-12)
+
+        # ------------------------------------------------------------------
+        # FINAL ENERGY FLOWS (CLOSED LOOP)
+        # ------------------------------------------------------------------
+        Q_burning_pool = Q_in_total * w_burn
+        Q_calcination_budget = Q_in_total * w_calc
+        Q_preheater_budget = Q_in_total * w_pre
+        Q_secondary_budget = Q_in_total * w_sec
+        Q_tertiary_budget = Q_in_total * w_ter
+
+        # --------------------------------------------------------------
         # BURNING ZONE
-        # ------------------------------------------------------
+        # --------------------------------------------------------------
         Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
         A_c_burn, h_c_burn = 13.85, 0.05
         A_s_burn, A_w_burn, A_ws_burn = 82.0, 70.0, 57.0
@@ -547,6 +580,8 @@ class StepExecutor:
         # PREHEATER ZONE (TIME-CONSTANT BASED / MPC COMPLIANT / ENERGY-CONSISTENT)
         # ==============================================================================
 
+        import numpy as np
+
         # Isıl kapasite katsayıları
         Cp_gas_pre = 1150.0  # J/(kg.K)
         Cp_solid_pre = 1050.0  # J/(kg.K)
@@ -565,6 +600,33 @@ class StepExecutor:
         h_pre = 18.0
         A_pre = 120.0
         UA_pre = h_pre * A_pre
+
+        # ------------------------------------------------------------------------------
+        # PRESSURE MODEL (CAUSAL / LAG-CONSISTENT)
+        # ------------------------------------------------------------------------------
+
+        P_in = x_next.get("P_calcination", 101325.0)
+
+        m_gas = m_gas_pre
+
+        # FIX: pressure reference uses lagged preheater state (not instantaneous calcination chain)
+        Tg_ref = x.get("Tg_preheater", Tg_in)
+
+        Tg_preheater_K = Tg_ref + 273.15
+
+        rho = AIR_DENSITY * (T_ref / (Tg_preheater_K))
+
+        K_resistance = 1200.0  # system-specific tuned parameter
+
+        dP = K_resistance * (m_gas**2) / (rho + 1e-9)
+
+        P_preheater = P_in - dP
+
+        x_next["P_preheater"] = P_preheater
+
+        # ------------------------------------------------------------------------------
+        # ENERGY DRIVER
+        # ------------------------------------------------------------------------------
 
         dT = Tg_in - Ts_pre
 
@@ -598,12 +660,11 @@ class StepExecutor:
 
         Q_preheater_physical = alpha_stable * UA_pre * dT
 
-        # 🔥 ENERGY BUDGET ENFORCEMENT (CRITICAL FIX)
         Q_preheater_budget = x_next.get("Q_preheater_budget", 0.0)
 
         Q_preheater = min(Q_preheater_physical, Q_preheater_budget)
 
-        # Gazdan katıya ve katıdan gaza enerji dengesi (kapalı form)
+        # Gazdan katıya ve katıdan gaza enerji dengesi
         Q_gas_loss = Q_preheater
         Q_solid_gain = Q_preheater
 
@@ -628,13 +689,13 @@ class StepExecutor:
         x_next["Tg_preheater"] = Tg_preheater_pred
         x_next["Ts_preheater"] = Ts_preheater_pred
 
-        # diagnostics (energy + control visibility)
         x_next["Q_dot_preheater"] = Q_preheater
         x_next["UA_preheater_effective"] = alpha_stable * UA_pre
         x_next["Q_preheater_physical"] = Q_preheater_physical
         x_next["Q_preheater_used"] = Q_preheater
+
         # ------------------------------------------------------
-        # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION)
+        # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION - CLEAN)
         # ------------------------------------------------------
 
         import numpy as np
@@ -662,7 +723,7 @@ class StepExecutor:
         C_gas = m_gas * Cp_gas + 1e-9
 
         # -------------------------------
-        # TIME CONSTANTS (INERTIAL PHYSICS)
+        # TIME CONSTANTS
         # -------------------------------
         tau_klinker = 9700.0
         tau_gas = 3800.0
@@ -677,46 +738,45 @@ class StepExecutor:
         dT = Ts_cool_curr - Tg_cool_curr
 
         # -------------------------------
-        # INTERNAL ENERGY TRANSFER (CONSISTENT FORM)
+        # COUPLING ENERGY TRANSFER
         # -------------------------------
-
-        # NOTE: dt_sec already represents integration window → no extra scaling needed
         Q_transfer = UA * np.tanh(dT / 250.0)
 
         # -------------------------------
-        # SOLID DYNAMICS (INERTIAL + COUPLED)
+        # SOLID DYNAMICS
         # -------------------------------
         dTs_ambient = (Tamb_solid - Ts_cool_curr) * (
             1.0 - np.exp(-dt_sec / tau_klinker)
         )
 
-        Ts_cool_next = Ts_cool_curr + dTs_ambient - (Q_transfer / (C_solid + 1e-9))
+        Ts_cool_next = Ts_cool_curr + dTs_ambient - (Q_transfer / C_solid)
 
         # -------------------------------
-        # GAS DYNAMICS (FLOW + COUPLING)
+        # GAS DYNAMICS
         # -------------------------------
         dTg_ambient = (Tamb_gas - Tg_cool_curr) * (1.0 - np.exp(-dt_sec / tau_gas))
 
-        # symmetric coupling (energy conservation fix)
-        Tg_cool_next = Tg_cool_curr + dTg_ambient + (Q_transfer / (C_gas + 1e-9))
+        Tg_cool_next = Tg_cool_curr + dTg_ambient + (Q_transfer / C_gas)
 
         # -------------------------------
-        # ENERGY RECOVERY (CLOSED LOOP CONSISTENCY)
+        # ENERGY RECOVERY (STABILIZED)
         # -------------------------------
-        Q_secondary_air = m_gas * Cp_gas * max(Tg_cool_curr - 200.0, 0.0)
+        Q_secondary_air_raw = m_gas * Cp_gas * max(Tg_cool_curr - 200.0, 0.0)
 
-        Q_burning_pool = x_next.get("Q_burning_pool", 0.0) + Q_secondary_air
+        # damping (IMPORTANT FIX)
+        eta_recovery = 0.65
+        Q_secondary_air = eta_recovery * Q_secondary_air_raw
+
+        # OPTIONAL: avoid unbounded accumulation
+        Q_burning_pool_prev = x.get("Q_burning_pool", 0.0)
+        Q_burning_pool = Q_burning_pool_prev + Q_secondary_air
 
         # -------------------------------
         # STATE UPDATE
         # -------------------------------
-        Ts_cooling_pred = Ts_cool_next
-        Tg_cooling_pred = Tg_cool_next
-        Q_burning_pool_pred = Q_burning_pool
-
-        x_next["Ts_Cooling"] = Ts_cooling_pred
-        x_next["Tg_Cooling"] = Tg_cooling_pred
-        x_next["Q_burning_pool"] = Q_burning_pool_pred
+        x_next["Ts_Cooling"] = Ts_cool_next
+        x_next["Tg_Cooling"] = Tg_cool_next
+        x_next["Q_burning_pool"] = Q_burning_pool
 
         # ----------------------------------------------------------
         # KALSİNASYON (STOKİYOMETRİK + KÜTLE KAPALI MODEL)
