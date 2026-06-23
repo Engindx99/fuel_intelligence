@@ -755,6 +755,7 @@ class StepExecutor:
         # 🔴 CaO MASS POOL (DOĞRU VE TEK NOKTA)
         # ==========================================================
         CaO_pool = x.get("CaO", 0.0) + CaO_generated
+        x_next["CaO"] = CaO_pool
 
         # ----------------------------------------------------------
         # KALSİNASYON SONRASI GİRİŞLER
@@ -859,6 +860,15 @@ class StepExecutor:
         # ==========================================================
         # STATE UPDATE (FLOW–COUPLED CHEMISTRY - CONSISTENT VERSION)
         # ==========================================================
+        x_next["Tg_preheater"] = Tg_calcination_pred
+        x_next["Ts_preheater"] = Ts_calcination_pred
+
+        x_next["Tg_calcination"] = Tg_calcination_pred
+        x_next["Ts_calcination"] = Ts_calcination_pred
+
+        x_next["Tg_burning"] = Tg_burning_pred
+        x_next["Ts_burning"] = Ts_burning_pred
+        x_next["Tw_burning"] = Tw_burning_pred
 
         # ----------------------------------------------------------
         # SAFETY: ensure reaction terms exist
