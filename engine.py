@@ -418,7 +418,7 @@ class StepExecutor:
         x_next["Tg_preheater"] = Tg_calcination_pred
 
         # ==============================================================================
-        # PREHEATER ZONE (TIME-CONSTANT BASED / MPC COMPLIANT / STRICTLY DIFFERENTIABLE)
+        # PREHEATER ZONE (TIME-CONSTANT BASED / MPC COMPLIANT / ENERGY-CONSISTENT)
         # ==============================================================================
 
         # Isıl kapasite katsayıları
@@ -467,10 +467,15 @@ class StepExecutor:
         )
 
         # ------------------------------------------------------------------------------
-        # ENERGY TRANSFER (CLOSED FORM)
+        # ENERGY TRANSFER (PHYSICAL + BUDGET CONSTRAINED)
         # ------------------------------------------------------------------------------
 
-        Q_preheater = alpha_stable * UA_pre * dT
+        Q_preheater_physical = alpha_stable * UA_pre * dT
+
+        # 🔥 ENERGY BUDGET ENFORCEMENT (CRITICAL FIX)
+        Q_preheater_budget = x_next.get("Q_preheater_budget", 0.0)
+
+        Q_preheater = min(Q_preheater_physical, Q_preheater_budget)
 
         # Gazdan katıya ve katıdan gaza enerji dengesi (kapalı form)
         Q_gas_loss = Q_preheater
@@ -497,9 +502,11 @@ class StepExecutor:
         x_next["Tg_preheater"] = Tg_preheater_pred
         x_next["Ts_preheater"] = Ts_preheater_pred
 
-        # diagnostics (optional but consistent)
+        # diagnostics (energy + control visibility)
         x_next["Q_dot_preheater"] = Q_preheater
         x_next["UA_preheater_effective"] = alpha_stable * UA_pre
+        x_next["Q_preheater_physical"] = Q_preheater_physical
+        x_next["Q_preheater_used"] = Q_preheater
         # ------------------------------------------------------
         # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION)
         # ------------------------------------------------------
