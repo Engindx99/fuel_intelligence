@@ -218,7 +218,7 @@ class StepExecutor:
         # ==========================================================
         flow_factor = kiln_out / max(feed_in, 1e-6)
 
-        thermal_factor = np.exp(-x_next["Tg_burning"] / 1200.0)
+        thermal_factor = 1.0
 
         activity_factor = min(1.0, mat_acc / 50.0)
 
@@ -347,6 +347,11 @@ class StepExecutor:
         Q_in_total = x_next["Q_in"] * 1000.0
 
         # --------------------------------------------------------------
+        # DEBUG: INPUT ENERGY TRACKING
+        # --------------------------------------------------------------
+        x_next["Q_in_total"] = Q_in_total
+
+        # --------------------------------------------------------------
         # TERSIYER AIR ENERGY PENALTY (FIXED LOCATION)
         # --------------------------------------------------------------
         Tg_in = x.get("Tg_preheater", 1400.0)
@@ -354,6 +359,11 @@ class StepExecutor:
         Q_ter_sink = m_air_tertiary * Cp_air * (Tg_in - T_ref)
 
         Q_in_total = Q_in_total - Q_ter_sink
+
+        # --------------------------------------------------------------
+        # DEBUG: LOSSES
+        # --------------------------------------------------------------
+        x_next["Q_ter_sink"] = Q_ter_sink
 
         # --------------------------------------------------------------
         # TEMPERATURE STATES
@@ -417,6 +427,12 @@ class StepExecutor:
         Q_tertiary_pool *= scale
 
         # --------------------------------------------------------------
+        # DEBUG: SCALING BEHAVIOR
+        # --------------------------------------------------------------
+        x_next["Q_demand_total"] = Q_demand_total
+        x_next["Q_scale"] = scale
+
+        # --------------------------------------------------------------
         # ENERGY BALANCE CHECK
         # --------------------------------------------------------------
         Q_check = (
@@ -446,10 +462,17 @@ class StepExecutor:
         # --------------------------------------------------------------
         Q_in_burn = x_next.get("Q_burning_pool", 0.0)
 
+        # DEBUG
+        x_next["Q_in_burn_raw"] = Q_in_burn
+
         # efficiency split (physical loss tracking)
         eta_burn = 0.97
         Q_combustion = Q_in_burn * eta_burn
         Q_stack_loss = Q_in_burn * (1.0 - eta_burn)
+
+        # DEBUG
+        x_next["Q_combustion"] = Q_combustion
+        x_next["Q_stack_loss"] = Q_stack_loss
 
         # --------------------------------------------------------------
         # LUMPED CAPACITIES
@@ -577,6 +600,9 @@ class StepExecutor:
         # ------------------------------------------------------
         Q_available = Q_calcination_pool
 
+        # DEBUG
+        x_next["Q_calcination_pool_raw"] = Q_available
+
         # ------------------------------------------------------
         # REACTION HEAT (ENDOTHERMIC)
         # ------------------------------------------------------
@@ -592,6 +618,11 @@ class StepExecutor:
 
         Q_available -= Q_rxn_used
 
+        # DEBUG
+        x_next["Q_rxn_demand_calcination"] = Q_rxn_demand
+        x_next["Q_rxn_used_calcination"] = Q_rxn_used
+        x_next["Q_calcination_remaining_pool"] = Q_available
+
         # ------------------------------------------------------
         # GAS ENTHALPY INLETS
         # ------------------------------------------------------
@@ -600,6 +631,11 @@ class StepExecutor:
         Q_from_tertiary = m_air_ter * Cp_air * max(400.0 - T_ref, 0.0)
 
         Q_gas_in = Q_from_burning + Q_from_tertiary + Q_available
+
+        # DEBUG
+        x_next["Q_from_burning_calc"] = Q_from_burning
+        x_next["Q_from_tertiary_calc"] = Q_from_tertiary
+        x_next["Q_gas_in_calcination"] = Q_gas_in
 
         # ------------------------------------------------------
         # SOLID ENERGY BALANCE
@@ -639,6 +675,13 @@ class StepExecutor:
         # ------------------------------------------------------
         Q_calc_unused = max(Q_available, 0.0)
 
+        # DEBUG ENERGY CLOSURE
+        x_next["Q_calc_unused"] = Q_calc_unused
+        x_next["Q_calc_total_in"] = Q_calcination_pool
+        x_next["Q_calc_energy_balance"] = Q_calcination_pool - (
+            Q_rxn_used + Q_calc_unused
+        )
+
         # ------------------------------------------------------
         # STATE UPDATE
         # ------------------------------------------------------
@@ -665,7 +708,6 @@ class StepExecutor:
         # FLOW CAPACITIES
         # ------------------------------------------------------
         m_gas_pre = x_next["Air_flow"] * AIR_DENSITY / 3600.0
-
         m_solid_pre = x_next["Feed_rate"] * 1000.0 / 3600.0
 
         C_gas_flow = m_gas_pre * Cp_gas_pre + 1e-9
@@ -737,20 +779,26 @@ class StepExecutor:
         # ------------------------------------------------------
         Q_available = Q_preheater_pool
 
+        # DEBUG
+        x_next["Q_preheater_pool_raw"] = Q_available
+        x_next["Q_preheater_demand"] = Q_pre_demand
+
         Q_pre_used = min(Q_pre_demand, Q_available)
 
         Q_pre_unused = max(Q_available - Q_pre_used, 0.0)
+
+        # DEBUG ENERGY FLOW
+        x_next["Q_preheater_used_debug"] = Q_pre_used
+        x_next["Q_preheater_unused_debug"] = Q_pre_unused
 
         # ------------------------------------------------------
         # ENERGY CONSISTENT STATE UPDATE
         # ------------------------------------------------------
         Tg_next = Tg_in - Q_pre_used / (C_gas_flow + 1e-9)
-
         Ts_next = Ts_pre + Q_pre_used / (C_solid_flow + 1e-9)
 
         # MPC-friendly smoothing
         Tg_preheater_pred = 0.7 * Tg_in + 0.3 * Tg_next
-
         Ts_preheater_pred = 0.7 * Ts_pre + 0.3 * Ts_next
 
         # ------------------------------------------------------
@@ -763,7 +811,6 @@ class StepExecutor:
         x_next["Q_preheater_used"] = Q_pre_used
         x_next["Q_preheater_unused"] = Q_pre_unused
         x_next["UA_preheater_effective"] = alpha_stable * UA_pre
-        x_next["Q_preheater_demand"] = Q_pre_demand
 
         # ------------------------------------------------------
         # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION)
@@ -847,8 +894,9 @@ class StepExecutor:
 
         Q_secondary_air = eta_recovery * Q_secondary_air_raw
 
-        # instantaneous feedback term
-        x_next["Q_secondary_feedback"] = Q_secondary_air
+        # DEBUG
+        x_next["Q_secondary_air_raw"] = Q_secondary_air_raw
+        x_next["Q_secondary_air_recovered"] = Q_secondary_air
 
         # -------------------------------
         # STATE UPDATE
@@ -859,15 +907,14 @@ class StepExecutor:
         # ----------------------------------------------------------
         # REACTIONS
         # ----------------------------------------------------------
-
-        # ==========================================================
-        # KALSİNASYON + CLINKER REACTIONS (CONSISTENT CASCADE MODEL)
-        # ==========================================================
-
         # -------------------------
         # CALCINATION
         # -------------------------
+
         Ts_calc = x_next["Ts_calcination"] + 273.15
+
+        # FIX: missing variable safety
+        T_calc = Ts_calc
 
         if T_calc > 873.15:
             k_calc = 1e7 * np.exp(-160000.0 / (8.314 * T_calc))
@@ -894,6 +941,10 @@ class StepExecutor:
 
         CaO_pool = x.get("CaO", 0.0) + CaO_generated
 
+        # DEBUG
+        x_next["CaO_pool"] = CaO_pool
+        x_next["CaCO3_reacted"] = reacted
+
         # ==========================================================
         # BURN ZONE TEMPERATURE AGGREGATION (NO DUPLICATE STATES)
         # ==========================================================
@@ -904,6 +955,9 @@ class StepExecutor:
 
         T_burn_eff = 0.7 * Ts_burn + 0.2 * Tg_burn + 0.1 * Tw_burn
 
+        # DEBUG
+        x_next["T_burn_eff"] = T_burn_eff
+
         # ==========================================================
         # C2S FORMATION
         # ==========================================================
@@ -913,8 +967,8 @@ class StepExecutor:
         if SiO2 <= 1e-6 or T_burn_eff < 1000.0:
             dC2S = 0.0
         else:
-            k = 5e7 * np.exp(-170000.0 / (8.314 * T_burn_eff))
-            kinetic = 1.0 - np.exp(-k * self.dt)
+            k_c2s = 5e7 * np.exp(-170000.0 / (8.314 * T_burn_eff))
+            kinetic = 1.0 - np.exp(-k_c2s * self.dt)
 
             stoich_limit = min(
                 SiO2 / 0.3488,
@@ -923,8 +977,20 @@ class StepExecutor:
 
             dC2S = stoich_limit * kinetic
 
+        # -----------------------------
+        # MASS UPDATE
+        # -----------------------------
+        CaO_pool_before = CaO_pool
+
         CaO_pool -= dC2S * 0.6512
         CaO_pool = max(0.0, CaO_pool)
+
+        # -----------------------------
+        # DEBUG TRACKING
+        # -----------------------------
+        x_next["dC2S"] = dC2S
+        x_next["CaO_pool_after_C2S"] = CaO_pool
+        x_next["CaO_pool_consumed_C2S"] = CaO_pool_before - CaO_pool
 
         # ==========================================================
         # C3S FORMATION
@@ -935,8 +1001,8 @@ class StepExecutor:
         if C2S_in <= 1e-6 or T_burn_eff < 1473.15:
             dC3S = 0.0
         else:
-            k = 2.28e8 * np.exp(-200000.0 / (8.314 * T_burn_eff))
-            kinetic = 1.0 - np.exp(-k * self.dt)
+            k_c3s = 2.28e8 * np.exp(-200000.0 / (8.314 * T_burn_eff))
+            kinetic = 1.0 - np.exp(-k_c3s * self.dt)
 
             stoich_limit = min(
                 C2S_in / 0.7544,
@@ -945,11 +1011,26 @@ class StepExecutor:
 
             dC3S = stoich_limit * kinetic
 
+        # -----------------------------
+        # CAO UPDATE (CRITICAL FEEDBACK)
+        # -----------------------------
+        CaO_pool_before_c3s = CaO_pool
+
         CaO_pool -= dC3S * 0.2456
         CaO_pool = max(0.0, CaO_pool)
 
+        # -----------------------------
+        # STATE UPDATE
+        # -----------------------------
         x_next["C2S"] = C2S_in - dC3S
         x_next["C3S"] = x.get("C3S", 0.0) + dC3S
+
+        # -----------------------------
+        # DEBUG / MONITORING
+        # -----------------------------
+        x_next["dC3S"] = dC3S
+        x_next["CaO_pool_after_C3S"] = CaO_pool
+        x_next["CaO_pool_consumed_C3S"] = CaO_pool_before_c3s - CaO_pool
 
         # ==========================================================
         # C3A FORMATION (NEW - AL2O3 COMPETITOR PHASE)
@@ -961,16 +1042,27 @@ class StepExecutor:
         if Al2O3 <= 1e-6 or T_burn_eff < 900.0:
             dC3A = 0.0
         else:
-            k = 1.2e6 * np.exp(-155000.0 / (8.314 * T_burn_eff))
-            kinetic = 1.0 - np.exp(-k * self.dt)
+            k_c3a = 1.2e6 * np.exp(-155000.0 / (8.314 * T_burn_eff))
+            kinetic = 1.0 - np.exp(-k_c3a * self.dt)
 
             stoich_limit = min(Al2O3 / 0.3773, CaO_pool / 0.6227)
 
             dC3A = stoich_limit * kinetic
 
-        # CaO consumption (C3A)
+        # -----------------------------
+        # CAO UPDATE (C3A PATHWAY)
+        # -----------------------------
+        CaO_pool_before_c3a = CaO_pool
+
         CaO_pool -= dC3A * 0.6227
         CaO_pool = max(0.0, CaO_pool)
+
+        # -----------------------------
+        # STATE UPDATE
+        # -----------------------------
+        x_next["dC3A"] = dC3A
+        x_next["CaO_pool_after_C3A"] = CaO_pool
+        x_next["CaO_pool_consumed_C3A"] = CaO_pool_before_c3a - CaO_pool
 
         # ==========================================================
         # C4AF FORMATION
