@@ -220,11 +220,9 @@ class StepExecutor:
         # ==========================================================
         flow_factor = kiln_out / max(feed_in, 1e-6)
 
-        thermal_factor = np.exp(-x_next["Tg_burning"] / 1200.0)
-
         activity_factor = min(1.0, mat_acc / 50.0)
 
-        coupling = flow_factor * thermal_factor * activity_factor
+        coupling = flow_factor * activity_factor
 
         dC2S_eff = dC2S_0 * coupling
         dC3S_eff = dC3S_0 * coupling
@@ -1013,43 +1011,54 @@ class StepExecutor:
         # C3A FORMASYONU (ENERGY + MASS + THERMODYNAMIC COUPLING)
         # ==========================================================
 
-        Al2O3_in = x["Al2O3"]
+        import numpy as np
 
+        Al2O3_in = x.get("Al2O3", 0.0)
+        CaO_pool_local = max(0.0, CaO_pool)
+
+        # -------------------------------
+        # KINETIC LIMITATION
+        # -------------------------------
         if Al2O3_in <= 1e-6 or T_burn_eff < 1100.0:
             dC3A = 0.0
-
         else:
             k = 1.0e5 * np.exp(-120000.0 / (8.314 * T_burn_eff))
             kinetic = 1.0 - np.exp(-k * self.dt)
 
             stoich_limit = min(
                 Al2O3_in / 0.3773,
-                max(0.0, CaO_pool) / 0.6227,
+                CaO_pool_local / 0.6227,
             )
 
             dC3A = stoich_limit * kinetic
 
         # ==========================================================
-        # MASS UPDATE
+        # MASS UPDATE (CLOSED MATERIAL BALANCE)
         # ==========================================================
 
         CaO_consumed_c3a = dC3A * 0.6227
-        CaO_pool -= CaO_consumed_c3a
-        CaO_pool = max(0.0, CaO_pool)
+        Al2O3_consumed = dC3A * 0.3773
 
+        CaO_pool_local -= CaO_consumed_c3a
+        Al2O3_in -= Al2O3_consumed
+
+        CaO_pool_local = max(0.0, CaO_pool_local)
+        Al2O3_in = max(0.0, Al2O3_in)
+
+        # write back reactive pools
+        CaO_pool = CaO_pool_local
+        x_next["Al2O3"] = Al2O3_in
         x_next["C3A"] = x.get("C3A", 0.0) + dC3A
 
         # ==========================================================
-        #  REACTION ENTHALPY (C3A FORMATION)
+        # REACTION ENTHALPY (C3A FORMATION)
         # ==========================================================
 
-        # C3A formation is moderately exothermic in clinker system
-        DeltaH_c3a = 380.0 * 1000.0  # J (lumped effective enthalpy)
-
+        DeltaH_c3a = 380.0 * 1000.0  # J (effective lumped enthalpy)
         Q_c3a = dC3A * DeltaH_c3a
 
         # ==========================================================
-        #  BURNING ZONE ENERGY FEEDBACK (STABILIZED COUPLING)
+        # BURNING ZONE ENERGY FEEDBACK (STABILIZED COUPLING)
         # ==========================================================
 
         Cp_burn_solid = 1150.0
@@ -1063,12 +1072,12 @@ class StepExecutor:
         # temperature perturbation from reaction enthalpy
         dT_burn_c3a = Q_c3a / (C_burn_total + 1e-9)
 
-        # weaker coupling than C3S (physically correct hierarchy)
+        # distributed feedback (physically consistent signs)
         Ts_burning_pred += 0.02 * dT_burn_c3a
         Tg_burning_pred += 0.03 * dT_burn_c3a
         Tw_burning_pred += 0.015 * dT_burn_c3a
 
-        # update effective burning temperature
+        # update effective temperature (consistent definition)
         T_burn_eff_next = (
             0.7 * (Ts_burning_pred + 273.15)
             + 0.2 * (Tg_burning_pred + 273.15)
@@ -1079,11 +1088,7 @@ class StepExecutor:
         # WRITE BACK
         # ==========================================================
 
-        CaO_pool = CaO_pool
-
-        x_next["C3A"] = x_next.get("C3A", 0.0) + dC3A
         x_next["Q_C3A"] = Q_c3a
-
         x_next["Tg_burning"] = Tg_burning_pred
         x_next["Ts_burning"] = Ts_burning_pred
         x_next["Tw_burning"] = Tw_burning_pred
@@ -1093,22 +1098,28 @@ class StepExecutor:
         # C4AF FORMASYONU (ENERGY + MASS + TEMPERATURE CONSISTENT)
         # ==========================================================
 
-        if Fe2O3 <= 1e-6 or T_burn_eff < 1100.0:
-            dC4AF = 0.0
-            Q_c4af = 0.0
-        else:
+        Fe2O3_in = x.get("Fe2O3", 0.0)
+        Al2O3_in = x.get("Al2O3", 0.0)
+        CaO_pool_local = max(0.0, CaO_pool)
+
+        dC4AF = 0.0
+        Q_c4af = 0.0
+
+        # ==========================================================
+        # KINETIC LIMIT
+        # ==========================================================
+        if Fe2O3_in > 1e-6 and T_burn_eff >= 1100.0:
+
             k = 200000.0 * np.exp(-150000.0 / (8.314 * T_burn_eff))
             kinetic = 1.0 - np.exp(-k * self.dt)
 
-            Al2O3_remaining = max(
-                0.0,
-                Al2O3 - dC3A * 0.3773,
-            )
+            # NOTE: C3A already consumed Al2O3, so use remaining pool
+            Al2O3_remaining = max(0.0, Al2O3_in)
 
             stoich_limit = min(
-                Fe2O3 / 0.3286,
+                Fe2O3_in / 0.3286,
                 Al2O3_remaining / 0.2098,
-                max(0.0, CaO_pool) / 0.4616,
+                CaO_pool_local / 0.4616,
             )
 
             dC4AF = stoich_limit * kinetic
@@ -1116,98 +1127,47 @@ class StepExecutor:
             # ==========================================================
             # ENERGY TERM
             # ==========================================================
-            DeltaH_c4af = 120.0 * 1000.0  # J (low-energy stabilizing phase)
+            DeltaH_c4af = 120.0 * 1000.0  # J
             Q_c4af = dC4AF * DeltaH_c4af
 
         # ==========================================================
-        # MASS UPDATE
-        # ==========================================================
-        CaO_consumed_c4af = dC4AF * 0.4616
-        CaO_pool -= CaO_consumed_c4af
-        CaO_pool = max(0.0, CaO_pool)
-
-        # ==========================================================
-        # 🔥 TEMPERATURE FEEDBACK (CLOSED LOOP)
+        # MASS UPDATE (CLOSED BALANCE)
         # ==========================================================
 
-        Cp_effective = 1150.0 * max(CaO_pool + CaO_consumed_c4af, 1e-6)
+        CaO_consumed = dC4AF * 0.4616
+        Fe2O3_consumed = dC4AF * 0.3286
+        Al2O3_consumed = dC4AF * 0.2098
+
+        CaO_pool_local -= CaO_consumed
+        Fe2O3_in -= Fe2O3_consumed
+        Al2O3_in -= Al2O3_consumed
+
+        CaO_pool_local = max(0.0, CaO_pool_local)
+        Fe2O3_in = max(0.0, Fe2O3_in)
+        Al2O3_in = max(0.0, Al2O3_in)
+
+        # WRITE BACK SPECIES
+        CaO_pool = CaO_pool_local
+        x_next["Fe2O3"] = Fe2O3_in
+        x_next["Al2O3"] = Al2O3_in
+
+        # ==========================================================
+        # TEMPERATURE FEEDBACK (CLOSED LOOP)
+        # ==========================================================
+
+        Cp_effective = 1150.0 * max(CaO_pool_local + CaO_consumed, 1e-6)
 
         dT_c4af = Q_c4af / (Cp_effective + 1e-9)
 
-        # -------------------------------
-        # APPLY THERMAL COUPLING
-        # -------------------------------
+        Ts_burning_pred -= 0.006 * dT_c4af
+        Tg_burning_pred -= 0.002 * dT_c4af
+        Tw_burning_pred -= 0.001 * dT_c4af
 
-        Ts_burning_pred = Ts_burning_pred - 0.006 * dT_c4af
-        Tg_burning_pred = Tg_burning_pred - 0.002 * dT_c4af
-        Tw_burning_pred = Tw_burning_pred - 0.001 * dT_c4af
-
-        # derived diagnostic metric
-        T_burn_eff = T_burn_eff - 0.01 * dT_c4af
-
-        # ==========================================================
-        # WRITE BACK (STATE CONSISTENCY)
-        # ==========================================================
-
-        x_next["dC4AF"] = dC4AF
-        x_next["Q_C4AF"] = Q_c4af
-        x_next["T_burn_effective"] = T_burn_eff
-
-        # ==========================================================
-        # STATE UPDATE (FLOW–COUPLED CHEMISTRY - CONSISTENT VERSION)
-        # ==========================================================
-
-        # -------------------------------
-        # PREHEATER
-        # -------------------------------
-        x_next["Tg_preheater"] = Tg_preheater_pred
-        x_next["Ts_preheater"] = Ts_preheater_pred
-
-        # -------------------------------
-        # CALCINATION
-        # -------------------------------
-        x_next["Tg_calcination"] = Tg_calc_pred
-        x_next["Ts_calcination"] = Ts_calc_pred
-
-        # -------------------------------
-        # BURNING ZONE
-        # -------------------------------
-        x_next["Tg_burning"] = Tg_burning_pred
-        x_next["Ts_burning"] = Ts_burning_pred
-        x_next["Tw_burning"] = Tw_burning_pred
-
-        # -------------------------------
-        # COOLING ZONE
-        # -------------------------------
-        x_next["Tg_Cooling"] = Tg_cool_next
-        x_next["Ts_Cooling"] = Ts_cool_next
-
-        # -------------------------------
-        # ENERGY POOL (recovered secondary air feedback)
-        # -------------------------------
-        x_next["Q_burning_pool"] = Q_burning_pool
-
-        # -------------------------------
-        # SOLID CHEMISTRY POOLS
-        # -------------------------------
-        x_next["CaO"] = CaO_pool
-
-        x_next["CaCO3"] = CaCO3_out
-        x_next["CaO_generated"] = CaO_generated
-        x_next["CO2_generated"] = CO2_generated_phys
-
-        # -------------------------------
-        # CLINKER PHASE PRODUCTS
-        # -------------------------------
-        x_next["dC2S"] = dC2S
-        x_next["dC3S"] = dC3S
-        x_next["dC3A"] = dC3A
-        x_next["dC4AF"] = dC4AF
-
-        # -------------------------------
-        # THERMAL FEEDBACK METRICS (optional but important)
-        # -------------------------------
-        x_next["T_burn_effective"] = T_burn_eff
+        T_burn_eff = (
+            0.7 * (Ts_burning_pred + 273.15)
+            + 0.2 * (Tg_burning_pred + 273.15)
+            + 0.1 * (Tw_burning_pred + 273.15)
+        )
 
         # ----------------------------------------------------------
         # SAFETY: ensure reaction terms exist
@@ -1218,40 +1178,61 @@ class StepExecutor:
         dC4AF = locals().get("dC4AF", 0.0)
 
         # ----------------------------------------------------------
-        # FLOW COUPLING FACTOR (CRITICAL FIX)
+        # FLOW COUPLING FACTORS
         # ----------------------------------------------------------
         flow_scale = x_next.get("Kiln_solid_out", 1e-6) / max(x["Feed_rate"], 1e-6)
-
-        thermal_factor = np.exp(-x_next["Tg_burning"] / 1200.0)
 
         activity_factor = min(1.0, x_next["Material_acc"] / 50.0)
 
         # ----------------------------------------------------------
-        # EFFECTIVE REACTION EXTENTS (PHYSICALLY CONSISTENT)
+        # EFFECTIVE REACTION EXTENTS
         # ----------------------------------------------------------
-        dC2S_eff = dC2S * flow_scale * thermal_factor * activity_factor
-        dC3S_eff = dC3S * flow_scale * thermal_factor * activity_factor
-        dC3A_eff = dC3A * flow_scale * thermal_factor * activity_factor
-        dC4AF_eff = dC4AF * flow_scale * thermal_factor * activity_factor
+        dC2S_eff = dC2S * flow_scale * activity_factor
+        dC3S_eff = dC3S * flow_scale * activity_factor
+        dC3A_eff = dC3A * flow_scale * activity_factor
+        dC4AF_eff = dC4AF * flow_scale * activity_factor
 
         # ==========================================================
-        # CLINKER PHASE UPDATE
+        # CLINKER PHASE ACCUMULATION
         # ==========================================================
+        x_next["C2S"] = x.get("C2S", 0.0) + dC2S_eff - 0.7544 * dC3S_eff
 
-        x_next["C2S"] = x["C2S"] + dC2S_eff - dC3S_eff * 0.7544
-        x_next["C3S"] = x["C3S"] + dC3S_eff
-        x_next["C3A"] = x["C3A"] + dC3A_eff
-        x_next["C4AF"] = x["C4AF"] + dC4AF_eff
+        x_next["C3S"] = x.get("C3S", 0.0) + dC3S_eff
+
+        x_next["C3A"] = x.get("C3A", 0.0) + dC3A_eff
+
+        x_next["C4AF"] = x.get("C4AF", 0.0) + dC4AF_eff
+
+        x_next["Clinker_total"] = (
+            x_next["C2S"] + x_next["C3S"] + x_next["C3A"] + x_next["C4AF"]
+        )
 
         # ==========================================================
-        # ELEMENT BALANCES (FLOW-CONSISTENT)
+        # ELEMENT BALANCES
         # ==========================================================
+        x_next["SiO2"] = max(0.0, x["SiO2"] - 0.3488 * dC2S_eff - 0.3488 * dC3S_eff)
 
-        x_next["SiO2"] = max(0.0, x["SiO2"] - dC2S_eff * 0.3488)
+        x_next["Al2O3"] = max(0.0, x["Al2O3"] - 0.3773 * dC3A_eff - 0.2098 * dC4AF_eff)
 
-        x_next["Al2O3"] = max(0.0, x["Al2O3"] - dC3A_eff * 0.3773 - dC4AF_eff * 0.2098)
+        x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - 0.3286 * dC4AF_eff)
 
-        x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - dC4AF_eff * 0.3286)
+        # ==========================================================
+        # CHEMICAL POOLS
+        # ==========================================================
+        x_next["CaO"] = max(0.0, CaO_pool)
+
+        x_next["CaCO3"] = CaCO3_out
+        x_next["CaO_generated"] = CaO_generated
+        x_next["CO2_generated"] = CO2_generated_phys
+
+        # ==========================================================
+        # DIAGNOSTICS
+        # ==========================================================
+        x_next["dC2S"] = dC2S_eff
+        x_next["dC3S"] = dC3S_eff
+        x_next["dC3A"] = dC3A_eff
+        x_next["dC4AF"] = dC4AF_eff
+        x_next["T_burn_effective"] = T_burn_eff
 
         # ==========================================================
         # 🔥 CaO CONSERVATION (FIXED & STABLE)
