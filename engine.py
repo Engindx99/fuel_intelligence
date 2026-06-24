@@ -488,7 +488,6 @@ class StepExecutor:
 
         b_solid_calc = (
             Q_calc_load
-            + Q_rxn_calc
             + (h_gs * A_s * Tg_calc_curr)
             - (m_solid_calc * 1000.0 / 3600.0) * Cp_solid_calc * (Ts_calc_curr - T_ref)
         )
@@ -797,7 +796,7 @@ class StepExecutor:
         Q_reaction = reacted * DeltaH_calc  # J
 
         # convert to temperature drop of solid phase
-        solid_heat_capacity = Cp_solid_calc * max(CaCO3_in, 1e-6)
+        solid_heat_capacity = Cp_solid_calc * m_solid_calc / 3600.0
 
         dT_reaction = Q_reaction / (solid_heat_capacity + 1e-9)
 
@@ -1178,19 +1177,12 @@ class StepExecutor:
         dC4AF = locals().get("dC4AF", 0.0)
 
         # ----------------------------------------------------------
-        # FLOW COUPLING FACTORS
-        # ----------------------------------------------------------
-        flow_scale = x_next.get("Kiln_solid_out", 1e-6) / max(x["Feed_rate"], 1e-6)
-
-        activity_factor = min(1.0, x_next["Material_acc"] / 50.0)
-
-        # ----------------------------------------------------------
         # EFFECTIVE REACTION EXTENTS
         # ----------------------------------------------------------
-        dC2S_eff = dC2S * flow_scale * activity_factor
-        dC3S_eff = dC3S * flow_scale * activity_factor
-        dC3A_eff = dC3A * flow_scale * activity_factor
-        dC4AF_eff = dC4AF * flow_scale * activity_factor
+        dC2S_eff = dC2S * activity_factor
+        dC3S_eff = dC3S * activity_factor
+        dC3A_eff = dC3A * activity_factor
+        dC4AF_eff = dC4AF * activity_factor
 
         # ==========================================================
         # CLINKER PHASE ACCUMULATION
@@ -1217,8 +1209,9 @@ class StepExecutor:
         x_next["Fe2O3"] = max(0.0, x["Fe2O3"] - 0.3286 * dC4AF_eff)
 
         # ==========================================================
-        # CHEMICAL POOLS
+        # CHEMICAL POOLS (FINAL STATE WRITE)
         # ==========================================================
+
         x_next["CaO"] = max(0.0, CaO_pool)
 
         x_next["CaCO3"] = CaCO3_out
@@ -1226,16 +1219,18 @@ class StepExecutor:
         x_next["CO2_generated"] = CO2_generated_phys
 
         # ==========================================================
-        # DIAGNOSTICS
+        # DIAGNOSTICS (PHASE RATES)
         # ==========================================================
+
         x_next["dC2S"] = dC2S_eff
         x_next["dC3S"] = dC3S_eff
         x_next["dC3A"] = dC3A_eff
         x_next["dC4AF"] = dC4AF_eff
+
         x_next["T_burn_effective"] = T_burn_eff
 
         # ==========================================================
-        # 🔥 CaO CONSERVATION (FIXED & STABLE)
+        # CaO CONSERVATION (CLOSED MASS LEDGER)
         # ==========================================================
 
         CaO_in = x["CaO"] + CaO_generated
@@ -1247,13 +1242,12 @@ class StepExecutor:
             + dC4AF_eff * 0.4616
         )
 
-        CaO_out = x["CaO"]
-
         CaO_next = CaO_in - CaO_consumed
+
         x_next["CaO"] = max(0.0, CaO_next)
 
         # ==========================================================
-        # CO2 CLOSURE (CONSISTENT MASS GRAPH)
+        # CO2 MASS CLOSURE (MONITOR ONLY)
         # ==========================================================
 
         Ca_inventory = (
@@ -1281,10 +1275,14 @@ class StepExecutor:
 
         x_next["CO_ppm"] = x["CO_ppm"] + 0.25 * (target_CO - x["CO_ppm"])
 
+        # ==========================================================
+        # PRESSURE FIELD (simple decay model)
+        # ==========================================================
+
         x_next["P_calcination"] = -406.0 + 226.0 * np.exp(-t / 20.0)
 
         # ==========================================================
-        # MASS BALANCE CHECKS
+        # MASS BALANCE ERROR METRICS
         # ==========================================================
 
         x_next["CO2_balance_error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
@@ -1292,8 +1290,9 @@ class StepExecutor:
         x_next["CaO_balance_error"] = abs(CaO_in - (x_next["CaO"] + CaO_consumed))
 
         # ==========================================================
-        # ENERGY TERMS
+        # ENERGY TERMS (MONITORING LAYER ONLY)
         # ==========================================================
+
         x_next["Q_loss"] = (
             0.0016 * 5.67e-8 * 0.8 * 110 * (x_next["Tg_burning"] ** 4 - 25.0**4)
         )
@@ -1309,6 +1308,7 @@ class StepExecutor:
         # ==========================================================
         # GLOBAL ENERGY CLOSURE
         # ==========================================================
+
         x_next["Global_Energy_Closure"] = x_next["Q_in"] - x_next["Q_out"]
 
         q_in_safe = max(x_next["Q_in"], 1e-6)
