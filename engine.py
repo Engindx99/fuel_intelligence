@@ -402,18 +402,11 @@ class StepExecutor:
 
         comb_eff = np.exp(-((x_next["O2"] - 3.5) ** 2) / 25.0)
 
-        Q_in_total = Q_chem * fuel_mass_flow * comb_eff  # kW = kJ/s
+        # kW = kJ/s
+        Q_in_total = Q_chem * fuel_mass_flow * comb_eff
 
         # ==========================================================
-        # 🔥 REACTION ENTHALPY ACCUMULATOR (CRITICAL FIX)
-        # ==========================================================
-
-        Q_reaction_total = x_next.get("Q_reaction_total", 0.0)
-
-        Q_burn_in = Q_in_total + Q_reaction_total
-
-        # ==========================================================
-        # BURNING ZONE (ENERGY-CONSISTENT VERSION)
+        # BURNING ZONE (ENERGY-CONSISTENT VERSION - FIXED)
         # ==========================================================
 
         Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
@@ -447,13 +440,13 @@ class StepExecutor:
         Q_wall = h_gs_burn * A_s_burn * (Ts_curr - Tg_curr)
         Q_wall2 = h_gw_burn * A_w_burn * (Tw_curr - Tg_curr)
 
-        air_effect = np.tanh(x_si.Air_flow_kgs / 60000.0)
-
+        air_effect = np.tanh(m_air_s / 60000.0)
         h_gs_burn_eff = h_gs_burn * (0.5 + 0.5 * air_effect)
 
         Q_conv = -h_gs_burn_eff * A_s_burn * (Tg_curr - Ts_curr)
 
-        Q_net_gas = Q_burn_in + Q_wall + Q_wall2 + Q_conv
+        # ONLY EXTERNAL INPUT
+        Q_net_gas = Q_in_total + Q_wall + Q_wall2 + Q_conv
 
         Tg_next_burn = Tg_curr + (self.dt * Q_net_gas) / C_gas
 
@@ -467,14 +460,14 @@ class StepExecutor:
         Q_loss_wall = h_loss * A_w_burn * (Tw_curr - T_amb)
         Q_wall_to_solid = h_ws_burn * A_ws_burn * (Tw_curr - Ts_curr)
 
-        Tw_next_burn = Tw_curr + (self.dt / C_wall_total) * (
+        Tw_next_burn = Tw_curr + (self.dt / (C_wall_total + 1e-9)) * (
             h_gw_burn * A_w_burn * (Tg_next_burn - Tw_curr)
             - Q_loss_wall
             - Q_wall_to_solid
         )
 
         # ==========================================================
-        # SOLID PHASE (REACTION COUPLED HEAT RELEASE)
+        # SOLID PHASE (STABLE COUPLED ENERGY MODEL)
         # ==========================================================
 
         Q_exo_base = min(
@@ -485,23 +478,16 @@ class StepExecutor:
         k = 0.05
         Q_exo_W = Q_exo_base / (1.0 + np.exp(-k * (Ts_curr - 1200.0)))
 
-        #  IMPORTANT: add to reaction enthalpy pool
-        Q_reaction_total += Q_exo_W
+        # -------------------------------
+        # SYMMETRIC COUPLING FIX (IMPORTANT)
+        # -------------------------------
 
-        a_sol_burn = (
-            (h_gs_burn * A_s_burn) + (h_ws_burn * A_ws_burn) + (m_solid_s * Cp_s_burn)
-        )
+        Q_gs = h_gs_burn * A_s_burn * (Tg_next_burn - Ts_curr)
+        Q_ws = h_ws_burn * A_ws_burn * (Tw_next_burn - Ts_curr)
 
-        b_sol_burn = (
-            Q_exo_W
-            + (m_solid_s * Cp_s_burn * 900.0)
-            + (h_gs_burn * A_s_burn * Tg_next_burn)
-            + (h_ws_burn * A_ws_burn * Tw_next_burn)
-        )
+        C_solid_local = m_solid_s * Cp_s_burn + 1e-9
 
-        Ts_next_burn = (C_solid_total * Ts_curr + self.dt * b_sol_burn) / (
-            C_solid_total + self.dt * a_sol_burn
-        )
+        Ts_next_burn = Ts_curr + (self.dt / C_solid_local) * (Q_exo_W + Q_gs + Q_ws)
 
         # ==========================================================
         # OUTPUT UPDATE
@@ -510,12 +496,6 @@ class StepExecutor:
         Tg_burning_pred = Tg_next_burn
         Ts_burning_pred = Ts_next_burn
         Tw_burning_pred = Tw_next_burn
-
-        # ==========================================================
-        # WRITE BACK ENERGY STATE (CRITICAL FOR CONSISTENCY)
-        # ==========================================================
-
-        x_next["Q_reaction_total"] = Q_reaction_total
 
         # ======================================================
         # CALCINATION ZONE (ENERGY-CONSISTENT FIXED VERSION)
@@ -951,7 +931,7 @@ class StepExecutor:
         T_burn_eff = 0.7 * Ts_burn + 0.2 * Tg_burn + 0.1 * Tw_burn
 
         # ----------------------------------------------------------
-        # SPECIES (assumed mass pools, consistent proxy)
+        # SPECIES
         # ----------------------------------------------------------
 
         SiO2 = x["SiO2"]
@@ -960,19 +940,12 @@ class StepExecutor:
 
         CaO_pool = max(0.0, x.get("CaO", 0.0))
 
-        Q_reaction_total = 0.0
-        Cp_s = 1150.0
-        Cp_g = 1250.0
-        Cp_w = 1000.0
-        C_burn_total = 6500.0 * Cp_s + 220.0 * Cp_g + 15000.0 * Cp_w
-
         # ==========================================================
-        # C2S FORMATION (KINETIC + STOICHIOMETRIC + ENERGY LIMITED)
+        # C2S FORMATION
         # ==========================================================
 
         if SiO2 <= 1e-9 or T_burn_eff < 1000.0:
             dC2S = 0.0
-
         else:
             k = 5e7 * np.exp(-170000.0 / (8.314 * T_burn_eff))
             kinetic = 1.0 - np.exp(-k * self.dt)
@@ -986,14 +959,10 @@ class StepExecutor:
 
             dC2S = stoich_limit * kinetic * energy_factor
 
-        CaO_consumed = dC2S * 0.6512
-        CaO_pool = max(0.0, CaO_pool - CaO_consumed)
+        CaO_pool -= dC2S * 0.6512
+        CaO_pool = max(0.0, CaO_pool)
 
-        DeltaH_c2s = 250.0 * 1000.0
-        Q_c2s = dC2S * DeltaH_c2s
-
-        # C2S is slightly ENDOTHERMIC in net kiln balance
-        Q_reaction_total += -0.15 * Q_c2s
+        Q_c2s = dC2S * 250000.0
 
         # ==========================================================
         # C3S FORMATION
@@ -1009,26 +978,21 @@ class StepExecutor:
 
             stoich_limit = min(
                 C2S_in / 0.7544,
-                max(0.0, CaO_pool) / 0.2456,
+                CaO_pool / 0.2456,
             )
 
             dC3S = stoich_limit * kinetic
 
-        CaO_consumed_c3s = dC3S * 0.2456
-        CaO_pool = max(0.0, CaO_pool - CaO_consumed_c3s)
+        CaO_pool -= dC3S * 0.2456
+        CaO_pool = max(0.0, CaO_pool)
 
-        DeltaH_c3s = 420.0 * 1000.0
-        Q_c3s = dC3S * DeltaH_c3s
-
-        # C3S is strongly EXOTHERMIC
-        Q_reaction_total += +0.35 * Q_c3s
+        Q_c3s = dC3S * 420000.0
 
         # ==========================================================
         # C3A FORMATION
         # ==========================================================
 
         Al2O3_in = x_next.get("Al2O3", 0.0)
-        CaO_pool_local = max(0.0, CaO_pool)
 
         if Al2O3_in > 1e-6 and T_burn_eff >= 1100.0:
             k = 1.0e5 * np.exp(-120000.0 / (8.314 * T_burn_eff))
@@ -1036,60 +1000,62 @@ class StepExecutor:
 
             stoich_limit = min(
                 Al2O3_in / 0.3773,
-                CaO_pool_local / 0.6227,
+                CaO_pool / 0.6227,
             )
 
             dC3A = stoich_limit * kinetic
         else:
             dC3A = 0.0
 
-        CaO_pool_local -= dC3A * 0.6227
+        CaO_pool -= dC3A * 0.6227
         Al2O3_in -= dC3A * 0.3773
+        CaO_pool = max(0.0, CaO_pool)
 
-        CaO_pool = max(0.0, CaO_pool_local)
-
-        DeltaH_c3a = 380.0 * 1000.0
-        Q_c3a = dC3A * DeltaH_c3a
-
-        Q_reaction_total += +0.25 * Q_c3a
+        Q_c3a = dC3A * 380000.0
 
         # ==========================================================
         # C4AF FORMATION
         # ==========================================================
 
         Fe2O3_in = x_next.get("Fe2O3", 0.0)
-        Al2O3_in2 = x_next.get("Al2O3", Al2O3_in)
-        CaO_pool_local = max(0.0, CaO_pool)
 
         if Fe2O3_in > 1e-6 and T_burn_eff >= 1100.0:
-
             k = 2.0e5 * np.exp(-150000.0 / (8.314 * T_burn_eff))
             kinetic = 1.0 - np.exp(-k * self.dt)
 
             stoich_limit = min(
                 Fe2O3_in / 0.3286,
-                Al2O3_in2 / 0.2098,
-                CaO_pool_local / 0.4616,
+                Al2O3_in / 0.2098,
+                CaO_pool / 0.4616,
             )
 
             dC4AF = stoich_limit * kinetic
         else:
             dC4AF = 0.0
 
-        CaO_pool_local -= dC4AF * 0.4616
+        CaO_pool -= dC4AF * 0.4616
         Fe2O3_in -= dC4AF * 0.3286
-        Al2O3_in2 -= dC4AF * 0.2098
+        Al2O3_in -= dC4AF * 0.2098
+        CaO_pool = max(0.0, CaO_pool)
 
-        CaO_pool = max(0.0, CaO_pool_local)
-
-        DeltaH_c4af = 120.0 * 1000.0
-        Q_c4af = dC4AF * DeltaH_c4af
-
-        Q_reaction_total += +0.10 * Q_c4af
+        Q_c4af = dC4AF * 120000.0
 
         # ==========================================================
-        # FINAL BURNING ZONE ENERGY BALANCE (MAIN FIX)
+        # 🔥 SINGLE CLEAN REACTION SOURCE TERM (NO STATE)
         # ==========================================================
+
+        Q_reaction_instant = -0.15 * Q_c2s + 0.35 * Q_c3s + 0.25 * Q_c3a + 0.10 * Q_c4af
+
+        # ==========================================================
+        # FINAL BURNING ZONE ENERGY BALANCE
+        # ==========================================================
+        Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
+        C_burn_total = (
+            gas_mass * Cp_g_burn + solid_mass * Cp_s_burn + wall_mass * Cp_w_burn
+        )
+
+        Q_reaction_instant = Q_reaction_instant
+        Q_in_total = Q_in_total if "Q_in_total" in globals() else 0.0
 
         Tg_curr = x.get("Tg_burning", 1450.0)
         Ts_curr = x.get("Ts_burning", 1400.0)
@@ -1097,28 +1063,27 @@ class StepExecutor:
 
         Q_loss_wall = 8.0 * 70.0 * (Tw_curr - 25.0)
 
-        # GLOBAL ENERGY INPUT (from fuel etc. already computed)
-        Q_net = Q_in_total + Q_reaction_total - Q_loss_wall
+        # gas time constant
+        tau_g = C_burn_total / (1450.0 * 82.0 + 350.0 * 70.0 + 1e-9)
+        alpha = self.dt / (self.dt + tau_g)
 
-        # GAS UPDATE (single physically consistent equation)
-        Tg_burning_pred = Tg_curr + (self.dt / C_burn_total) * (
-            Q_net
-            - 1450.0 * 82.0 * (Tg_curr - Ts_curr)
-            - 350.0 * 70.0 * (Tg_curr - Tw_curr)
-        )
+        # GAS
+        Tg_eq = Tg_curr + Q_reaction_instant / (C_burn_total + 1e-9)
+
+        Tg_burning_pred = (1 - alpha) * Tg_curr + alpha * Tg_eq
 
         # WALL
-        Tw_burning_pred = Tw_curr + (self.dt / (15000.0 * Cp_w)) * (
+        Tw_burning_pred = Tw_curr + (self.dt / (15000.0 * Cp_w_burn)) * (
             350.0 * 70.0 * (Tg_burning_pred - Tw_curr) - Q_loss_wall
         )
 
-        # SOLID (reaction driven + convective)
-        Ts_burning_pred = Ts_curr + (self.dt / (6500.0 * Cp_s)) * (
-            1450.0 * 82.0 * (Tg_burning_pred - Ts_curr) + Q_reaction_total
+        # SOLID
+        Ts_burning_pred = Ts_curr + (self.dt / (6500.0 * Cp_s_burn)) * (
+            1450.0 * 82.0 * (Tg_burning_pred - Ts_curr) + Q_reaction_instant
         )
 
         # ==========================================================
-        # EFFECTIVE TEMPERATURE (CONSISTENT)
+        # EFFECTIVE TEMPERATURE
         # ==========================================================
 
         T_burn_eff_next = (
@@ -1132,7 +1097,7 @@ class StepExecutor:
         # ==========================================================
 
         x_next["CaO"] = CaO_pool
-        x_next["Al2O3"] = Al2O3_in2
+        x_next["Al2O3"] = Al2O3_in
         x_next["Fe2O3"] = Fe2O3_in
 
         x_next["C2S"] = x_next.get("C2S", 0.0) + dC2S
@@ -1154,37 +1119,6 @@ class StepExecutor:
         x_next["Ts_burning"] = Ts_burning_pred
         x_next["Tw_burning"] = Tw_burning_pred
         x_next["T_burn_effective"] = T_burn_eff_next
-
-        # ==========================================================
-        # TEMPERATURE FEEDBACK (CLOSED LOOP)
-        # ==========================================================
-
-        # NOTE: heat capacity must be mass-based, not CaO-scaled
-        Cp_burn_solid = 1150.0
-        Cp_burn_gas = 1250.0
-        Cp_burn_wall = 1000.0
-
-        C_burn_total = (
-            6500.0 * Cp_burn_solid + 220.0 * Cp_burn_gas + 15000.0 * Cp_burn_wall
-        )
-
-        # reaction energy feedback
-        dT_c4af = Q_c4af / (C_burn_total + 1e-9)
-
-        # small negative damping feedback (stable sign convention)
-        Ts_burning_pred -= 0.006 * dT_c4af
-        Tg_burning_pred -= 0.002 * dT_c4af
-        Tw_burning_pred -= 0.001 * dT_c4af
-
-        # ==========================================================
-        # UPDATE EFFECTIVE TEMPERATURE (K DOMAIN)
-        # ==========================================================
-
-        T_burn_eff = (
-            0.7 * (Ts_burning_pred + 273.15)
-            + 0.2 * (Tg_burning_pred + 273.15)
-            + 0.1 * (Tw_burning_pred + 273.15)
-        )
 
         # ==========================================================
         # SAFETY: REACTION EXTENTS (DETERMINISTIC BINDING)
