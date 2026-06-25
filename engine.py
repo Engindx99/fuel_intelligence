@@ -4,67 +4,122 @@ from dataclasses import dataclass, asdict
 
 
 # =================================================
-# STATE DEFINATION
+# UNIT CONVERSION LAYER (NEW - SAFE ADDITION)
+# =================================================
+def tph_to_kgs(x):
+    return x * 1000.0 / 3600.0
+
+
+def kgs_to_tph(x):
+    return x * 3600.0 / 1000.0
+
+
+# =================================================
+# INTRODUCTION AND STATE DEFINITION
 # =================================================
 @dataclass
 class KilnState:
+
+    # =========================
+    # OPERATIONAL DOMAIN (t/h, plant view)
+    # =========================
     t: float = 0.0
+
     Lignite_Coal: float = 0.0
     Petcoke: float = 0.0
     Alternative_Fuel: float = 0.0
+
     Feed_rate: float = 40.0
+    Fuel_rate: float = 4.0
+
     Kiln_solid_out: float = 0.0
-    Material_acc: float = 15.0
     Clinker_output: float = 0.0
+
     Air_flow: float = 45000.0
     Cooling_air_flow: float = 80000.0
+
     ID_fan_speed: float = 900.0
-    Fuel_rate: float = 4.0
+    Damper_position: float = 33.0
+    kiln_rpm: float = 1.0
+
+    Material_acc: float = 15.0
+    Residence: float = 0.0
+
+    # =========================
+    # THERMAL STATE (PROCESS SCALE °C)
+    # NOTE: Internal thermodynamics must use K = C + 273.15
+    # =========================
     Tg_preheater: float = 350.0
     Ts_preheater: float = 100.0
+
     Tg_calcination: float = 850.0
     Ts_calcination: float = 780.0
+
     Tg_burning: float = 1450.0
     Ts_burning: float = 1400.0
+
     Tg_Cooling: float = 1550.0
     Ts_Cooling: float = 1450.0
+
     O2: float = 3.5
     CO_ppm: float = 0.0
+
     P_preheater: float = -120.0
     P_calcination: float = 0.0
     P_burning: float = 0.0
-    Damper_position: float = 33.0
-    kiln_rpm: float = 1.0
-    Residence: float = 0.0
+
     Q_in: float = 0.0
-    CaCO3: float = 80.0
-    CaO: float = 1e-6
-    CO2: float = 1e-6
-    SiO2: float = 13.0
-    Al2O3: float = 4.0
-    Fe2O3: float = 3.0
-    C2S: float = 1e-6
-    C3S: float = 1e-6
-    C3A: float = 1e-6
-    C4AF: float = 1e-6
     Q_out: float = 0.0
     Q_acc: float = 0.0
     Q_loss: float = 0.0
     Q_reaction: float = 0.0
     Q_gas: float = 0.0
     Q_clinker: float = 0.0
+
     Clinker_yield: float = 0.65
+
     dTg_burning: float = 0.0
     Energy_Error: float = 0.0
+
     dCaO_calcination: float = 0.0
+
     LSF: float = 0.0
+
     dC3A: float = 0.0
     dC4AF: float = 0.0
     dC2S: float = 0.0
     dC3S: float = 0.0
+
     Mass_Balance_Error: float = 0.0
+
     Tw_burning: float = 1200.0
 
+    # =========================
+    # CHEMISTRY (wt% assumed)
+    # =========================
+    CaCO3: float = 80.0
+    CaO: float = 1e-6
+    CO2: float = 1e-6
+    SiO2: float = 13.0
+    Al2O3: float = 4.0
+    Fe2O3: float = 3.0
+
+    C2S: float = 1e-6
+    C3S: float = 1e-6
+    C3A: float = 1e-6
+    C4AF: float = 1e-6
+
+    # =========================
+    # INTERNAL SI MIRROR (kg/s)
+    # =========================
+    Feed_rate_kgs: float = 0.0
+    Fuel_rate_kgs: float = 0.0
+    Air_flow_kgs: float = 0.0
+    Cooling_air_flow_kgs: float = 0.0
+
+    # =================================================
+    # SAFE ACCESS HELPERS
+    # =================================================
     def __getitem__(self, key):
         return getattr(self, key)
 
@@ -78,37 +133,67 @@ class KilnState:
         return KilnState(**asdict(self))
 
 
+# =================================================
+# STEP EXECUTOR (UNIT-SAFE EXTENSION)
+# =================================================
 class StepExecutor:
     AIR_DENSITY = 1.293
 
     def __init__(self, dt=0.05):
-        self.dt = dt  # saat cinsinden (0.05 saat = 180 saniye)
+        # dt = 0.05 h = 3 min = 180 s
+        self.dt = dt  # [h]
 
+    # -----------------------------
+    # smoothing utilities (unchanged)
+    # -----------------------------
     @staticmethod
     def _smooth_max(val, low_bound, eps=1e-6):
-        """Türevlenebilir pürüzsüz maksimum fonksiyonu (C-sonsuz sürekli)"""
         return 0.5 * ((val + low_bound) + np.sqrt((val - low_bound) ** 2 + eps))
 
     @staticmethod
     def _smooth_min(val, high_bound, eps=1e-6):
-        """Türevlenebilir pürüzsüz minimum fonksiyonu (C-sonsuz sürekli)"""
         return 0.5 * ((val + high_bound) - np.sqrt((val - high_bound) ** 2 + eps))
 
     @staticmethod
     def _mpc_softplus(val, width=10.0):
-        """MPC çözücülerinde gradient vanishing'i önleyen pürüzsüz sınırlandırıcı."""
         return width * np.log(1.0 + np.exp(val / width))
 
     @staticmethod
     def _mpc_smooth_fraction(base_fraction, factor, alpha=2.0):
-        """Bütçe dağılım faktörlerini asla negatif yapmayan pürüzsüz ölçekleyici."""
         return base_fraction * (1.0 + np.tanh(factor / alpha))
 
-    def perform_step(self, x: KilnState, t: float, inputs: dict = None) -> KilnState:
+    # =================================================
+    # NEW: UNIT BOUNDARY (t/h → kg/s)
+    # =================================================
+    def _to_internal_si(self, x: KilnState):
+        x_si = x.copy()
+
+        # mass flows
+        x_si.Feed_rate_kgs = tph_to_kgs(x.Feed_rate)
+        x_si.Fuel_rate_kgs = tph_to_kgs(x.Fuel_rate)
+
+        # NOTE: unit of Air_flow is assumed consistent with SI layer
+        # (to be validated in energy balance stage)
+        x_si.Air_flow_kgs = x.Air_flow
+        x_si.Cooling_air_flow_kgs = x.Cooling_air_flow
+
+        return x_si
+
+    # =================================================
+    # MAIN STEP
+    # =================================================
+    def perform_step(self, x: KilnState, t: float, inputs: dict = None):
+
         inputs = inputs or {}
+
+        # =========================
+        # 1. COPY PLANT STATE
+        # =========================
         x_next = x.copy()
 
-        # INPUT MAPPING
+        # =========================
+        # 2. INPUT MAPPING (PLANT DOMAIN - t/h)
+        # =========================
         for key in [
             "Fuel_rate",
             "Feed_rate",
@@ -120,16 +205,40 @@ class StepExecutor:
             if key in inputs:
                 x_next[key] = inputs[key]
 
-        # =================================================
-        # FUEL COMPOSITION
-        # =================================================
-        x_next["Petcoke"] = inputs.get("Petcoke", x.get("Petcoke", 0.0))
+        # =========================
+        # 3. PLANT DOMAIN DYNAMICS (t/h)
+        # =========================
+        feed = x_next["Feed_rate"]
+        x_next["Feed_rate"] = feed + (120.0 - feed) * 0.0005 * self.dt
+
+        # =========================
+        # 4. FUEL COMPOSITION (PLANT DOMAIN)
+        # =========================
+        x_next["Petcoke"] = inputs.get("Petcoke", x_next["Petcoke"])
         x_next["Alternative_Fuel"] = inputs.get(
-            "Alternative_Fuel", x.get("Alternative_Fuel", 0.0)
+            "Alternative_Fuel", x_next["Alternative_Fuel"]
         )
 
         rem_fuel = 1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
         x_next["Lignite_Coal"] = self._smooth_max(rem_fuel, 0.0)
+
+        # =========================
+        # 5. UNIT BOUNDARY (ONLY HERE)
+        # =========================
+        x_si = self._to_internal_si(x_next)
+
+        # =================================================
+        # 6. PHYSICS LAYER (kg/s DOMAIN - NOT IMPLEMENTED YET)
+        # =================================================
+        # IMPORTANT:
+        # - all reaction kinetics here must use x_si
+        # - energy balance MUST be done in SI units
+        # - no t/h variables allowed in this section
+
+        # Example hooks (future implementation):
+        # Q_in = x_si.Fuel_rate_kgs * LHV
+        # Q_reaction = f(CaCO3, T)
+        # dCaCO3 = -k(T) * x_si.Feed_rate_kgs
 
         # =================================================
         # FEED DYNAMICS
