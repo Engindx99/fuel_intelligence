@@ -3,6 +3,9 @@ import pandas as pd
 from dataclasses import dataclass, asdict
 
 
+# =================================================
+# STATE DEFINATION
+# =================================================
 @dataclass
 class KilnState:
     t: float = 0.0
@@ -75,20 +78,6 @@ class KilnState:
         return KilnState(**asdict(self))
 
 
-# 2. Fizik Motoru
-class KilnPhysicsEngine:
-    @staticmethod
-    def get_residence_time(kiln_rpm, filling_rate=0.10):
-        L, D, slope = 60.0, 4.2, 0.03
-        rpm = kiln_rpm
-        rpm_eff = rpm / (0.26 + rpm)
-        filling = filling_rate
-        filling_factor = (0.08 / filling) ** 0.3
-        # Endüstriyel kalibrasyona göre eksenel hız katsayısı güncellendi
-        v_axial = (5.87 * D * rpm_eff * (1.5 + 44.8 * slope)) * filling_factor
-        return (L / (v_axial + 1e-6)) * 60.0
-
-
 class StepExecutor:
     AIR_DENSITY = 1.293
 
@@ -131,7 +120,9 @@ class StepExecutor:
             if key in inputs:
                 x_next[key] = inputs[key]
 
+        # =================================================
         # FUEL COMPOSITION
+        # =================================================
         x_next["Petcoke"] = inputs.get("Petcoke", x.get("Petcoke", 0.0))
         x_next["Alternative_Fuel"] = inputs.get(
             "Alternative_Fuel", x.get("Alternative_Fuel", 0.0)
@@ -140,10 +131,15 @@ class StepExecutor:
         rem_fuel = 1.0 - x_next["Petcoke"] - x_next["Alternative_Fuel"]
         x_next["Lignite_Coal"] = self._smooth_max(rem_fuel, 0.0)
 
-        # CONTROL INPUTS (Süreç Dinamikleri)
+        # =================================================
+        # FEED DYNAMICS
+        # =================================================
         feed = x.get("Feed_rate", 40.0)
         x_next["Feed_rate"] = feed + (120.0 - feed) * 0.0005 * self.dt
 
+        # =================================================
+        # GAS/AIR SUBSYSTEM
+        # =================================================
         import numpy as np
 
         x_next["Air_flow"] = 45000.0 + (95000.0 - 45000.0) * (1.0 - np.exp(-t / 120.0))
@@ -153,18 +149,35 @@ class StepExecutor:
         x_next["ID_fan_speed"] = 900.0 + (2550.0 - 900.0) * (1.0 - np.exp(-t / 110.0))
         x_next["Damper_position"] = 33.0 + (85.0 - 33.0) * np.exp(-t / 25.0)
 
+        # =================================================
+        # FUEL RAMP
+        # =================================================
         x_next["Fuel_rate"] = 4.0 + 1.5 * (1.0 - np.exp(-t / 35.0))
         f_rate = self._smooth_max(x_next["Fuel_rate"], 0.1)
 
+        # =================================================
         # RPM & RESIDENCE TIME
+        # =================================================
+        import numpy as np
+
+        L, D, slope = 60.0, 4.2, 0.03
+
         rpm_current = x.get("kiln_rpm", 1.0)
         rpm_setpoint = 2.4
         alpha = 0.005
+
+        # RPM dynamics (1st-order lag)
         raw_rpm = rpm_current + alpha * (rpm_setpoint - rpm_current)
         x_next["kiln_rpm"] = self._smooth_max(raw_rpm, 0.1)
 
-        res_min = KilnPhysicsEngine.get_residence_time(x_next["kiln_rpm"])
-        x_next["Residence"] = res_min
+        # Residence time (direct physics closure)
+        rpm = x_next["kiln_rpm"]
+        rpm_eff = rpm / (0.26 + rpm)
+        filling_factor = (0.08 / 0.10) ** 0.3  # filling_rate = 0.10 sabit
+
+        v_axial = (5.87 * D * rpm_eff * (1.5 + 44.8 * slope)) * filling_factor
+
+        x_next["Residence"] = (L / (v_axial + 1e-6)) * 60.0
 
         # ==========================================================
         # MASS BALANCE (STABLE INVENTORY–FLOW COUPLING)
@@ -175,7 +188,7 @@ class StepExecutor:
 
         feed_in = x_next["Feed_rate"]  # ton/h
 
-        tau_res = max(res_min / 60.0, 1e-6)  # h
+        tau_res = max(x_next["Residence"] / 60.0, 1e-6)  # h
 
         # ==========================================================
         # PHYSICAL BASE OUTFLOW MODEL
@@ -426,15 +439,14 @@ class StepExecutor:
         Ts_burning_pred = Ts_next_burn
         Tw_burning_pred = Tw_next_burn
 
-        # ------------------------------------------------------
-        # CALCINATION ZONE (ENERGY-CONSISTENT VERSION)
-        # ------------------------------------------------------
+        # ======================================================
+        # CALCINATION ZONE (ENERGY-CONSISTENT + CAUSAL FIXED)
+        # ======================================================
 
         import numpy as np
 
         h_gs, A_s = 320.0, 950.0
 
-        # FIX: solid inventory (not feed rate)
         m_solid_calc = x_next["Kiln_solid_out"]
 
         Ts_calc_curr = x.get("Ts_calcination", 800.0)
@@ -445,47 +457,65 @@ class StepExecutor:
         T_ref = 25.0
 
         # ------------------------------------------------------
-        # BURNING → CALCINATION ENERGY COUPLING
+        # MASS FLOWS
         # ------------------------------------------------------
-
-        eta_bc = 0.85  # enthalpy transfer efficiency
 
         m_air_kiln = x_next["Air_flow"] * self.AIR_DENSITY / 3600.0
         m_air_tertiary = (
             x_next.get("Tertiary_air_flow", 0.0) * self.AIR_DENSITY / 3600.0
         )
 
+        m_gas_total = m_air_kiln + m_air_tertiary
+
+        # ------------------------------------------------------
+        # BURNING → CALCINATION ENERGY COUPLING (FIXED ETA)
+        # ------------------------------------------------------
+
+        eta_bc = 0.85
+
         H_burn_out = m_air_kiln * Cp_air * (x_next["Tg_burning"] - T_ref)
-        Q_from_burning = eta_bc * H_burn_out
+
+        # capacity-weighted efficiency (CRITICAL FIX)
+        C_gas = m_gas_total * Cp_air + 1e-9
+        C_solid = m_solid_calc * Cp_solid_calc + 1e-9
+
+        eta_eff = eta_bc * (C_gas / (C_gas + C_solid))
+
+        # nonlinear saturation (prevents runaway dominance)
+        Q_from_burning = eta_eff * H_burn_out * np.tanh(H_burn_out / 5e6)
 
         Q_from_tertiary = m_air_tertiary * Cp_air * (400.0 - T_ref)
 
         Q_calc_total_in = Q_from_burning + Q_from_tertiary
 
         # ------------------------------------------------------
-        # REACTION HEAT LOAD (NO BUDGET CLAMP)
+        # REACTION HEAT LOAD
         # ------------------------------------------------------
 
         activation = 1.0 / (1.0 + np.exp(-0.08 * (Ts_calc_curr - 850.0)))
 
-        Q_reaction_rate = 1700.0 * 1000.0  # J/kg CaCO3
+        Q_reaction_rate = 1700.0 * 1000.0
 
         Q_calc_load = (m_solid_calc / 3600.0) * activation * Q_reaction_rate
 
-        Q_rxn_calc = -Q_calc_load  # endotermik sink
-
         # ------------------------------------------------------
-        # SOLID ENERGY BALANCE
+        # HEAT TRANSFER (SYMMETRIC PHYSICS FORM)
         # ------------------------------------------------------
 
-        C_solid_calc_total = (m_solid_calc * 1000.0 * Cp_solid_calc) / 3600.0
+        q_gs = h_gs * A_s * (Tg_calc_curr - Ts_calc_curr)
 
-        a_solid_calc = h_gs * A_s + (m_solid_calc * 1000.0 / 3600.0) * Cp_solid_calc
+        # ------------------------------------------------------
+        # ENERGY BALANCES (CONSISTENT SCALING)
+        # ------------------------------------------------------
+
+        C_solid_calc_total = m_solid_calc * Cp_solid_calc
+        C_gas_calc_total = m_gas_total * Cp_air + 1e-6
+
+        # SOLID
+        a_solid_calc = h_gs * A_s + (m_solid_calc * Cp_solid_calc)
 
         b_solid_calc = (
-            Q_calc_load
-            + (h_gs * A_s * Tg_calc_curr)
-            - (m_solid_calc * 1000.0 / 3600.0) * Cp_solid_calc * (Ts_calc_curr - T_ref)
+            Q_calc_load + q_gs - (m_solid_calc * Cp_solid_calc) * (Ts_calc_curr - T_ref)
         )
 
         Ts_calc_pred = (C_solid_calc_total * Ts_calc_curr + self.dt * b_solid_calc) / (
@@ -496,15 +526,14 @@ class StepExecutor:
         # GAS ENERGY BALANCE
         # ------------------------------------------------------
 
-        C_gas_calc_total = 100.0 * Cp_air
         wall_term = 4.0 * 13.85
 
-        a_gas_calc = (m_air_kiln + m_air_tertiary) * Cp_air + wall_term + h_gs * A_s
+        a_gas_calc = (m_gas_total * Cp_air) + wall_term + h_gs * A_s
 
         b_gas_calc = (
             Q_calc_total_in
             + wall_term * x.get("Tg_preheater", 350.0)
-            + h_gs * A_s * Ts_calc_pred
+            + h_gs * A_s * (Ts_calc_pred - Tg_calc_curr)
         )
 
         Tg_calc_pred = (C_gas_calc_total * Tg_calc_curr + self.dt * b_gas_calc) / (
@@ -512,17 +541,15 @@ class StepExecutor:
         )
 
         # ------------------------------------------------------
-        # FINAL STATE UPDATE
+        # OUTPUT
         # ------------------------------------------------------
 
         x_next["Tg_calcination"] = Tg_calc_pred
+        x_next["Ts_calcination"] = Ts_calc_pred
 
-        # NOTE: cascade coupling (intentionally kept)
-        x_next["Tg_preheater"] = Tg_calc_pred
-
-        # ==============================================================================
-        # PREHEATER ZONE (TIME-CONSTANT BASED / MPC COMPLIANT / ENERGY-CONSISTENT)
-        # ==============================================================================
+        # ======================================================
+        # PREHEATER ZONE (CAUSAL DOWNSTREAM ONLY — STABLE FIX)
+        # ======================================================
 
         import numpy as np
 
@@ -530,12 +557,21 @@ class StepExecutor:
         Cp_solid_pre = 1050.0
         T_ref = 25.0
 
-        Tg_in = x_next["Tg_calcination"]
+        # ------------------------------------------------------
+        # CAUSAL BOUNDARY (REDUCED FEEDBACK COUPLING)
+        # ------------------------------------------------------
+
+        Tg_calc_current = x.get("Tg_calcination", 900.0)
+        Tg_pre_prev = x.get("Tg_preheater", Tg_calc_current)
+
+        # lagged boundary (prevents amplification loop)
+        Tg_in = 0.6 * Tg_calc_current + 0.1 * Tg_pre_prev
+
         Ts_pre = x.get("Ts_preheater", 25.0)
 
-        # --------------------------------------------------------------
+        # ------------------------------------------------------
         # MASS FLOWS
-        # --------------------------------------------------------------
+        # ------------------------------------------------------
 
         m_gas_pre = (x_next["Air_flow"] * self.AIR_DENSITY) / 3600.0
         m_solid_pre = (x_next["Feed_rate"] * 1000.0) / 3600.0
@@ -543,40 +579,19 @@ class StepExecutor:
         C_gas_flow = m_gas_pre * Cp_gas_pre + 1e-4
         C_solid_flow = m_solid_pre * Cp_solid_pre + 1e-4
 
-        # --------------------------------------------------------------
-        # HEAT TRANSFER STRUCTURE
-        # --------------------------------------------------------------
+        # ------------------------------------------------------
+        # HEAT TRANSFER
+        # ------------------------------------------------------
 
-        h_pre = 18.0
-        A_pre = 120.0
+        h_pre = 358.0
+        A_pre = 140.0
         UA_pre = h_pre * A_pre
-
-        # --------------------------------------------------------------
-        # PRESSURE MODEL (CAUSAL / LAG-CONSISTENT)
-        # --------------------------------------------------------------
-
-        P_in = x_next.get("P_calcination", 101325.0)
-
-        Tg_ref = x.get("Tg_preheater", Tg_in)
-        Tg_preheater_K = Tg_ref + 273.15
-
-        rho = self.AIR_DENSITY * (T_ref / (Tg_preheater_K + 1e-9))
-
-        K_resistance = 1200.0
-
-        dP = K_resistance * (m_gas_pre**2) / (rho + 1e-9)
-
-        x_next["P_preheater"] = P_in - dP
-
-        # --------------------------------------------------------------
-        # ENERGY DRIVER
-        # --------------------------------------------------------------
 
         dT = Tg_in - Ts_pre
 
-        # --------------------------------------------------------------
-        # HOLDOUP-BASED TIME CONSTANT MODEL
-        # --------------------------------------------------------------
+        # ------------------------------------------------------
+        # HOLDOUP MODEL (STABILIZED)
+        # ------------------------------------------------------
 
         M_gas_hold = 150.0
         M_solid_hold = 3000.0
@@ -587,52 +602,48 @@ class StepExecutor:
         tau_g = C_gas_bulk / (UA_pre + 1e-4)
         tau_s = C_solid_bulk / (UA_pre + 1e-4)
 
-        eps_smooth = 1e-4
+        eps = 1e-4
 
-        tau_eff = 0.5 * (tau_g + tau_s - np.sqrt((tau_g - tau_s) ** 2 + eps_smooth))
-
-        # ❗ dt_sec REMOVED → replaced with self.dt
+        tau_eff = 0.5 * (tau_g + tau_s - np.sqrt((tau_g - tau_s) ** 2 + eps))
 
         alpha = self.dt / (self.dt + tau_eff + 1e-4)
 
         alpha_max = 0.35
 
         alpha_stable = 0.5 * (
-            alpha + alpha_max - np.sqrt((alpha - alpha_max) ** 2 + eps_smooth)
+            alpha + alpha_max - np.sqrt((alpha - alpha_max) ** 2 + eps)
         )
 
-        # --------------------------------------------------------------
-        # ENERGY TRANSFER (PURE PHYSICAL — NO BUDGET CLAMP)
-        # --------------------------------------------------------------
+        # ------------------------------------------------------
+        # ENERGY TRANSFER
+        # ------------------------------------------------------
 
-        Q_preheater_physical = alpha_stable * UA_pre * dT
-
-        Q_preheater = Q_preheater_physical
+        Q_preheater = alpha_stable * UA_pre * dT
 
         Q_gas_loss = Q_preheater
         Q_solid_gain = Q_preheater
 
-        # --------------------------------------------------------------
-        # STATE UPDATE
-        # --------------------------------------------------------------
+        # ------------------------------------------------------
+        # STATE UPDATE (WEAK COUPLING FIX)
+        # ------------------------------------------------------
 
         Tg_next = Tg_in - (Q_gas_loss / (C_gas_flow + 1e-9))
         Ts_next = Ts_pre + (Q_solid_gain / (C_solid_flow + 1e-9))
 
-        Tg_preheater_pred = 0.7 * Tg_in + 0.3 * Tg_next
-        Ts_preheater_pred = 0.7 * Ts_pre + 0.3 * Ts_next
-
-        # --------------------------------------------------------------
-        # WRITE STATE
-        # --------------------------------------------------------------
+        # reduced mixing (prevents amplification loop)
+        Tg_preheater_pred = 0.9 * Tg_in + 0.1 * Tg_next
+        Ts_preheater_pred = 0.9 * Ts_pre + 0.1 * Ts_next
 
         x_next["Tg_preheater"] = Tg_preheater_pred
         x_next["Ts_preheater"] = Ts_preheater_pred
 
+        # ------------------------------------------------------
+        # OUTPUT METRICS
+        # ------------------------------------------------------
+
         x_next["Q_dot_preheater"] = Q_preheater
         x_next["UA_preheater_effective"] = alpha_stable * UA_pre
         x_next["Q_preheater_physical"] = Q_preheater
-        x_next["Q_preheater_used"] = Q_preheater
 
         # ------------------------------------------------------
         # COOLING ZONE (FINAL CLOSED-LOOP ENERGY VERSION - CLEAN)
@@ -734,7 +745,7 @@ class StepExecutor:
         x_next["Q_burning_pool"] = Q_burning_pool
 
         # ----------------------------------------------------------
-        # KALSİNASYON (STOKİYOMETRİK + KÜTLE + ENERGY-COUPLED MODEL)
+        # KALSİNASYON (PHYSICALLY CONSISTENT + SMOOTH KINETICS)
         # ----------------------------------------------------------
 
         import numpy as np
@@ -742,72 +753,86 @@ class StepExecutor:
         Ts_calc_curr = x.get("Ts_calcination", 800.0)
         T_calc = Ts_calc_curr + 273.15
 
-        # -------------------------------
-        # ARRHENIUS KINETICS
-        # -------------------------------
-        if T_calc > 873.15:
-            k_calc = 1e7 * np.exp(-160000.0 / (8.314 * T_calc))
-        else:
-            k_calc = 0.0
+        # ----------------------------------------------------------
+        # SMOOTH ACTIVATION (NO HARD THRESHOLD)
+        # ----------------------------------------------------------
+        T0 = 873.15  # ~600°C
+        sigma = 25.0  # transition smoothness
+
+        activation = 1.0 / (1.0 + np.exp(-(T_calc - T0) / sigma))
+
+        # ----------------------------------------------------------
+        # ARRHENIUS KINETICS (PHYSICALLY CORRECT FORM)
+        # ----------------------------------------------------------
+        Ea = 160000.0  # J/mol
+        R = 8.314
+
+        k_calc = 1e4 * np.exp(-Ea / (R * T_calc)) * activation
 
         CaCO3_in = x["CaCO3"]
 
-        # -------------------------------
-        # REACTION ENTHALPY (ENDOTHERMIC)
-        # -------------------------------
-        DeltaH_calc = 1700.0 * 1000.0  # J/kg CaCO3
+        DeltaH_calc = 1700.0 * 1000.0  # J/kg
 
-        # gas driving temperature (local coupling ONLY)
         T_gas = x.get("Tg_calcination", Ts_calc_curr)
 
-        # -------------------------------
-        # ENERGY AVAILABILITY (HEAT SUPPLY FROM GAS)
-        # -------------------------------
-        Cp_solid_calc = 1050.0  # J/kgK
+        # ----------------------------------------------------------
+        # HEAT SUPPLY (ONLY LIMITING DRIVER)
+        # ----------------------------------------------------------
+        h_gs = 320.0
+        A_s = 950.0
 
-        Q_available = max(0.0, (T_gas - Ts_calc_curr) * Cp_solid_calc * CaCO3_in)
+        Q_available = h_gs * A_s * max(0.0, T_gas - Ts_calc_curr)
 
         react_max_energy = Q_available / (DeltaH_calc + 1e-9)
 
-        # -------------------------------
-        # KINETIC LIMIT
-        # -------------------------------
+        # ----------------------------------------------------------
+        # KINETIC LIMIT (PHYSICAL)
+        # ----------------------------------------------------------
         react_kin = CaCO3_in * (1.0 - np.exp(-k_calc * self.dt))
 
         reacted = min(react_kin, react_max_energy)
         reacted = np.clip(reacted, 0.0, CaCO3_in)
 
-        # -------------------------------
-        # PRODUCTS
-        # -------------------------------
+        # ----------------------------------------------------------
+        # PRODUCTS (STOICHIOMETRY)
+        # ----------------------------------------------------------
         CaCO3_out = CaCO3_in - reacted
         CaO_generated = reacted * 0.5603
         CO2_generated_phys = reacted * 0.4397
 
         # ==========================================================
-        #  ENERGY FEEDBACK (THIS IS THE MISSING PART YOU WANTED)
+        # ENERGY STRUCTURE (CAUSAL, NO DOUBLE COUNTING)
         # ==========================================================
 
-        # enthalpy consumed by reaction (endothermic sink)
-        Q_reaction = reacted * DeltaH_calc  # J
+        Q_reaction = reacted * DeltaH_calc  # ONLY ENERGY ACCOUNTING
 
-        # convert to temperature drop of solid phase
-        solid_heat_capacity = Cp_solid_calc * m_solid_calc / 3600.0
+        Cp_solid_calc = 1050.0
+        m_solid_calc = x_next.get("Kiln_solid_out", 1.0)
 
-        dT_reaction = Q_reaction / (solid_heat_capacity + 1e-9)
+        C_solid = (m_solid_calc * Cp_solid_calc) / 3600.0
 
-        # update calcination solid temperature (implicit Euler style)
-        Ts_calc_next = Ts_calc_curr - dT_reaction + 0.15 * (T_gas - Ts_calc_curr)
+        # ----------------------------------------------------------
+        # GAS ENERGY IMPACT (REACTION ONLY AFFECTS GAS SIDE)
+        # ----------------------------------------------------------
 
-        # clamp physically reasonable bounds
+        # reaction increases gas enthalpy sink (distributed effect)
+        Q_rxn_gas_sink = Q_reaction / (1e6 + m_solid_calc)
+
+        Tg_effective = T_gas - 0.02 * (Q_rxn_gas_sink / (Cp_solid_calc + 1e-9))
+
+        # gas-solid heat transfer (physical driver)
+        Q_gs = h_gs * A_s * (Tg_effective - Ts_calc_curr)
+
+        Ts_calc_next = Ts_calc_curr + (self.dt * Q_gs / (C_solid + 1e-9))
+
         Ts_calc_next = np.clip(Ts_calc_next, 400.0, 1600.0)
 
-        # optional gas feedback (weak coupling)
-        Tg_calc_next = T_gas - 0.05 * (Ts_calc_curr - Ts_calc_next)
+        # gas relaxation (weak feedback only)
+        Tg_calc_next = T_gas - 0.02 * (Ts_calc_curr - Ts_calc_next)
 
-        # -------------------------------
+        # ----------------------------------------------------------
         # STATE UPDATE
-        # -------------------------------
+        # ----------------------------------------------------------
         x_next["CaCO3"] = CaCO3_out
         x_next["CaO_generated"] = CaO_generated
         x_next["CO2_generated"] = CO2_generated_phys
@@ -819,7 +844,6 @@ class StepExecutor:
 
         x_next["CaO"] = x.get("CaO", 0.0) + CaO_generated
 
-        #  NEW ENERGY STATES
         x_next["Ts_calcination"] = Ts_calc_next
         x_next["Tg_calcination"] = Tg_calc_next
         x_next["Q_reaction_calcination"] = Q_reaction
@@ -1359,7 +1383,7 @@ def run_simulation():
         x_current.Tg_calcination,
         x_current.Tg_burning,
         x_current.Tg_Cooling,
-    ) = (650.0, 950.0, 1450.0, 1550.0)
+    ) = (680.0, 1050.0, 1450.0, 1550.0)
     x_current.Air_flow, x_current.Cooling_air_flow, x_current.ID_fan_speed = (
         45100.0,
         80000.0,
@@ -1380,7 +1404,8 @@ def run_simulation():
     x_current.SiO2, x_current.Al2O3, x_current.Fe2O3 = 13.0, 4.0, 3.0
     x_current.C2S, x_current.C3S, x_current.C3A, x_current.C4AF = 1e-6, 1e-6, 1e-6, 1e-6
     x_current.kiln_rpm = 1.0
-    x_current.Residence = KilnPhysicsEngine.get_residence_time(1.0)
+    x_current.Residence = 69.0
+
     x_current.Petcoke, x_current.Alternative_Fuel, x_current.Lignite_Coal = (
         0.03,
         0.07,
