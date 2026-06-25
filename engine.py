@@ -52,9 +52,7 @@ class KilnState:
     Q_clinker: float = 0.0
     Clinker_yield: float = 0.65
     dTg_burning: float = 0.0
-    Normalized_Energy_Index: float = 1.0
-    Global_Energy_Closure: float = 1.0
-    Energy_error: float = 0.0
+    Energy_Error: float = 0.0
     dCaO_calcination: float = 0.0
     LSF: float = 0.0
     dC3A: float = 0.0
@@ -62,8 +60,6 @@ class KilnState:
     dC2S: float = 0.0
     dC3S: float = 0.0
     Mass_Balance_Error: float = 0.0
-    SCALE: float = 1.0
-    Energy_Residual: float = 0.0
     Tw_burning: float = 1200.0
 
     def __getitem__(self, key):
@@ -1306,21 +1302,40 @@ class StepExecutor:
         x_next["Q_gas"] = x_next["Fuel_rate"] * 1.1 * (x_next["Tg_burning"] - 25.0)
 
         # ==========================================================
-        # GLOBAL ENERGY CLOSURE
+        # ENERGY STORAGE RATE (PHYSICAL STATE ENERGY)
         # ==========================================================
 
-        x_next["Global_Energy_Closure"] = x_next["Q_in"] - x_next["Q_out"]
+        # Safely compute current stored energy
+        E_stored = x_next.get("m_gas", 0.0) * x_next.get("cp_gas", 0.0) * x_next.get(
+            "T_gas", 0.0
+        ) + x_next.get("m_solid", 0.0) * x_next.get("cp_solid", 0.0) * x_next.get(
+            "T_solid", 0.0
+        )
 
-        q_in_safe = max(x_next["Q_in"], 1e-6)
+        # Ensure previous energy exists (critical for t=0 stability)
+        E_stored_prev = x.get("E_stored", E_stored)
 
-        x_next["Energy_error"] = (x_next["Global_Energy_Closure"] / q_in_safe) * 100.0
+        # Energy storage rate (dE/dt)
+        energy_storage_rate = (E_stored - E_stored_prev) / max(self.dt, 1e-6)
 
-        clinker_safe = max(x_next["Clinker_output"], 1e-6)
+        # ==========================================================
+        # ENERGY BALANCE ERROR (PHYSICAL RESIDUAL)
+        # ==========================================================
 
-        x_next["Normalized_Energy_Index"] = x_next["Q_in"] / clinker_safe
+        energy_balance_error = (
+            x_next.get("Q_in", 0.0) - x_next.get("Q_out", 0.0) - energy_storage_rate
+        )
 
-        if t == 0:
-            x_next["SCALE"] = 1.0
+        # Normalize safely (avoid divide-by-zero / low-load blowup)
+        Q_in_ref = max(abs(x_next.get("Q_in", 0.0)), 1e-6)
+
+        x_next["Energy_Error"] = (abs(energy_balance_error) / Q_in_ref) * 100.0
+
+        # ==========================================================
+        # STORE STATE FOR NEXT STEP
+        # ==========================================================
+
+        x_next["E_stored"] = E_stored
 
         return x_next
 
@@ -1387,11 +1402,7 @@ def run_simulation():
     ) = (35575.0, 24285.0, 1669.0, 22600.0, 15.175)
     x_current.Q_gas, x_current.Q_clinker = 3524.0, 15000.0
     x_current.Clinker_yield = 0.65
-    (
-        x_current.Normalized_Energy_Index,
-        x_current.Global_Energy_Closure,
-        x_current.Energy_error,
-    ) = (1.0, 1.0, 0.0)
+    x_current.Energy_Error = 0.0
 
     # Yardımcı Fonksiyonlar
     def input_layer(t: float, initial_state: KilnState = None) -> dict:
