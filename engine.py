@@ -1239,13 +1239,6 @@ class StepExecutor:
         x_next["P_calcination"] = -406.0 + 226.0 * np.exp(-t / 20.0)
 
         # ==========================================================
-        # MASS BALANCE ERROR METRICS
-        # ==========================================================
-
-        x_next["CO2_balance_error"] = abs(80.0 - (Ca_inventory + x_next["CO2"]))
-        x_next["CaO_balance_error"] = abs(CaO_in - (x_next["CaO"] + CaO_consumed))
-
-        # ==========================================================
         # ENERGY TERMS (MONITORING LAYER ONLY)
         # ==========================================================
 
@@ -1297,6 +1290,22 @@ class StepExecutor:
         )
 
         x_next["Energy_Error"] = abs(energy_balance_error) / Q_in_ref * 100.0
+
+        # ==========================================================
+        # MASS CLOSURE + ENERGY DEBUG BLOCK (IMPROVED CONSISTENCY)
+        # ==========================================================
+
+        # ----------------------------------------------------------
+        # STOICHIOMETRIC BALANCE (FIXED PHYSICS)
+        # ----------------------------------------------------------
+
+        CaCO3_consumed = x_next.get("CaCO3_consumed", 0.0)
+
+        expected_CO2 = CaCO3_consumed * (44.01 / 100.09)
+        expected_CaO = CaCO3_consumed * (56.08 / 100.09)
+
+        x_next["CO2_balance_error"] = abs(expected_CO2 - x_next.get("CO2", 0.0))
+        x_next["CaO_balance_error"] = abs(expected_CaO - x_next.get("CaO", 0.0))
 
         # ==========================================================
         # STORE STATE
@@ -1423,9 +1432,25 @@ def run_simulation():
             step_time = sim_time + dt * (sub + 1)
             x_current = executor.perform_step(x_current, step_time, inputs)
 
+        # ======================================================
+        # MASS CLOSURE (STATE MONITORING LAYER)
+        # ======================================================
+
+        x_current["Mass_Balance_Error"] = (
+            x_current.get("CaCO3", 0.0)
+            + x_current.get("CaO", 0.0)
+            + x_current.get("SiO2", 0.0)
+            + x_current.get("Al2O3", 0.0)
+            + x_current.get("Fe2O3", 0.0)
+            + x_current.get("C2S", 0.0)
+            + x_current.get("C3S", 0.0)
+            + x_current.get("C3A", 0.0)
+            + x_current.get("C4AF", 0.0)
+            + x_current.get("CO2", 0.0)
+        ) - 100.0
+
         sim_time += reporting_dt
         x_current.t = sim_time
-
         simulation_records.append(asdict(x_current))
 
     # ==========================================================
