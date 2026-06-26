@@ -396,18 +396,30 @@ class StepExecutor:
 
         Cp_g_burn, Cp_s_burn, Cp_w_burn = 1250.0, 1150.0, 1000.0
 
-        A_c_burn, h_c_burn = 13.85, 0.05
         A_s_burn, A_w_burn, A_ws_burn = 82.0, 70.0, 57.0
 
         m_air_s = x_si.Air_flow_kgs
         m_solid_s = x_si.Feed_rate_kgs
 
-        gas_mass = 220.0
-        solid_mass = 6500.0
-        wall_mass = 15000.0
+        tau_gas = 40.0  # sec
+        gas_mass = m_air_s * tau_gas
+
+        tau_res = x_next["Residence"] / 3600.0  # s → h
+
+        solid_mass = x_si.Feed_rate_kgs * tau_res
+
+        L = 60.0  # m
+        D = 4.2  # m
+        thickness = 0.25  # m
+        rho_wall = 3000.0  # kg/m³ (eşdeğer refrakter yoğunluğu)
+
+        R_o = D / 2
+        R_i = R_o - thickness
+
+        V_wall = np.pi * (R_o**2 - R_i**2) * L
+        wall_mass = rho_wall * V_wall
 
         C_gas_total = gas_mass * Cp_g_burn
-        C_solid_total = solid_mass * Cp_s_burn
         C_wall_total = wall_mass * Cp_w_burn
 
         Tg_curr = x.get("Tg_burning", 1450.0)
@@ -455,14 +467,6 @@ class StepExecutor:
         # SOLID PHASE (STABLE COUPLED ENERGY MODEL)
         # ==========================================================
 
-        Q_exo_base = min(
-            350000.0,
-            m_solid_s * 500000.0 * (1.0 + max(0.0, Ts_curr - 1200.0) / 250.0),
-        )
-
-        k = 0.05
-        Q_exo_W = Q_exo_base / (1.0 + np.exp(-k * (Ts_curr - 1200.0)))
-
         # -------------------------------
         # SYMMETRIC COUPLING FIX (IMPORTANT)
         # -------------------------------
@@ -472,7 +476,7 @@ class StepExecutor:
 
         C_solid_local = m_solid_s * Cp_s_burn + 1e-9
 
-        Ts_next_burn = Ts_curr + (self.dt / C_solid_local) * (Q_exo_W + Q_gs + Q_ws)
+        Ts_next_burn = Ts_curr + (self.dt / C_solid_local) * (+Q_gs + Q_ws)
 
         # ==========================================================
         # OUTPUT UPDATE
@@ -689,7 +693,7 @@ class StepExecutor:
         # TIME CONSTANTS
         # -------------------------------
         tau_klinker = 9700.0
-        tau_gas = 3800.0
+        tau_gas = 40.0
 
         # -------------------------------
         # HEAT TRANSFER COUPLING (W = J/s)
