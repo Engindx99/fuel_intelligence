@@ -120,14 +120,14 @@ class KilnState:
     # =================================================
     # SAFE ACCESS HELPERS
     # =================================================
-    def __getitem__(self, key):
-        return getattr(self, key)
+    def __getitem__(self, k):
+        return getattr(self, k)
 
-    def __setitem__(self, key, value):
-        setattr(self, key, value)
+    def __setitem__(self, k, v):
+        setattr(self, k, v)
 
-    def get(self, key, default):
-        return getattr(self, key, default)
+    def get(self, k, d):
+        return getattr(self, k, d)
 
     def copy(self):
         return KilnState(**asdict(self))
@@ -137,7 +137,6 @@ class KilnState:
 # STEP EXECUTOR (UNIT-SAFE EXTENSION)
 # =================================================
 class StepExecutor:
-    AIR_DENSITY = 1.293
 
     def __init__(self, dt=0.05):
         # dt = 0.05 h = 3 min = 180 s
@@ -167,16 +166,9 @@ class StepExecutor:
     # =================================================
     def _to_internal_si(self, x: KilnState):
         x_si = x.copy()
-
-        # mass flows
         x_si.Feed_rate_kgs = tph_to_kgs(x.Feed_rate)
         x_si.Fuel_rate_kgs = tph_to_kgs(x.Fuel_rate)
-
-        # NOTE: unit of Air_flow is assumed consistent with SI layer
-        # (to be validated in energy balance stage)
-        x_si.Air_flow_kgs = x.Air_flow
-        x_si.Cooling_air_flow_kgs = x.Cooling_air_flow
-
+        x_si.Air_flow_kgs, x_si.Cooling_air_flow_kgs = x.Air_flow, x.Cooling_air_flow
         return x_si
 
     # =================================================
@@ -194,22 +186,16 @@ class StepExecutor:
         # =========================
         # 2. INPUT MAPPING (PLANT DOMAIN - t/h)
         # =========================
-        for key in [
+        for k in (
             "Fuel_rate",
             "Feed_rate",
             "Air_flow",
             "kiln_rpm",
             "Petcoke",
             "Alternative_Fuel",
-        ]:
-            if key in inputs:
-                x_next[key] = inputs[key]
-
-        # =========================
-        # 3. PLANT DOMAIN DYNAMICS (t/h)
-        # =========================
-        feed = x_next["Feed_rate"]
-        x_next["Feed_rate"] = feed + (120.0 - feed) * 0.0005 * self.dt
+        ):
+            if k in inputs:
+                x_next[k] = inputs[k]
 
         # =========================
         # 4. FUEL COMPOSITION (PLANT DOMAIN)
@@ -279,7 +265,7 @@ class StepExecutor:
         filling_factor = (0.08 / 0.10) ** 0.3
 
         v_axial = (5.87 * D * rpm_eff * (1.5 + 44.8 * slope)) * filling_factor
-        x_next["Residence"] = (L / (v_axial + 1e-6)) * 60.0
+        x_next["Residence"] = (L / (v_axial + 1e-6)) * 60.0  # v_axial (m/s)
 
         # ==========================================================
         # MASS BALANCE
@@ -314,8 +300,7 @@ class StepExecutor:
         # COUPLING FACTOR
         # ==========================================================
         flow_factor = kiln_out / max(feed_in, 1e-6)
-        activity_factor = min(1.0, mat_acc / 50.0)
-        coupling = flow_factor * activity_factor
+        coupling = flow_factor * min(1.0, mat_acc / 50.0)
 
         dC2S_eff = dC2S_0 * coupling
         dC3S_eff = dC3S_0 * coupling
