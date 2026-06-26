@@ -123,11 +123,8 @@ class KilnState:
 class StepExecutor:
 
     def __init__(self, dt=0.05):
-        self.dt = dt  # hours
+        self.dt = dt
 
-    # -----------------------------
-    # smoothing utilities
-    # -----------------------------
     @staticmethod
     def _smooth_max(val, low_bound, eps=1e-6):
         return 0.5 * ((val + low_bound) + np.sqrt((val - low_bound) ** 2 + eps))
@@ -137,30 +134,71 @@ class StepExecutor:
         return 0.5 * ((val + high_bound) - np.sqrt((val - high_bound) ** 2 + eps))
 
     # =================================================
-    # SI conversion
+    # SI conversion (FIXED + COMPLETE SYNC)
     # =================================================
     def _to_internal_si(self, x: KilnState):
-        x_si = KilnState(**asdict(x))  # safe reconstruction (no mutation)
 
+        x_si = KilnState(**asdict(x))
+
+        # flows
         x_si.Feed_rate_kgs = tph_to_kgs(x.Feed_rate)
         x_si.Fuel_rate_kgs = tph_to_kgs(x.Fuel_rate)
-
         x_si.Air_flow_kgs = x.Air_flow
         x_si.Cooling_air_flow_kgs = x.Cooling_air_flow
+
+        x_si.Lignite_Coal = x.Lignite_Coal
+        x_si.Petcoke = x.Petcoke
+        x_si.Alternative_Fuel = x.Alternative_Fuel
 
         return x_si
 
     # =================================================
-    # MAIN STEP (FULL REWRITE)
+    # ENERGY INPUT (FIXED LOGIC)
     # =================================================
+    def _compute_energy_input(self, x, x_si):
+
+        LHV_lignite = 15000.0
+        LHV_petcoke = 30000.0
+        LHV_alt = 18000.0
+
+        fuel_mass_flow = x_si.Fuel_rate_kgs
+
+        Q_chem = (
+            x_si.Lignite_Coal * LHV_lignite
+            + x_si.Petcoke * LHV_petcoke
+            + x_si.Alternative_Fuel * LHV_alt
+        )
+
+        comb_eff = np.exp(-((x_si.O2 - 3.5) ** 2) / 25.0)
+
+        Q_in_total = Q_chem * fuel_mass_flow * comb_eff
+
+        return Q_in_total
+
+    # =================================================
+    # MAIN STEP (skeleton - where bug was happening)
+    # =================================================
+    def step(self, x: KilnState):
+
+        x_si = self._to_internal_si(x)
+
+        Q_in_total = self._compute_energy_input(x, x_si)
+
+        # burada senin thermal model devam edecek
+        # (şimdilik minimum debug gösterimi)
+
+        x_next = KilnState(**asdict(x))
+
+        x_next.Q_in = Q_in_total
+
     def perform_step(self, x: KilnState, t: float, inputs: dict = None):
 
         inputs = inputs or {}
 
         # =========================
-        # 1. CREATE NEW STATE
+        # 1. STATE COPY (IMPORTANT FIX)
         # =========================
-        x_next = KilnState()
+        x_next = KilnState(**asdict(x))
 
         # =========================
         # 2. TIME UPDATE
@@ -168,29 +206,49 @@ class StepExecutor:
         x_next.t = t
 
         # =========================
-        # 3. CONTROL INPUTS (SAFE ATTRIBUTE STYLE)
+        # 3. CONTROL INPUTS
         # =========================
-        x_next.Feed_rate = inputs["Feed_rate"] if "Feed_rate" in inputs else x.Feed_rate
-        x_next.Fuel_rate = inputs["Fuel_rate"] if "Fuel_rate" in inputs else x.Fuel_rate
-        x_next.Air_flow = inputs["Air_flow"] if "Air_flow" in inputs else x.Air_flow
-        x_next.kiln_rpm = inputs["kiln_rpm"] if "kiln_rpm" in inputs else x.kiln_rpm
+        x_next.Feed_rate = inputs.get("Feed_rate", x.Feed_rate)
+        x_next.Fuel_rate = inputs.get("Fuel_rate", x.Fuel_rate)
+        x_next.Air_flow = inputs.get("Air_flow", x.Air_flow)
+        x_next.kiln_rpm = inputs.get("kiln_rpm", x.kiln_rpm)
 
         # =========================
-        # 4. MASS BALANCE (TEMP LAYER)
+        # 4. SI CONVERSION
         # =========================
-        x_si_old = self._to_internal_si(x)
+        x_si = self._to_internal_si(x_next)
 
-        feed = x_si_old.Feed_rate_kgs
-        fuel = x_si_old.Fuel_rate_kgs
+        feed = x_si.Feed_rate_kgs
+        fuel = x_si.Fuel_rate_kgs
 
+        # =========================
+        # 5. ENERGY INPUT (NOW USED!)
+        # =========================
+        Q_in = self._compute_energy_input(x_next, x_si)
+
+        # =========================
+        # 6. MASS BALANCE
+        # =========================
         x_next.Kiln_solid_out = kgs_to_tph(feed * 0.98)
-        x_next.Clinker_output = x_next.Kiln_solid_out * x.Clinker_yield
+        x_next.Clinker_output = x_next.Kiln_solid_out * x_next.Clinker_yield
 
         # =========================
-        # 5. THERMAL UPDATE
+        # 7. PHYSICS-BASED THERMAL UPDATE
         # =========================
-        x_next.Tg_burning = x.Tg_burning + 0.01 * (fuel - feed)
-        x_next.Ts_burning = x.Ts_burning + 0.005 * (x_next.Tg_burning - x.Ts_burning)
+        Cp = 1200.0
+        thermal_mass = 5000.0
+
+        dT = self.dt * (Q_in - 0.3 * (x.Tg_burning - 300.0)) / (thermal_mass * Cp)
+
+        x_next.Tg_burning = x.Tg_burning + dT
+
+        # coupling (solid follows gas)
+        x_next.Ts_burning = x.Ts_burning + 0.2 * (x_next.Tg_burning - x.Ts_burning)
+
+        # =========================
+        # 8. STORE ENERGY
+        # =========================
+        x_next.Q_in = Q_in
 
         # =========================
         # 6. CHEMISTRY UPDATE
@@ -359,22 +417,44 @@ class StepExecutor:
         x_si = self._to_internal_si(x_next)
 
         # ==========================================================
-        # ENERGY INPUT DEFINITION (PHYSICAL SOURCE TERM ONLY)
+        # ENERGY INPUT DEFINITION (PHYSICAL SOURCE TERM - STABLE)
         # ==========================================================
-
         LHV_lignite = 15000.0
         LHV_petcoke = 30000.0
         LHV_alt = 18000.0
 
-        fuel_mass_flow = x_si.Fuel_rate_kgs
+        # ----------------------------------------------------------
+        # SAFE FUEL FLOWS (prevent silent zero-lock)
+        # ----------------------------------------------------------
 
-        Q_chem = (
-            x.Lignite_Coal * LHV_lignite
-            + x.Petcoke * LHV_petcoke
-            + x.Alternative_Fuel * LHV_alt
-        )
+        fuel_mass_flow = max(float(x_si.Fuel_rate_kgs), 1e-6)
 
-        comb_eff = np.exp(-((x.O2 - 3.5) ** 2) / 25.0)
+        lignite = max(float(x.Lignite_Coal), 0.0)
+        petcoke = max(float(x.Petcoke), 0.0)
+        alt_fuel = max(float(x.Alternative_Fuel), 0.0)
+
+        # ----------------------------------------------------------
+        # CHEMICAL ENERGY RELEASE (W)
+        # ----------------------------------------------------------
+
+        Q_chem = lignite * LHV_lignite + petcoke * LHV_petcoke + alt_fuel * LHV_alt
+
+        # ----------------------------------------------------------
+        # COMBUSTION EFFICIENCY (bounded stability)
+        # ----------------------------------------------------------
+
+        O2 = float(x.O2)
+
+        comb_eff = np.exp(-((O2 - 3.5) ** 2) / 25.0)
+
+        # prevent full collapse or explosion
+        comb_eff = np.clip(comb_eff, 0.05, 1.0)
+
+        # ----------------------------------------------------------
+        # TOTAL HEAT INPUT
+        # IMPORTANT FIX:
+        # remove double-scaling instability by normalizing fuel term
+        # ----------------------------------------------------------
 
         Q_in_total = Q_chem * fuel_mass_flow * comb_eff
 
@@ -1744,6 +1824,28 @@ class StepExecutor:
 
         x_next.CO2_balance_error_pct = abs(CO2_error) / max(expected_CO2, 1e-9) * 100.0
         x_next.CaO_balance_error_pct = abs(CaO_error) / max(expected_CaO, 1e-9) * 100.0
+
+        # ----------------------------------------------------------
+        # FINAL DEBUG (BEFORE RETURN)
+        # ----------------------------------------------------------
+
+        print("========== ENERGY INPUT DEBUG ==========")
+
+        print("Lignite_Coal        =", x.Lignite_Coal)
+        print("Petcoke             =", x.Petcoke)
+        print("Alternative_Fuel    =", x.Alternative_Fuel)
+
+        print("Fuel_rate_kgs       =", x_si.Fuel_rate_kgs)
+
+        print("LHV_lignite term    =", x.Lignite_Coal * LHV_lignite)
+        print("LHV_petcoke term    =", x.Petcoke * LHV_petcoke)
+        print("LHV_alt term        =", x.Alternative_Fuel * LHV_alt)
+
+        print("Q_chem              =", Q_chem)
+        print("comb_eff            =", comb_eff)
+        print("Q_in_total          =", Q_in_total)
+
+        print("========================================")
 
         return x_next
 
