@@ -1,4 +1,4 @@
-python engine.py
+python -m Kiln.Burning
 
 python mpc.py
 
