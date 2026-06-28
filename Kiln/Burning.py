@@ -54,9 +54,6 @@ class KilnPDE:
         self.feed_target = 40000.0
         self.feed_tau = 7200.0
 
-        # ================= WALL =================
-        self.k_wall = 1.5
-
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
@@ -98,54 +95,94 @@ class KilnPDE:
         LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_alt
 
         Q_in = fuel_rate * LHV_mix * eta
-        q_vol = Q_in / (self.V_total + self.eps)
 
-        # ================= HEAT TRANSFER =================
-        q_gs = self.hv_gs * self.a_gs * (Tg - Ts)
-        q_gw = self.hv_gw * self.a_gw * (Tg - Tw)
-        q_ws = self.hv_ws * self.a_ws * (Ts - Tw)
+        # ================= VOLUMETRIC HEAT SOURCE =================
+        q_vol = Q_in / self.V_total
 
-        # ================= CAPACITIES =================
+        # ======================================================
+        # HEAT TRANSFER → VOLUMETRIC FORM (CRITICAL FIX)
+        # ======================================================
+
+        q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
+        q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
+        q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
+
+        # ==========================================================
+        # CAPACITY (gas)
+        # ==========================================================
         m_g = self.rho_g * self.V_cell
-        m_s = self.rho_s * self.V_cell
-
         C_g = m_g * self.Cp_g
 
-        # ================= SOLID EFFECTIVE CAPACITY =================
-        alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
-        tau_flow = self.dz / max(self.u_s, 1e-9)
+        # ==========================================================
+        # DISPERSION (PHYSICAL + STABLE)
+        # ==========================================================
+        Pe = 5.0  # tuned kiln regime
+        D_axial = self.u_g * self.dz / Pe
 
-        delta_T = np.sqrt(alpha_s * tau_flow)
-        V_active = self.a_gs * delta_T
+        q_disp = (
+            (self.rho_g * self.Cp_g)
+            * D_axial
+            * (np.roll(Tg, -1) - 2 * Tg + np.roll(Tg, 1))
+            / (self.dz**2)
+        )
 
-        V_cell_eff = min(self.V_cell, V_active)
+        # ==========================================================
+        # RADIATION (STABLE LINEARIZED MODEL)
+        # ==========================================================
+        sigma = 5.67e-8
+        eps_rad = 0.45
+        F_rad = 0.06  # kiln view factor (CRITICAL)
 
-        phi_coupling = 1e-3
-        C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
+        T_ref = 1500.0 + 273.15
 
-        # ================= GAS =================
-        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / (C_g + self.eps))
+        A_gw = self.a_gw * self.dz
+
+        q_rad_vol = (
+            F_rad * eps_rad * 4.0 * sigma * (T_ref**3) * (Tg - Tw) * A_gw / self.V_cell
+        )
+
+        # ==========================================================
+        # GAS ENERGY EQUATION
+        # ==========================================================
+        Tg_n = Tg + dt * (
+            -self.u_g * dTg_dz
+            + (q_vol - q_gs - q_gw) / (C_g + self.eps)
+            - q_rad_vol / (C_g + self.eps)
+            + q_disp / (C_g + self.eps)
+        )
 
         # ================= SOLID =================
+
+        alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
+        tau_flow = self.dz / (self.u_s + self.eps)
+
+        delta_T = np.sqrt(alpha_s * tau_flow + self.eps)
+
+        V_active = self.a_gs * delta_T
+
+        # SOFT NORMALIZATION (min yerine)
+        V_cell_eff = self.V_cell / (1.0 + (self.V_cell / (V_active + self.eps)))
+
+        phi_coupling = 1e-1
+
+        C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
+
         Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / (C_s + self.eps))
 
-        # ================= WALL (FULL VECTOR FIX) =================
+        # ================= WALL =================
         h_ext = 18.0
         T_amb = 300.0
 
         A_wall_cell = np.pi * self.D * self.dz
 
-        # heat into wall
         q_in_wall = q_gw + q_ws
 
-        # wall mass (per cell)
         m_w = self.rho_wall * self.V_cell
         C_w = m_w * self.Cp_wall
 
-        # wall time constant (lumped system)
         tau_w = C_w / (h_ext * A_wall_cell + self.eps)
 
-        Tw_eq = T_amb + q_in_wall / (h_ext * A_wall_cell + self.eps)
+        Tw_eq = T_amb + q_in_wall * self.V_cell / (h_ext * A_wall_cell + self.eps)
 
         Tw_n = Tw + (dt / (tau_w + self.eps)) * (Tw_eq - Tw)
 
@@ -169,7 +206,7 @@ if __name__ == "__main__":
 
     # ================= SI TIME =================
     dt = 0.01  #  second
-    t_end = 6 * 3600  # 6 hours
+    t_end = 3 * 3600  # 3 hours
 
     n_steps = int(t_end / dt)
 
