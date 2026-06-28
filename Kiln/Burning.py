@@ -15,7 +15,7 @@ class KilnPDE:
         self.V_total = self.A_cross * self.L
         self.V_cell = self.V_total / self.N
 
-        # ================= INTERFACIAL AREA MODEL =================
+        # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
         self.a_gs = 6.0 * (1.0 - self.epsilon_bed) / self.D
         self.a_gw = 2.0 * np.pi * self.D
@@ -49,21 +49,17 @@ class KilnPDE:
 
         self.eps = 1e-12
 
-        # ================= FEED DYNAMICS =================
+        # ================= FEED =================
         self.feed = 40000.0
         self.feed_target = 40000.0
         self.feed_tau = 7200.0
 
+        # ================= WALL =================
+        self.k_wall = 1.5
+
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
-
-    # ======================================================
-    def d_dz(self, X):
-        dX = np.zeros_like(X)
-        dX[1:] = (X[1:] - X[:-1]) / self.dz
-        dX[0] = dX[1]
-        return dX
 
     # ======================================================
     def step(self, Tg, Ts, Tw, inputs, dt):
@@ -72,8 +68,15 @@ class KilnPDE:
         Ts_n = Ts.copy()
         Tw_n = Tw.copy()
 
-        dTg_dz = self.d_dz(Tg)
-        dTs_dz = self.d_dz(Ts)
+        # ================= GRADIENTS =================
+        dTg_dz = np.zeros_like(Tg)
+        dTs_dz = np.zeros_like(Ts)
+
+        dTg_dz[1:] = (Tg[1:] - Tg[:-1]) / self.dz
+        dTs_dz[1:] = (Ts[1:] - Ts[:-1]) / self.dz
+
+        dTg_dz[0] = dTg_dz[1]
+        dTs_dz[0] = dTs_dz[1]
 
         # ================= FEED =================
         self.feed_target = inputs.get("Feed_rate", self.feed_target)
@@ -85,9 +88,7 @@ class KilnPDE:
         l = max(1.0 - p - a, 0.0)
 
         norm = p + a + l + self.eps
-        p /= norm
-        a /= norm
-        l /= norm
+        p, a, l = p / norm, a / norm, l / norm
 
         fuel_rate = inputs.get("Fuel_rate", 1.0)
         O2 = inputs.get("O2", 3.5)
@@ -96,74 +97,57 @@ class KilnPDE:
 
         LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_alt
 
-        # ================= ENERGY INPUT =================
         Q_in = fuel_rate * LHV_mix * eta
         q_vol = Q_in / (self.V_total + self.eps)
 
-        # ======================================================
-        for i in range(1, self.N):
+        # ================= HEAT TRANSFER =================
+        q_gs = self.hv_gs * self.a_gs * (Tg - Ts)
+        q_gw = self.hv_gw * self.a_gw * (Tg - Tw)
+        q_ws = self.hv_ws * self.a_ws * (Ts - Tw)
 
-            # ================= HEAT TRANSFER =================
-            q_gs = self.hv_gs * self.a_gs * (Tg[i] - Ts[i])
-            q_gw = self.hv_gw * self.a_gw * (Tg[i] - Tw[i])
-            q_ws = self.hv_ws * self.a_ws * (Ts[i] - Tw[i])
+        # ================= CAPACITIES =================
+        m_g = self.rho_g * self.V_cell
+        m_s = self.rho_s * self.V_cell
 
-            # ================= MASS =================
-            m_g = self.rho_g * self.V_cell
-            m_s = self.rho_s * self.V_cell
+        C_g = m_g * self.Cp_g
 
-            # ================= CAPACITIES =================
-            C_g = m_g * self.Cp_g
-            C_w = self.rho_wall * self.Cp_wall * self.V_cell
+        # ================= SOLID EFFECTIVE CAPACITY =================
+        alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
+        tau_flow = self.dz / max(self.u_s, 1e-9)
 
-            # ================= SOLID EFFECTIVE CAPACITY (CALIBRATABLE PHYSICS)
-            # ======================================================
+        delta_T = np.sqrt(alpha_s * tau_flow)
+        V_active = self.a_gs * delta_T
 
-            # thermal diffusivity
-            alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
+        V_cell_eff = min(self.V_cell, V_active)
 
-            # flow residence time
-            tau_flow = self.dz / max(self.u_s, 1e-9)
+        phi_coupling = 1e-3
+        C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
 
-            # thermal penetration depth
-            delta_T = np.sqrt(alpha_s * tau_flow)
+        # ================= GAS =================
+        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / (C_g + self.eps))
 
-            # active volume (geometric limit)
-            V_active = self.a_gs * delta_T
+        # ================= SOLID =================
+        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / (C_s + self.eps))
 
-            # physical clamp
-            V_cell_eff = min(self.V_cell, V_active)
+        # ================= WALL (FULL VECTOR FIX) =================
+        h_ext = 18.0
+        T_amb = 300.0
 
-            phi_coupling = 1e-3
+        A_wall_cell = np.pi * self.D * self.dz
 
-            # effective solid capacity
-            C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
+        # heat into wall
+        q_in_wall = q_gw + q_ws
 
-            # ======================================================
-            # GAS ENERGY BALANCE
-            # ======================================================
-            Tg_n[i] = Tg[i] + dt * (
-                -self.u_g * dTg_dz[i] + (q_vol - q_gs - q_gw) / (C_g + self.eps)
-            )
+        # wall mass (per cell)
+        m_w = self.rho_wall * self.V_cell
+        C_w = m_w * self.Cp_wall
 
-            # ======================================================
-            # SOLID ENERGY BALANCE
-            # ======================================================
-            Ts_n[i] = Ts[i] + dt * (
-                -self.u_s * dTs_dz[i] + (q_gs - q_ws) / (C_s + self.eps)
-            )
+        # wall time constant (lumped system)
+        tau_w = C_w / (h_ext * A_wall_cell + self.eps)
 
-            # ======================================================
-            # WALL ENERGY BALANCE
-            # ======================================================
-            h_ext, T_amb = 18.0, 300.0
+        Tw_eq = T_amb + q_in_wall / (h_ext * A_wall_cell + self.eps)
 
-            C_w = self.rho_wall * self.Cp_wall * self.a_gw * 0.1
-            A_wall_cell = self.a_gw * self.dz
-
-            Q_loss = h_ext * A_wall_cell * (Tw[i] - T_amb)
-
-            Tw_n[i] = Tw[i] + dt * ((q_gw + q_ws - Q_loss) / (C_w + self.eps))
+        Tw_n = Tw + (dt / (tau_w + self.eps)) * (Tw_eq - Tw)
 
         return Tg_n, Ts_n, Tw_n
 
@@ -183,19 +167,13 @@ if __name__ == "__main__":
         "O2": 3.5,
     }
 
-    # ======================================================
-    # TIME SCALE = HOURS
-    # ======================================================
-    dt = 1.0 / 3600.0  # 1 second in hours
-    t_end = 6.0  # simulation hour
+    # ================= SI TIME =================
+    dt = 0.01  #  second
+    t_end = 6 * 3600  # 6 hours
 
     n_steps = int(t_end / dt)
 
     t = 0.0
-
-    history_Tg = []
-    history_Ts = []
-    history_Tw = []
 
     for i in range(n_steps):
 
@@ -203,14 +181,10 @@ if __name__ == "__main__":
 
         t += dt
 
-        history_Tg.append(Tg[25])
-        history_Ts.append(Ts[25])
-        history_Tw.append(Tw[25])
-
         if i % 1000 == 0:
             print(
                 f"step={i:06d} | "
-                f"time={t:.4f} h | "
+                f"time={t/3600:.4f} h | "
                 f"Tg={Tg[25]-273.15:7.2f} °C | "
                 f"Ts={Ts[25]-273.15:7.2f} °C | "
                 f"Tw={Tw[25]-273.15:7.2f} °C"
