@@ -15,9 +15,15 @@ class KilnPDE:
         self.V_total = self.A_cross * self.L
         self.V_cell = self.V_total / self.N
 
+        # ================= INTERFACIAL AREA MODEL =================
+        self.epsilon_bed = 0.35
+        self.a_gs = 6.0 * (1.0 - self.epsilon_bed) / self.D
+        self.a_gw = 2.0 * np.pi * self.D
+        self.a_ws = self.a_gs * 0.6
+
         # ================= PROPERTIES =================
-        self.rho_g = 1.2
-        self.rho_s = 1600.0
+        self.rho_g = 4.2
+        self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
         self.Cp_g = 1150.0
@@ -27,9 +33,6 @@ class KilnPDE:
         # ================= VELOCITIES =================
         self.u_g = 2.5
         self.u_s = 0.02
-
-        # holdup transport
-        self.u_phi = 0.02
 
         # ================= HEAT TRANSFER =================
         self.hv_gs = 900.0
@@ -46,6 +49,11 @@ class KilnPDE:
 
         self.eps = 1e-12
 
+        # ================= FEED DYNAMICS =================
+        self.feed = 40000.0
+        self.feed_target = 40000.0
+        self.feed_tau = 7200.0
+
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
@@ -58,16 +66,18 @@ class KilnPDE:
         return dX
 
     # ======================================================
-    def step(self, Tg, Ts, Tw, phi, inputs, dt):
+    def step(self, Tg, Ts, Tw, inputs, dt):
 
         Tg_n = Tg.copy()
         Ts_n = Ts.copy()
         Tw_n = Tw.copy()
-        phi_n = phi.copy()
 
         dTg_dz = self.d_dz(Tg)
         dTs_dz = self.d_dz(Ts)
-        dphi_dz = self.d_dz(phi)
+
+        # ================= FEED =================
+        self.feed_target = inputs.get("Feed_rate", self.feed_target)
+        self.feed += (self.feed_target - self.feed) * dt / self.feed_tau
 
         # ================= FUEL =================
         p = inputs.get("Petcoke", 0.6)
@@ -75,7 +85,9 @@ class KilnPDE:
         l = max(1.0 - p - a, 0.0)
 
         norm = p + a + l + self.eps
-        p, a, l = p / norm, a / norm, l / norm
+        p /= norm
+        a /= norm
+        l /= norm
 
         fuel_rate = inputs.get("Fuel_rate", 1.0)
         O2 = inputs.get("O2", 3.5)
@@ -85,73 +97,81 @@ class KilnPDE:
         LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_alt
 
         # ================= ENERGY INPUT =================
-        Q_in_total = fuel_rate * LHV_mix * eta
-        q_base = Q_in_total / (self.V_total + self.eps)
+        Q_in = fuel_rate * LHV_mix * eta
+        q_vol = Q_in / (self.V_total + self.eps)
 
-        # ================= MAIN LOOP =================
+        # ======================================================
         for i in range(1, self.N):
 
-            # ---------------- HEAT TRANSFER ----------------
-            q_gs = self.hv_gs * (Ts[i] - Tg[i])
-            q_gw = self.hv_gw * (Tw[i] - Tg[i])
-            q_ws = self.hv_ws * (Tg[i] - Ts[i])
+            # ================= HEAT TRANSFER =================
+            q_gs = self.hv_gs * self.a_gs * (Tg[i] - Ts[i])
+            q_gw = self.hv_gw * self.a_gw * (Tg[i] - Tw[i])
+            q_ws = self.hv_ws * self.a_ws * (Ts[i] - Tw[i])
 
-            # ---------------- HOLDDUP ----------------
-            phi_i = np.clip(phi[i], 0.05, 1.0)
-
-            # ================= EFFECTIVE THERMAL MASS =================
-
-            m_s = self.rho_s * self.V_cell * phi_i
+            # ================= MASS =================
             m_g = self.rho_g * self.V_cell
+            m_s = self.rho_s * self.V_cell
 
-            inertia_g = m_g * self.Cp_g
+            # ================= CAPACITIES =================
+            C_g = m_g * self.Cp_g
+            C_w = self.rho_wall * self.Cp_wall * self.V_cell
 
-            solid_gain = 1450 + 4000.0 * (1.0 - phi_i)
-            Cp_s_eff = self.Cp_s * (1.0 + 2.5 * (1.0 - phi_i))
-            inertia_s = (m_s * self.Cp_s) / solid_gain
+            # ================= SOLID EFFECTIVE CAPACITY (CALIBRATABLE PHYSICS)
+            # ======================================================
 
-            # ================= FUEL SENSITIVITY =================
-            # transport + packing coupling
-            transport_factor = 0.55 + 0.45 * phi_i
+            # thermal diffusivity
+            alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
 
-            q_f = q_base * transport_factor
+            # flow residence time
+            tau_flow = self.dz / max(self.u_s, 1e-9)
 
-            # extra solid coupling (IMPORTANT FIX)
-            q_f_s = (2.0 + 3.0 * (1.0 - phi_i)) * q_f
+            # thermal penetration depth
+            delta_T = np.sqrt(alpha_s * tau_flow)
 
-            # ================= GAS =================
+            # active volume (geometric limit)
+            V_active = self.a_gs * delta_T
+
+            # physical clamp
+            V_cell_eff = min(self.V_cell, V_active)
+
+            phi_coupling = 1e-3
+
+            # effective solid capacity
+            C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
+
+            # ======================================================
+            # GAS ENERGY BALANCE
+            # ======================================================
             Tg_n[i] = Tg[i] + dt * (
-                -self.u_g * dTg_dz[i] + (q_gs + q_gw + q_f) / (inertia_g + self.eps)
+                -self.u_g * dTg_dz[i] + (q_vol - q_gs - q_gw) / (C_g + self.eps)
             )
 
-            # ================= SOLID =================
+            # ======================================================
+            # SOLID ENERGY BALANCE
+            # ======================================================
             Ts_n[i] = Ts[i] + dt * (
-                -self.u_s * dTs_dz[i] + (-q_gs + q_ws + q_f_s) / (inertia_s + self.eps)
+                -self.u_s * dTs_dz[i] + (q_gs - q_ws) / (C_s + self.eps)
             )
 
-            # ================= WALL =================
-            Tw_n[i] = Tw[i] + dt * ((-q_gw - q_ws) / (self.rho_wall * self.Cp_wall))
+            # ======================================================
+            # WALL ENERGY BALANCE
+            # ======================================================
+            Tw_n[i] = Tw[i] + dt * ((q_gw + q_ws) / (C_w + self.eps))
 
-            # ================= HOLDDUP DYNAMICS =================
-            phi_n[i] = phi[i] + dt * (-self.u_phi * dphi_dz[i] + 0.01 * (1.0 - phi[i]))
-
-            phi_n[i] = np.clip(phi_n[i], 0.05, 1.0)
-
-        return Tg_n, Ts_n, Tw_n, phi_n
+        return Tg_n, Ts_n, Tw_n
 
 
 if __name__ == "__main__":
 
     model = KilnPDE(N=50)
 
-    Tg = np.ones(50) * 1500.0
-    Ts = np.ones(50) * 1400.0
-    Tw = np.ones(50) * 1200.0
-
-    phi = np.ones(50) * 0.7
+    # Initial conditions (K)
+    Tg = np.ones(50) * (1500.0 + 273.15)
+    Ts = np.ones(50) * (1400.0 + 273.15)
+    Tw = np.ones(50) * (1200.0 + 273.15)
 
     inputs = {
-        "Fuel_rate": 5.0,
+        "Fuel_rate": 500.0,
         "Petcoke": 0.6,
         "Alternative_Fuel": 0.2,
         "O2": 3.5,
@@ -161,20 +181,19 @@ if __name__ == "__main__":
 
     history_Tg = []
     history_Ts = []
-    history_phi = []
+    history_Tw = []
 
     for i in range(50):
 
-        Tg, Ts, Tw, phi = model.step(Tg, Ts, Tw, phi, inputs, dt)
+        Tg, Ts, Tw = model.step(Tg, Ts, Tw, inputs, dt)
 
-        # store history (CRITICAL FIX)
         history_Tg.append(Tg[25])
         history_Ts.append(Ts[25])
-        history_phi.append(phi[25])
+        history_Tw.append(Tw[25])
 
         print(
-            f"step={i} | "
-            f"Ts_center={Ts[25]:.3f} | "
-            f"Tg_center={Tg[25]:.3f} | "
-            f"phi_center={phi[25]:.3f}"
+            f"step={i:02d} | "
+            f"Tg_center={Tg[25] - 273.15:8.2f} °C | "
+            f"Ts_center={Ts[25] - 273.15:8.2f} °C | "
+            f"Tw_center={Tw[25] - 273.15:8.2f} °C"
         )
