@@ -156,7 +156,14 @@ class KilnPDE:
             # ======================================================
             # WALL ENERGY BALANCE
             # ======================================================
-            Tw_n[i] = Tw[i] + dt * ((q_gw + q_ws) / (C_w + self.eps))
+            h_ext, T_amb = 18.0, 300.0
+
+            C_w = self.rho_wall * self.Cp_wall * self.a_gw * 0.1
+            A_wall_cell = self.a_gw * self.dz
+
+            Q_loss = h_ext * A_wall_cell * (Tw[i] - T_amb)
+
+            Tw_n[i] = Tw[i] + dt * ((q_gw + q_ws - Q_loss) / (C_w + self.eps))
 
         return Tg_n, Ts_n, Tw_n
 
@@ -165,35 +172,46 @@ if __name__ == "__main__":
 
     model = KilnPDE(N=50)
 
-    # Initial conditions (K)
     Tg = np.ones(50) * (1500.0 + 273.15)
     Ts = np.ones(50) * (1400.0 + 273.15)
     Tw = np.ones(50) * (1200.0 + 273.15)
 
     inputs = {
-        "Fuel_rate": 500.0,
+        "Fuel_rate": 5.8,
         "Petcoke": 0.6,
         "Alternative_Fuel": 0.2,
         "O2": 3.5,
     }
 
-    dt = 0.01
+    # ======================================================
+    # TIME SCALE = HOURS
+    # ======================================================
+    dt = 1.0 / 3600.0  # 1 second in hours
+    t_end = 6.0  # simulation hour
+
+    n_steps = int(t_end / dt)
+
+    t = 0.0
 
     history_Tg = []
     history_Ts = []
     history_Tw = []
 
-    for i in range(50):
+    for i in range(n_steps):
 
         Tg, Ts, Tw = model.step(Tg, Ts, Tw, inputs, dt)
+
+        t += dt
 
         history_Tg.append(Tg[25])
         history_Ts.append(Ts[25])
         history_Tw.append(Tw[25])
 
-        print(
-            f"step={i:02d} | "
-            f"Tg_center={Tg[25] - 273.15:8.2f} °C | "
-            f"Ts_center={Ts[25] - 273.15:8.2f} °C | "
-            f"Tw_center={Tw[25] - 273.15:8.2f} °C"
-        )
+        if i % 1000 == 0:
+            print(
+                f"step={i:06d} | "
+                f"time={t:.4f} h | "
+                f"Tg={Tg[25]-273.15:7.2f} °C | "
+                f"Ts={Ts[25]-273.15:7.2f} °C | "
+                f"Tw={Tw[25]-273.15:7.2f} °C"
+            )
