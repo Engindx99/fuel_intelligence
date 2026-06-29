@@ -44,24 +44,20 @@ class Burning:
         # ================= FUEL =================
         self.LHV_petcoke = 32e6
         self.LHV_lignite = 18e6
-        self.LHV_alt = 25e6
+        self.LHV_RDF = 25e6
 
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
 
-        self.eps = 1e-12
-
-        # ================= FEED =================
-        self.feed = 40000.0
-        self.feed_target = 40000.0
-        self.feed_tau = 7200.0
+        #  CRITICAL STABILITY PARAMETER
+        self.eps = 1e-9  # 1e-12 çok küçük → blow-up yapar
 
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
+    def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
 
         Tg_n = Tg.copy()
         Ts_n = Ts.copy()
@@ -77,13 +73,9 @@ class Burning:
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
 
-        # ================= FEED =================
-        self.feed_target = inputs.get("Feed_rate", self.feed_target)
-        self.feed += (self.feed_target - self.feed) * dt / self.feed_tau
-
-        # ================= FUEL =================
+        # ================= FUEL MIX =================
         p = inputs.get("Petcoke", 0.6)
-        a = inputs.get("Alternative_Fuel", 0.2)
+        a = inputs.get("RDF_Fuel", 0.2)
         l = max(1.0 - p - a, 0.0)
 
         norm = p + a + l + self.eps
@@ -94,91 +86,87 @@ class Burning:
 
         eta = self.combustion_efficiency(O2)
 
-        LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_alt
+        LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_RDF
 
+        # ================= ENERGY SOURCE =================
         Q_in = fuel_rate * LHV_mix * eta
 
-        # ================= VOLUMETRIC HEAT SOURCE =================
-        q_vol = Q_in / self.V_total
+        #  IMPORTANT NORMALIZATION
+        q_vol = Q_in / (self.V_total + self.eps)
+
+        # ================= CALCINATION SINK =================
+        # IMPORTANT: clamp negative energy removal
+        q_sink = max(calcination_sink, 0.0)
+
+        q_vol -= q_sink / (self.V_total + self.eps)
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ================= CAPACITY (gas) =================
+        # ================= CAPACITY =================
         m_g = self.rho_g * self.V_cell
         C_g = m_g * self.Cp_g
 
-        # ================= DISPERSION (np.roll REMOVED) =================
-        Pe = 5.0
-        D_axial = self.u_g * self.dz / Pe
-
-        d2Tg_dz2 = np.zeros_like(Tg)
-
-        d2Tg_dz2[1:-1] = (Tg[2:] - 2 * Tg[1:-1] + Tg[:-2]) / (self.dz**2)
-
-        # Neumann BC (zero gradient extension)
-        d2Tg_dz2[0] = d2Tg_dz2[1]
-        d2Tg_dz2[-1] = d2Tg_dz2[-2]
-
-        q_disp = (self.rho_g * self.Cp_g) * D_axial * d2Tg_dz2
-
-        # ================= RADIATION =================
-        sigma = 5.67e-8
-        eps_rad = 0.45
-        F_rad = 0.06
-
-        T_ref = 1500.0 + 273.15
-
-        A_gw = self.a_gw * self.dz
-
-        q_rad_vol = (
-            F_rad * eps_rad * 4.0 * sigma * (T_ref**3) * (Tg - Tw) * A_gw / self.V_cell
-        )
+        # ================= NUMERICAL SAFETY =================
+        C_g = max(C_g, self.eps)
 
         # ================= GAS UPDATE =================
-        Tg_n = Tg + dt * (
-            -self.u_g * dTg_dz
-            + (q_vol - q_gs - q_gw) / (C_g + self.eps)
-            - q_rad_vol / (C_g + self.eps)
-            + q_disp / (C_g + self.eps)
+        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
+
+        # ================= SOLID UPDATE =================
+        Ts_n = Ts + dt * (
+            -self.u_s * dTs_dz + (q_gs - q_ws) / (self.rho_s * self.Cp_s + self.eps)
         )
 
-        # ================= SOLID =================
-        alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
-        tau_flow = self.dz / (self.u_s + self.eps)
-
-        delta_T = np.sqrt(alpha_s * tau_flow + self.eps)
-
-        V_active = self.a_gs * delta_T
-
-        V_cell_eff = self.V_cell / (1.0 + (self.V_cell / (V_active + self.eps)))
-
-        phi_coupling = 1e-1
-
-        C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
-
-        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / (C_s + self.eps))
-
         # ================= WALL =================
-        h_ext = 18.0
-        T_amb = 300.0
+        Tw_n = Tw + dt * (q_gw + q_ws)
 
-        A_wall_cell = np.pi * self.D * self.dz
-
-        q_in_wall = q_gw + q_ws
-
-        m_w = self.rho_wall * self.V_cell
-        C_w = m_w * self.Cp_wall
-
-        tau_w = C_w / (h_ext * A_wall_cell + self.eps)
-
-        Tw_eq = T_amb + q_in_wall * self.V_cell / (h_ext * A_wall_cell + self.eps)
-
-        Tw_n = Tw + (dt / (tau_w + self.eps)) * (Tw_eq - Tw)
+        # ================= CLAMP (CRITICAL) =================
+        Tg_n = np.clip(Tg_n, 200.0, 2500.0)
+        Ts_n = np.clip(Ts_n, 200.0, 2500.0)
+        Tw_n = np.clip(Tw_n, 200.0, 2000.0)
 
         return Tg_n, Ts_n, Tw_n
+
+    # ======================================================
+    def apply(self, state, inputs, dt):
+
+        Tg, Ts, Tw = self.thermal_step(
+            state.Tg_burning,
+            state.Ts_burning,
+            state.Tw_burning,
+            inputs,
+            dt,
+            calcination_sink=getattr(state, "Calcination_Q_sink", 0.0),
+        )
+
+        state.Tg_burning = Tg
+        state.Ts_burning = Ts
+        state.Tw_burning = Tw
+
+        return state
+
+    # ======================================================
+    # TWIN COMPATIBILITY WRAPPER (CRITICAL)
+    # ======================================================
+    def apply(self, state, inputs, dt):
+
+        Tg, Ts, Tw = self.thermal_step(
+            state.Tg_burning,
+            state.Ts_burning,
+            state.Tw_burning,
+            inputs,
+            dt,
+            calcination_sink=getattr(state, "Calcination_Q_sink", 0.0),
+        )
+
+        state.Tg_burning = Tg
+        state.Ts_burning = Ts
+        state.Tw_burning = Tw
+
+        return state
 
 
 if __name__ == "__main__":
@@ -192,13 +180,13 @@ if __name__ == "__main__":
     inputs = {
         "Fuel_rate": 5.0,
         "Petcoke": 0.6,
-        "Alternative_Fuel": 0.2,
+        "RDF_Fuel": 0.2,
         "O2": 3.5,
     }
 
     # ================= SI TIME =================
     dt = 0.1  #  second
-    t_end = 0.5 * 3600  # 0.5 hours
+    t_end = 1.0 * 3600  # second
 
     n_steps = int(t_end / dt)
 
