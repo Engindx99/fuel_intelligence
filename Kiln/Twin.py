@@ -30,56 +30,62 @@ class Twin:
             "Feed_rate": self.state.Feed_rate,
             "Fuel_rate": self.state.Fuel_rate,
             "Kiln_speed": self.state.Kiln_speed,
-            "RDF_Fuel": self.state.Fuel_rate,  # net isimlendirme
+            "RDF_Fuel": 0.2,  # FIXED (NOT duplicated fuel_rate)
         }
 
         self._initialize_mass_energy_balance()
-        self.outputs = {}
 
     # ======================================================
     def step(self, inputs: dict = None):
 
-        # ================= INPUT UPDATE =================
         if inputs is not None:
             self.inputs.update(inputs)
 
         dt = self.state.dt
 
         # ======================================================
-        # 1. BURNING (SOURCE SYSTEM)
+        # 1. BURNING (SOURCE)
         # ======================================================
         self.state = self.burning.apply(self.state, self.inputs, dt)
 
-        # ======================================================
-        # 2. EXTRACT BURNING OUTLET (COUPLING SOURCE)
-        # ======================================================
         Tg_b_out = self.state.Tg_burning[-1]
         Ts_b_out = self.state.Ts_burning[-1]
+        Tw_b_out = self.state.Tw_burning[-1]
 
         # ======================================================
-        # 3. CALCINATION (SINK SYSTEM)
+        # 2. CALCINATION INPUT (SMOOTHED COUPLING)
         # ======================================================
+        alpha = 0.7
+
+        if not hasattr(self.state, "Tg_in"):
+            self.state.Tg_in = Tg_b_out
+            self.state.Ts_in = Ts_b_out
+            self.state.Tw_in = Tw_b_out
+
+        self.state.Tg_in = alpha * Tg_b_out + (1 - alpha) * self.state.Tg_in
+        self.state.Ts_in = alpha * Ts_b_out + (1 - alpha) * self.state.Ts_in
+        self.state.Tw_in = alpha * Tw_b_out + (1 - alpha) * self.state.Tw_in
+
         calc_inputs = self.inputs.copy()
-        calc_inputs["Tg_in"] = Tg_b_out
-        calc_inputs["Ts_in"] = Ts_b_out
+        calc_inputs["Tg_in"] = self.state.Tg_in
+        calc_inputs["Ts_in"] = self.state.Ts_in
+        calc_inputs["Tw_in"] = self.state.Tw_in
 
+        # ======================================================
+        # 3. CALCINATION (SINK)
+        # ======================================================
         self.state = self.calcination.apply(self.state, calc_inputs, dt)
 
-        # ======================================================
-        # 4. ENERGY SINK (FROM CALCINATION)
-        # ======================================================
-        # Q_sink = getattr(self.state, "Calcination_Q_sink", 0.0)
-        Q_sink = 0.0
-
-        #  IMPORTANT:
-        # Burning’e tekrar apply YOK.
-        # Enerji etkisi state içinde already accounted olmalı
-        # (calcination heat removal already reduces Tg/Ts)
+        Q_sink = getattr(self.state, "Calcination_Q_sink", 0.0)
 
         # ======================================================
-        # 5. PREHEATER + COOLER
+        # 4. PREHEATER
         # ======================================================
         self.state = self.preheater.apply(self.state, self.inputs, dt)
+
+        # ======================================================
+        # 5. COOLER
+        # ======================================================
         self.state = self.cooler.apply(self.state, self.inputs, dt)
 
         # ======================================================
@@ -89,16 +95,19 @@ class Twin:
         self.state.t = self.current_time
 
         # ======================================================
-        # 7. OUTPUT
+        # 7. MASS + ENERGY BALANCE UPDATE
+        # ======================================================
+        self.state.Total_enthalpy -= Q_sink * dt  # REAL FEEDBACK
+
+        # ======================================================
+        # 8. OUTPUT
         # ======================================================
         self.outputs = {
             "t": self.current_time,
-            "Feed_rate": self.state.Feed_rate,
-            "Fuel_rate": self.state.Fuel_rate,
-            "RDF_Fuel": self.inputs.get("RDF_Fuel", 0.0),
+            "Tg_b_out": Tg_b_out,
+            "Ts_b_out": Ts_b_out,
             "Q_sink_calcination": Q_sink,
-            "Total_mass": self.state.Total_mass,
-            "Total_enthalpy": self.state.Total_enthalpy,
+            "Tg_in_calcination": self.state.Tg_in,
         }
 
         return self.state
@@ -117,17 +126,3 @@ class Twin:
         self.state.Total_enthalpy = self.state.Fuel_energy
         self.state.Mass_balance_error = 0.0
         self.state.Energy_balance_error = 0.0
-
-
-twin = Twin()
-twin.initialize()
-
-for i in range(1000):
-    twin.step()
-
-    if i % 50 == 0:
-        print(
-            twin.state.t,
-            twin.state.Tg_burning[-1],
-            getattr(twin.state, "Calcination_Q_sink", 0.0),
-        )

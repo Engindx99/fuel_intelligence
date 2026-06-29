@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
 
 class Calcination:
@@ -40,32 +39,41 @@ class Calcination:
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
-        # ================= FUEL =================
-        self.LHV_petcoke = 32e6
-        self.LHV_lignite = 18e6
-        self.LHV_RDF = 25e6
+        # ================= SAFETY =================
+        self.eps = 1e-9
+        self.T_MIN = 200.0
+        self.T_MAX = 2500.0
 
-        self.eps = 1e-12
+        # inlet smoothing (CRITICAL FOR STABILITY)
+        self.alpha_in = 0.7
+        self.Tg_in_mem = None
+        self.Ts_in_mem = None
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, inputs, dt, burning_state=None):
+    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
 
         Tg_n = Tg.copy()
         Ts_n = Ts.copy()
         Tw_n = Tw.copy()
 
         # ======================================================
-        # BURNING COUPLING
+        # INLET (SELF-SUSTAINED STABILITY)
         # ======================================================
-        if burning_state is not None:
-            Tg_in = burning_state["Tg"][-1]
-            Ts_in = burning_state["Ts"][-1]
-        else:
-            Tg_in = Tg[0]
-            Ts_in = Ts[0]
+        Tg_out = Tg[-1]
+        Ts_out = Ts[-1]
+
+        if self.Tg_in_mem is None:
+            self.Tg_in_mem = Tg_out
+            self.Ts_in_mem = Ts_out
+
+        Tg_in = self.alpha_in * Tg_out + (1 - self.alpha_in) * self.Tg_in_mem
+        Ts_in = self.alpha_in * Ts_out + (1 - self.alpha_in) * self.Ts_in_mem
+
+        self.Tg_in_mem = Tg_in
+        self.Ts_in_mem = Ts_in
 
         # ======================================================
-        # TEMPERATURE GRADIENTS
+        # GRADIENTS
         # ======================================================
         dTg_dz = np.zeros_like(Tg)
         dTs_dz = np.zeros_like(Ts)
@@ -76,150 +84,85 @@ class Calcination:
         dTg_dz[0] = (Tg[0] - Tg_in) / self.dz
         dTs_dz[0] = (Ts[0] - Ts_in) / self.dz
 
-        # ======================================================
-        # HEAT TRANSFER
-        # ======================================================
-        q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
-
-        q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
-
-        q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
+        dTg_dz = np.clip(dTg_dz, -150, 150)
+        dTs_dz = np.clip(dTs_dz, -150, 150)
 
         # ======================================================
-        # GAS CAPACITY
+        # HEAT TRANSFER (SMOOTHED)
         # ======================================================
-        m_g = self.rho_g * self.V_cell
-        C_g = m_g * self.Cp_g
+        dT_gs = np.clip(Tg - Ts, -600, 600)
+        dT_gw = np.clip(Tg - Tw, -600, 600)
+        dT_ws = np.clip(Ts - Tw, -600, 600)
+
+        q_gs = 0.25 * self.hv_gs * self.a_gs * dT_gs
+        q_gw = 0.25 * self.hv_gw * self.a_gw * dT_gw
+        q_ws = 0.25 * self.hv_ws * self.a_ws * dT_ws
+
+        # ======================================================
+        # CAPACITIES
+        # ======================================================
+        C_g = max(self.rho_g * self.V_cell * self.Cp_g, self.eps)
+        C_s = max(self.rho_s * self.V_cell * self.Cp_s, self.eps)
+        C_w = max(self.rho_wall * self.V_cell * self.Cp_wall, self.eps)
 
         # ======================================================
         # GAS
         # ======================================================
-        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_gs - q_gw) / (C_g + self.eps))
+        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_gs - q_gw) / C_g)
 
         # ======================================================
-        # SOLID
+        # SOLID (LOWER RESPONSE SPEED = REALISTIC)
         # ======================================================
-        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws))
+        solid_gain = 0.35
+        Ts_n = Ts + dt * (-self.u_s * dTs_dz + solid_gain * (q_gs - q_ws) / C_s)
 
         # ======================================================
         # WALL
         # ======================================================
-        Tw_n = Tw + dt * (q_gw + q_ws)
+        Tw_n = Tw + dt * ((q_gw + q_ws) / C_w)
 
         # ======================================================
-        # ENERGY REMOVED FROM BURNING ZONE
+        # CLAMP
         # ======================================================
-        calcination_sink = np.mean(q_gs + q_gw) * self.V_cell
+        Tg_n = np.clip(Tg_n, self.T_MIN, self.T_MAX)
+        Ts_n = np.clip(Ts_n, self.T_MIN, self.T_MAX)
+        Tw_n = np.clip(Tw_n, self.T_MIN, 2000.0)
+
+        # ======================================================
+        # FEEDBACK ENERGY
+        # ======================================================
+        calcination_sink = np.mean(q_gs + q_gw)
 
         return Tg_n, Ts_n, Tw_n, calcination_sink
 
-    # ======================================================
-    # TWIN INTERFACE
-    # ======================================================
-    def apply(self, state, inputs, dt):
-
-        burning_state = {
-            "Tg": state.Tg_burning,
-            "Ts": state.Ts_burning,
-        }
-
-        Tg, Ts, Tw, Q_sink = self.thermal_step(
-            state.Tg_calcination,
-            state.Ts_calcination,
-            state.Tw_calcination,
-            inputs,
-            dt,
-            burning_state=burning_state,
-        )
-
-        state.Tg_calcination = Tg
-        state.Ts_calcination = Ts
-        state.Tw_calcination = Tw
-
-        # Burning zone tarafından bir sonraki adımda kullanılacak
-        state.Calcination_Q_sink = Q_sink
-
-        return state
-
 
 # ======================================================
-#  SIMULATION LOOP
+# 🔥 STANDALONE DEBUG RUNNER
 # ======================================================
-
-from Kiln.Burning import Burning
 
 if __name__ == "__main__":
 
-    # ================= MODELS =================
-    burning_model = Burning(N=80, L=60.0)
-    calcination_model = Calcination(N=80, L=60.0)
+    model = Calcination(N=80, L=60.0)
 
-    # ================= INPUTS =================
-    inputs = {
-        "Fuel_rate": 5.0,
-        "Petcoke": 0.6,
-        "RDF_Fuel": 0.2,
-        "O2": 3.5,
-        "Feed_rate": 40000.0,
-    }
+    # ================= INITIAL CONDITIONS =================
+    Tg = np.ones(model.N) * (900 + 273.15)
+    Ts = np.ones(model.N) * (850 + 273.15)
+    Tw = np.ones(model.N) * (700 + 273.15)
+
+    inputs = {}
 
     dt = 0.1
-    t_end = 3600.0  # second
+    t_end = 3600
     n_steps = int(t_end / dt)
-
-    # ======================================================
-    #  INITIAL RUN OF BURNING (to generate first inlet)
-    # ======================================================
-    Tg_b = np.ones(burning_model.N) * (1500.0 + 273.15)
-    Ts_b = np.ones(burning_model.N) * (1100.0 + 273.15)
-    Tw_b = np.ones(burning_model.N) * (600.0 + 273.15)
-
-    Tg_c = None
-    Ts_c = None
-    Tw_c = None
-
-    t = 0.0
 
     for i in range(n_steps):
 
-        # ======================================================
-        #  BURNING STEP
-        # ======================================================
-        Tg_b, Ts_b, Tw_b = burning_model.thermal_step(Tg_b, Ts_b, Tw_b, inputs, dt)
+        Tg, Ts, Tw, Qsink = model.thermal_step(Tg, Ts, Tw, inputs, dt)
 
-        # ======================================================
-        #  COUPLING (REAL OUTLET → INLET)
-        # ======================================================
-        Tg_in = Tg_b[-1]
-        Ts_in = Ts_b[-1]
-        Tw_in = Tw_b[-1]
-
-        inputs["Tg_in"] = Tg_in
-        inputs["Ts_in"] = Ts_in
-
-        # ======================================================
-        # ❄️ CALCINATION INITIALIZATION (ONLY ON FIRST STEP)
-        # ======================================================
-        if Tg_c is None:
-
-            Tg_c = np.ones(calcination_model.N) * Tg_in
-            Ts_c = np.ones(calcination_model.N) * Ts_in
-            Tw_c = np.ones(calcination_model.N) * Tw_in
-
-        # ======================================================
-        # ❄️ CALCINATION STEP (OWN DYNAMICS)
-        # ======================================================
-        Tg_c, Ts_c, Tw_c = calcination_model.thermal_step(Tg_c, Ts_c, Tw_c, inputs, dt)
-
-        t += dt
-
-        # ======================================================
-        # PRINT
-        # ======================================================
-        if i % 5000 == 0:
+        if i % 2000 == 0:
             print(
                 f"step={i:06d} | "
-                f"time={t/3600:.3f} h | "
-                f"Tg_b_out={Tg_b[-1]-273.15:7.2f} °C | "
-                f"Tg_c_mid={Tg_c[calcination_model.N//2]-273.15:7.2f} °C"
+                f"Tg_out={Tg[-1]-273.15:7.2f} °C | "
+                f"Ts_mid={Ts[len(Ts)//2]-273.15:7.2f} °C | "
+                f"Qsink={Qsink:10.2f}"
             )
