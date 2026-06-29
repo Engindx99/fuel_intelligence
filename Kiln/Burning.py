@@ -1,7 +1,9 @@
+# ================================= TEMPERATURE =================================
+
 import numpy as np
 
 
-class KilnPDE:
+class Burning:
 
     def __init__(self, N=80, L=60.0):
 
@@ -59,7 +61,7 @@ class KilnPDE:
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
 
     # ======================================================
-    def step(self, Tg, Ts, Tw, inputs, dt):
+    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
 
         Tg_n = Tg.copy()
         Ts_n = Ts.copy()
@@ -99,39 +101,33 @@ class KilnPDE:
         # ================= VOLUMETRIC HEAT SOURCE =================
         q_vol = Q_in / self.V_total
 
-        # ======================================================
-        # HEAT TRANSFER → VOLUMETRIC FORM (CRITICAL FIX)
-        # ======================================================
-
+        # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ==========================================================
-        # CAPACITY (gas)
-        # ==========================================================
+        # ================= CAPACITY (gas) =================
         m_g = self.rho_g * self.V_cell
         C_g = m_g * self.Cp_g
 
-        # ==========================================================
-        # DISPERSION (PHYSICAL + STABLE)
-        # ==========================================================
-        Pe = 5.0  # tuned kiln regime
+        # ================= DISPERSION (np.roll REMOVED) =================
+        Pe = 5.0
         D_axial = self.u_g * self.dz / Pe
 
-        q_disp = (
-            (self.rho_g * self.Cp_g)
-            * D_axial
-            * (np.roll(Tg, -1) - 2 * Tg + np.roll(Tg, 1))
-            / (self.dz**2)
-        )
+        d2Tg_dz2 = np.zeros_like(Tg)
 
-        # ==========================================================
-        # RADIATION (STABLE LINEARIZED MODEL)
-        # ==========================================================
+        d2Tg_dz2[1:-1] = (Tg[2:] - 2 * Tg[1:-1] + Tg[:-2]) / (self.dz**2)
+
+        # Neumann BC (zero gradient extension)
+        d2Tg_dz2[0] = d2Tg_dz2[1]
+        d2Tg_dz2[-1] = d2Tg_dz2[-2]
+
+        q_disp = (self.rho_g * self.Cp_g) * D_axial * d2Tg_dz2
+
+        # ================= RADIATION =================
         sigma = 5.67e-8
         eps_rad = 0.45
-        F_rad = 0.06  # kiln view factor (CRITICAL)
+        F_rad = 0.06
 
         T_ref = 1500.0 + 273.15
 
@@ -141,9 +137,7 @@ class KilnPDE:
             F_rad * eps_rad * 4.0 * sigma * (T_ref**3) * (Tg - Tw) * A_gw / self.V_cell
         )
 
-        # ==========================================================
-        # GAS ENERGY EQUATION
-        # ==========================================================
+        # ================= GAS UPDATE =================
         Tg_n = Tg + dt * (
             -self.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / (C_g + self.eps)
@@ -152,7 +146,6 @@ class KilnPDE:
         )
 
         # ================= SOLID =================
-
         alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
         tau_flow = self.dz / (self.u_s + self.eps)
 
@@ -160,7 +153,6 @@ class KilnPDE:
 
         V_active = self.a_gs * delta_T
 
-        # SOFT NORMALIZATION (min yerine)
         V_cell_eff = self.V_cell / (1.0 + (self.V_cell / (V_active + self.eps)))
 
         phi_coupling = 1e-1
@@ -191,22 +183,22 @@ class KilnPDE:
 
 if __name__ == "__main__":
 
-    model = KilnPDE(N=50)
+    model = Burning(N=50)
 
     Tg = np.ones(50) * (1500.0 + 273.15)
     Ts = np.ones(50) * (1400.0 + 273.15)
     Tw = np.ones(50) * (1200.0 + 273.15)
 
     inputs = {
-        "Fuel_rate": 5.8,
+        "Fuel_rate": 5.0,
         "Petcoke": 0.6,
         "Alternative_Fuel": 0.2,
         "O2": 3.5,
     }
 
     # ================= SI TIME =================
-    dt = 0.01  #  second
-    t_end = 3 * 3600  # 3 hours
+    dt = 0.1  #  second
+    t_end = 0.5 * 3600  # 0.5 hours
 
     n_steps = int(t_end / dt)
 
@@ -214,7 +206,7 @@ if __name__ == "__main__":
 
     for i in range(n_steps):
 
-        Tg, Ts, Tw = model.step(Tg, Ts, Tw, inputs, dt)
+        Tg, Ts, Tw = model.thermal_step(Tg, Ts, Tw, inputs, dt)
 
         t += dt
 
@@ -226,3 +218,6 @@ if __name__ == "__main__":
                 f"Ts={Ts[25]-273.15:7.2f} °C | "
                 f"Tw={Tw[25]-273.15:7.2f} °C"
             )
+
+
+# ================================= REACTIONS =================================

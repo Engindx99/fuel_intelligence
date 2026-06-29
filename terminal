@@ -1,5 +1,8 @@
 python -m Kiln.Burning
 
+python -m Kiln.Calcination
+
+
 python mpc.py
 
 
