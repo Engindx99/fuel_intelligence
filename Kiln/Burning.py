@@ -57,6 +57,9 @@ class Burning:
 
         self.eps = 1e-9
 
+        # ================= NUMERICAL SAFETY =================
+        self.alpha_mix = 0.5  # fuel smoothing (optional stability)
+
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
@@ -78,7 +81,7 @@ class Burning:
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
 
-        # ================= FUEL =================
+        # ================= FUEL MIX =================
         p = inputs.get("Petcoke", 0.6)
         a = inputs.get("RDF_Fuel", 0.2)
         l = max(1.0 - p - a, 0.0)
@@ -97,36 +100,33 @@ class Burning:
         Q_in = fuel_rate * LHV_mix * eta
         q_vol = Q_in / (self.V_total + self.eps)
 
-        # ================= CALCINATION SINK =================
-        q_sink = max(calcination_sink, 0.0)
+        # ================= CALCINATION COUPLING =================
+        sink_density = calcination_sink / (self.V_total + self.eps)
         coupling_gain = 0.05
-        q_vol -= coupling_gain * q_sink / (self.V_total + self.eps)
+        q_vol = q_vol - coupling_gain * sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ======================================================
-        #  SOLID EFFECTIVE CAPACITY (YOUR FIX INTEGRATED)
-        # ======================================================
-
+        # ================= SOLID EFFECTIVE CAPACITY =================
         alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
-        tau_flow = self.dz / max(self.u_s, 1e-9)
+        tau_flow = self.dz / max(self.u_s, self.eps)
 
         delta_T = np.sqrt(max(alpha_s * tau_flow, 0.0))
         V_active = self.a_gs * delta_T
 
         V_cell_eff = min(self.V_cell, V_active)
 
-        phi_coupling = 1e-1  # coupling fraction (controls inertia)
+        phi_coupling = 1e-1
         C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
         C_s = max(C_s, self.eps)
 
         # ================= GAS CAPACITY =================
         C_g = max(self.rho_g * self.V_cell * self.Cp_g, self.eps)
 
-        # ================= WALL =================
+        # ================= WALL CAPACITY =================
         m_w = self.rho_wall * self.V_wall
         C_w = max(m_w * self.Cp_wall, self.eps)
 
@@ -137,16 +137,11 @@ class Burning:
         # ================= GAS =================
         Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
 
-        # ================= SOLID (FIXED DYNAMICS) =================
+        # ================= SOLID =================
         Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / C_s)
 
         # ================= WALL =================
-        Tw_n = Tw + dt * (q_gw + q_ws - q_loss) / C_w
-
-        # ================= SAFETY =================
-        Tg_n = np.clip(Tg_n, 200.0, 2500.0)
-        Ts_n = np.clip(Ts_n, 200.0, 2500.0)
-        Tw_n = np.clip(Tw_n, 200.0, 2000.0)
+        Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
         return Tg_n, Ts_n, Tw_n
 
