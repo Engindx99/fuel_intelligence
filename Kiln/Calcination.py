@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from Kiln.Burning import Burning
 
 
@@ -45,12 +44,15 @@ class Calcination:
         self.eps = 1e-9
 
         # ================= INPUT HEAT COUPLING =================
-        self.k_fuel = 2.5e6  # effective scaling (tunable)
+        self.k_fuel = 2.5e6
 
         # ================= INLET MEMORY =================
         self.alpha_in = 0.7
         self.Tg_in_mem = None
         self.Ts_in_mem = None
+
+        # ================= OUTPUT MEMORY (FIX) =================
+        self.Calcination_Q_sink = 0.0
 
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, inputs, dt, burning_state=None):
@@ -69,7 +71,6 @@ class Calcination:
             Tg_in_raw = Tg[0]
             Ts_in_raw = Ts[0]
 
-        # smoothing inlet (stability)
         if self.Tg_in_mem is None:
             self.Tg_in_mem = Tg_in_raw
             self.Ts_in_mem = Ts_in_raw
@@ -92,18 +93,16 @@ class Calcination:
         dTg_dz[0] = (Tg[0] - Tg_in) / self.dz
         dTs_dz[0] = (Ts[0] - Ts_in) / self.dz
 
-        # soft limiter
         dTg_dz = np.tanh(dTg_dz / 120.0) * 120.0
         dTs_dz = np.tanh(dTs_dz / 120.0) * 120.0
 
         # ======================================================
-        # HEAT TRANSFER (PHYSICAL SIGN FIXED)
+        # HEAT TRANSFER
         # ======================================================
         dT_gs = Tg - Ts
         dT_gw = Tg - Tw
         dT_ws = Ts - Tw
 
-        # nonlinear damping
         dT_gs = dT_gs / (1.0 + np.abs(dT_gs) / 500.0)
         dT_gw = dT_gw / (1.0 + np.abs(dT_gw) / 500.0)
         dT_ws = dT_ws / (1.0 + np.abs(dT_ws) / 500.0)
@@ -120,7 +119,7 @@ class Calcination:
         C_w = self.rho_wall * self.V_cell * self.Cp_wall + self.eps
 
         # ======================================================
-        # INPUT HEAT SOURCE (THIS WAS MISSING BEFORE)
+        # INPUT HEAT
         # ======================================================
         fuel_power = (
             inputs.get("Fuel_rate", 0.0)
@@ -131,7 +130,7 @@ class Calcination:
         Q_in = fuel_power / self.N
 
         # ======================================================
-        # GAS (loses + gains physically)
+        # GAS
         # ======================================================
         Tg_n = Tg + dt * (-self.u_g * dTg_dz - (q_gs + q_gw) / C_g + Q_in / C_g)
 
@@ -146,16 +145,14 @@ class Calcination:
         Tw_n = Tw + dt * ((q_gw + q_ws) / C_w)
 
         # ======================================================
-        # SINK (physically consistent energy loss)
+        # SINK (FIXED)
         # ======================================================
-        # energy removed per unit volume [W/m3]
         q_vol_sink = q_gs + q_gw
-
-        # total power removed from gas phase
         calcination_sink = np.sum(q_vol_sink) * self.V_cell
-
-        # stability constraint
         calcination_sink = max(calcination_sink, 0.0)
+
+        # STORE OUTPUT (IMPORTANT FIX)
+        self.Calcination_Q_sink = calcination_sink
 
         return Tg_n, Ts_n, Tw_n, calcination_sink
 
@@ -179,6 +176,8 @@ class Calcination:
         state.Tg_calcination = Tg
         state.Ts_calcination = Ts
         state.Tw_calcination = Tw
+
+        # FIX: attribute artık var
         state.Calcination_Q_sink = Q_sink
 
         return state
@@ -215,6 +214,8 @@ if __name__ == "__main__":
 
     t = 0.0
 
+    Q_sink = 0.0
+
     for i in range(n_steps):
 
         Tg_b, Ts_b, Tw_b = burning_model.thermal_step(Tg_b, Ts_b, Tw_b, inputs, dt)
@@ -230,9 +231,16 @@ if __name__ == "__main__":
             Ts_c = np.ones(calcination_model.N) * Ts_in
             Tw_c = np.ones(calcination_model.N) * Ts_in
 
-        Tg_c, Ts_c, Tw_c = calcination_model.thermal_step(
-            Tg_c, Ts_c, Tw_c, inputs, dt, burning_state={"Tg": Tg_b, "Ts": Ts_b}
+        Tg_c, Ts_c, Tw_c, Q_sink = calcination_model.thermal_step(
+            Tg_c,
+            Ts_c,
+            Tw_c,
+            inputs,
+            dt,
+            burning_state={"Tg": Tg_b, "Ts": Ts_b},
         )
+
+        Q_sink = calcination_model.Calcination_Q_sink
 
         t += dt
 
