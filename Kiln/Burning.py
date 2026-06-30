@@ -1,5 +1,4 @@
 # ================================= TEMPERATURE =================================
-
 import numpy as np
 
 
@@ -47,25 +46,10 @@ class Burning:
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
-        # ================= FUEL =================
-        self.LHV_petcoke = 32e6
-        self.LHV_lignite = 18e6
-        self.LHV_RDF = 25e6
-
-        self.O2_opt = 3.5
-        self.O2_sigma2 = 25.0
-
         self.eps = 1e-9
 
-        # ================= NUMERICAL SAFETY =================
-        self.alpha_mix = 0.5  # fuel smoothing (optional stability)
-
     # ======================================================
-    def combustion_efficiency(self, O2):
-        return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
-
-    # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
 
         Tg_n = Tg.copy()
         Ts_n = Ts.copy()
@@ -81,29 +65,11 @@ class Burning:
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
 
-        # ================= FUEL MIX =================
-        p = inputs.get("Petcoke", 0.6)
-        a = inputs.get("RDF_Fuel", 0.2)
-        l = max(1.0 - p - a, 0.0)
-
-        norm = p + a + l + self.eps
-        p, a, l = p / norm, a / norm, l / norm
-
-        fuel_rate = inputs.get("Fuel_rate", 1.0)
-        O2 = inputs.get("O2", 3.5)
-
-        eta = self.combustion_efficiency(O2)
-
-        LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_RDF
-
-        # ================= HEAT SOURCE =================
-        Q_in = fuel_rate * LHV_mix * eta
-        q_vol = Q_in / (self.V_total + self.eps)
-
-        # ================= CALCINATION COUPLING =================
-        sink_density = calcination_sink / (self.V_total + self.eps)
-        coupling_gain = 0.05
-        q_vol = q_vol - coupling_gain * sink_density
+        # ======================================================
+        #  RESOURCE ENERGY INPUT (FROM TWIN ONLY)
+        # ======================================================
+        Q_burning = inputs.get("Q_burning", 0.0)
+        q_vol = Q_burning / 1.0
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
@@ -119,7 +85,7 @@ class Burning:
 
         V_cell_eff = min(self.V_cell, V_active)
 
-        phi_coupling = 1e-1
+        phi_coupling = 0.1
         C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
         C_s = max(C_s, self.eps)
 
@@ -146,7 +112,13 @@ class Burning:
         return Tg_n, Ts_n, Tw_n
 
     # ======================================================
+    # APPLY TO STATE (BURNING ZONE)
+    # ======================================================
+
     def apply(self, state, inputs, dt):
+
+        if inputs is None:
+            inputs = {}
 
         Tg, Ts, Tw = self.thermal_step(
             state.Tg_burning,
@@ -154,7 +126,6 @@ class Burning:
             state.Tw_burning,
             inputs,
             dt,
-            calcination_sink=getattr(state, "Calcination_Q_sink", 0.0),
         )
 
         state.Tg_burning = Tg
