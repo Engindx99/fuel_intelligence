@@ -40,10 +40,10 @@ class GlobalState:
     # ENERGY
     # ======================================================
 
-    E_preheater = 0.0
-    E_calcination = 0.0
-    E_burning = 0.0
-    E_cooler = 0.0
+    E_preheater: float = 0.0
+    E_calcination: float = 0.0
+    E_burning: float = 0.0
+    E_cooler: float = 0.0
 
     # ======================================================
     # CHEMISTRY

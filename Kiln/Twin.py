@@ -101,8 +101,11 @@ class Twin:
         # ================= ZONE INPUTS =================
         preheater_inputs = {**self.inputs, "Q_in": Q_in}
         calc_inputs = {**self.inputs, "Q_in": Q_in}
-        burning_inputs = {**self.inputs, "Q_in": Q_in}
+        burning_inputs = {**self.inputs, "Q_burning": Q_in}
         cooler_inputs = {**self.inputs, "Q_in": Q_in}
+
+        print("[TYPE burning_inputs]", type(burning_inputs))
+        print("[VALUE burning_inputs]", burning_inputs)
 
         # ================= EXECUTION =================
         self.state = self.preheater.apply(self.state, preheater_inputs, dt)

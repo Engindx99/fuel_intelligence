@@ -1,6 +1,8 @@
 # ================================= TEMPERATURE =================================
 import numpy as np
 
+print("BURNING FILE:", __file__)
+
 
 class Burning:
 
@@ -24,7 +26,7 @@ class Burning:
 
         # ================= WALL =================
         self.A_wall = self.a_gw * self.L
-        self.h_ext = 12.0
+        self.h_ext = 3.0
         self.T_amb = 300.0
         self.V_wall = self.A_wall * 0.05
 
@@ -46,6 +48,10 @@ class Burning:
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
+        # ================= RADIATION =================
+        self.sigma_rad = 5.67e-8
+        self.epsilon_rad = 0.85
+
         self.eps = 1e-9
 
     # ======================================================
@@ -66,17 +72,28 @@ class Burning:
         dTs_dz[0] = dTs_dz[1]
 
         # ======================================================
-        #  RESOURCE ENERGY INPUT (FROM TWIN ONLY)
+        # ENERGY INPUT (ONLY SOURCE)
         # ======================================================
         Q_burning = inputs.get("Q_burning", 0.0)
-        q_vol = Q_burning / 1.0
 
-        # ================= HEAT TRANSFER =================
+        q_gas = 8.5e4
+
+        # ✔ physical injection ONLY to gas phase
+
+        # ======================================================
+        # HEAT TRANSFER
+        # ======================================================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ================= SOLID EFFECTIVE CAPACITY =================
+        # ================= RADIATION =================
+        q_rad = self.epsilon_rad * self.sigma_rad * (Tg**4 - Ts**4) / self.V_cell
+
+        # ======================================================
+        # EFFECTIVE SOLID CAPACITY
+        # ======================================================
+
         alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
         tau_flow = self.dz / max(self.u_s, self.eps)
 
@@ -100,21 +117,24 @@ class Burning:
             self.V_cell + self.eps
         )
 
-        # ================= GAS =================
-        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
+        # ======================================================
+        # GAS BALANCE
+        # ======================================================
+        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_gas - q_gs - q_gw - q_rad) / C_g)
 
-        # ================= SOLID =================
-        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / C_s)
+        # ======================================================
+        # SOLID BALANCE
+        # ======================================================
+        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs + q_rad - q_ws) / C_s)
 
-        # ================= WALL =================
+        # ======================================================
+        # WALL BALANCE
+        # ======================================================
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
         return Tg_n, Ts_n, Tw_n
 
     # ======================================================
-    # APPLY TO STATE (BURNING ZONE)
-    # ======================================================
-
     def apply(self, state, inputs, dt):
 
         if inputs is None:
