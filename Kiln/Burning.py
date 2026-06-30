@@ -1,7 +1,6 @@
 # ================================= TEMPERATURE =================================
-import numpy as np
 
-print("BURNING FILE:", __file__)
+import numpy as np
 
 
 class Burning:
@@ -26,7 +25,7 @@ class Burning:
 
         # ================= WALL =================
         self.A_wall = self.a_gw * self.L
-        self.h_ext = 3.0
+        self.h_ext = 12.0
         self.T_amb = 300.0
         self.V_wall = self.A_wall * 0.05
 
@@ -48,14 +47,25 @@ class Burning:
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
-        # ================= RADIATION =================
-        self.sigma_rad = 5.67e-8
-        self.epsilon_rad = 0.85
+        # ================= FUEL =================
+        self.LHV_petcoke = 32e6
+        self.LHV_lignite = 18e6
+        self.LHV_RDF = 25e6
+
+        self.O2_opt = 3.5
+        self.O2_sigma2 = 25.0
 
         self.eps = 1e-9
 
+        # ================= NUMERICAL SAFETY =================
+        self.alpha_mix = 0.5  # fuel smoothing (optional stability)
+
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
+    def combustion_efficiency(self, O2):
+        return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
+
+    # ======================================================
+    def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
 
         Tg_n = Tg.copy()
         Ts_n = Ts.copy()
@@ -71,29 +81,36 @@ class Burning:
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
 
-        # ======================================================
-        # ENERGY INPUT (ONLY SOURCE)
-        # ======================================================
-        Q_burning = inputs.get("Q_burning", 0.0)
+        # ================= FUEL MIX =================
+        p = inputs.get("Petcoke", 0.6)
+        a = inputs.get("RDF_Fuel", 0.2)
+        l = max(1.0 - p - a, 0.0)
 
-        q_gas = 8.5e4
+        norm = p + a + l + self.eps
+        p, a, l = p / norm, a / norm, l / norm
 
-        # ✔ physical injection ONLY to gas phase
+        fuel_rate = inputs.get("Fuel_rate", 1.0)
+        O2 = inputs.get("O2", 3.5)
 
-        # ======================================================
-        # HEAT TRANSFER
-        # ======================================================
+        eta = self.combustion_efficiency(O2)
+
+        LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_RDF
+
+        # ================= HEAT SOURCE =================
+        Q_in = fuel_rate * LHV_mix * eta
+        q_vol = Q_in / (self.V_total + self.eps)
+
+        # ================= CALCINATION COUPLING =================
+        sink_density = calcination_sink / (self.V_total + self.eps)
+        coupling_gain = 0.05
+        q_vol = q_vol - coupling_gain * sink_density
+
+        # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ================= RADIATION =================
-        q_rad = self.epsilon_rad * self.sigma_rad * (Tg**4 - Ts**4) / self.V_cell
-
-        # ======================================================
-        # EFFECTIVE SOLID CAPACITY
-        # ======================================================
-
+        # ================= SOLID EFFECTIVE CAPACITY =================
         alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
         tau_flow = self.dz / max(self.u_s, self.eps)
 
@@ -102,7 +119,7 @@ class Burning:
 
         V_cell_eff = min(self.V_cell, V_active)
 
-        phi_coupling = 0.1
+        phi_coupling = 1e-1
         C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
         C_s = max(C_s, self.eps)
 
@@ -117,19 +134,13 @@ class Burning:
             self.V_cell + self.eps
         )
 
-        # ======================================================
-        # GAS BALANCE
-        # ======================================================
-        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_gas - q_gs - q_gw - q_rad) / C_g)
+        # ================= GAS =================
+        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
 
-        # ======================================================
-        # SOLID BALANCE
-        # ======================================================
-        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs + q_rad - q_ws) / C_s)
+        # ================= SOLID =================
+        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / C_s)
 
-        # ======================================================
-        # WALL BALANCE
-        # ======================================================
+        # ================= WALL =================
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
         return Tg_n, Ts_n, Tw_n
@@ -137,15 +148,13 @@ class Burning:
     # ======================================================
     def apply(self, state, inputs, dt):
 
-        if inputs is None:
-            inputs = {}
-
         Tg, Ts, Tw = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
             state.Tw_burning,
             inputs,
             dt,
+            calcination_sink=getattr(state, "Calcination_Q_sink", 0.0),
         )
 
         state.Tg_burning = Tg
