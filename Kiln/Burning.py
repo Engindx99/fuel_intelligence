@@ -5,16 +5,6 @@ import os
 import numpy as np
 
 
-def save_checkpoint(path, state):
-    with open(path, "wb") as f:
-        pickle.dump(state, f)
-
-
-def load_checkpoint(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
 class Burning:
 
     def __init__(self, N=5, L=60.0):
@@ -63,7 +53,7 @@ class Burning:
         # ================= FUEL =================
         self.LHV_petcoke = 32e6
         self.LHV_lignite = 18e6
-        self.LHV_RDF = 25e6
+        self.LHV_RDF = 16e6
 
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
@@ -108,15 +98,29 @@ class Burning:
         a /= norm
         l /= norm
 
-        fuel_rate = inputs.get("Fuel_rate", 1.0)
+        # ======================================================
+        # FUEL
+        # ======================================================
+
+        fuel_rate = inputs.get("Fuel_rate", 1.0)  # ton/h
         O2 = inputs.get("O2", 3.5)
 
         eta = self.combustion_efficiency(O2)
 
         LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_RDF
 
-        # ================= HEAT SOURCE =================
-        Q_in = fuel_rate * LHV_mix * eta
+        # ======================================================
+        # FUEL CONVERSION
+        # Fuel_rate : ton/h  -->  kg/s
+        # ======================================================
+        fuel_rate_kg_s = fuel_rate * 1000.0 / 3600.0
+
+        # ======================================================
+        # HEAT SOURCE
+        # Q_in : W (= J/s)
+        # ======================================================
+        Q_in = fuel_rate_kg_s * LHV_mix * eta
+
         q_vol = Q_in / (self.V_total + self.eps)
 
         sink_density = calcination_sink / (self.V_total + self.eps)
@@ -186,12 +190,6 @@ class Burning:
 
 if __name__ == "__main__":
 
-    import numpy as np
-    import os
-    import json
-    import pickle
-    from Kiln.Burning import Burning
-
     # ======================================================
     # CHECKPOINT HELPERS
     # ======================================================
@@ -209,13 +207,13 @@ if __name__ == "__main__":
     model = Burning(N=5)
 
     inputs = {
-        "Fuel_rate": 5.5,
+        "Fuel_rate": 2.0,
         "Petcoke": 0.6,
         "RDF_Fuel": 0.2,
         "O2": 3.5,
     }
 
-    dt = 0.1
+    dt = 0.05
 
     # ======================================================
     # CHUNK CONFIG
@@ -266,7 +264,7 @@ if __name__ == "__main__":
 
                 log_entry = {
                     "chunk": chunk,
-                    "time_h": (chunk * chunk_time + t_local) / 3600.0,
+                    "time_h": f"{(chunk * chunk_time + t_local) / 3600.0:.4f}",
                     # ONLY OUTLET VALUES (1 SCALAR EACH)
                     "Tg": float(Tg[-1]),
                     "Ts": float(Ts[-1]),

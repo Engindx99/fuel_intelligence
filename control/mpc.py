@@ -166,7 +166,7 @@ class MasterMPC:
         self.opti.solver(
             "ipopt",
             {
-                "ipopt.max_iter": 80,  # 🔥 kritik: hız için düşürüldü
+                "ipopt.max_iter": 80,
                 "ipopt.tol": 1e-3,
                 "print_time": 0,
                 "ipopt.print_level": 0,
@@ -205,3 +205,127 @@ class MasterMPC:
         self._log(t, state, fuel)
 
         return {"Fuel_rate": fuel}
+
+
+if __name__ == "__main__":
+
+    import numpy as np
+    import os
+    import json
+    import pickle
+    from Kiln.Burning import Burning
+
+    # ======================================================
+    # CHECKPOINT HELPERS
+    # ======================================================
+    def save_ckpt(path, state):
+        with open(path, "wb") as f:
+            pickle.dump(state, f)
+
+    def load_ckpt(path):
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    # ======================================================
+    # MODELS
+    # ======================================================
+    plant_model = Burning(N=5)
+    mpc_controller = MasterMPC()
+
+    # ======================================================
+    # INITIAL INPUTS
+    # ======================================================
+    plant_inputs = {
+        "Petcoke": 0.6,
+        "RDF_Fuel": 0.2,
+        "O2": 3.5,
+        "Fuel_rate": 5.5,
+    }
+
+    dt = 0.05
+
+    # ======================================================
+    # TIME STRUCTURE
+    # ======================================================
+    chunk_hours = 1.0
+    chunk_time = chunk_hours * 3600
+    steps_per_chunk = int(chunk_time / dt)
+
+    total_hours = 6.0
+    n_chunks = int(total_hours / chunk_hours)
+
+    ckpt_path = "control/mpc_ckpt.pkl"
+    log_path = "control/mpc_status.jsonl"
+
+    # ======================================================
+    # INIT STATE
+    # ======================================================
+    if os.path.exists(ckpt_path):
+        st = load_ckpt(ckpt_path)
+        Tg, Ts, Tw = st["Tg"], st["Ts"], st["Tw"]
+        start_chunk = int(st["t"] // chunk_time)
+        print(f"[RESUME] chunk={start_chunk}")
+    else:
+        Tg = np.ones(5) * 1773.15
+        Ts = np.ones(5) * 1673.15
+        Tw = np.ones(5) * 873.15
+        start_chunk = 0
+
+    outlet = -1
+
+    # ======================================================
+    # MAIN LOOP
+    # ======================================================
+    for chunk in range(start_chunk, n_chunks):
+
+        t_local = 0.0
+        next_log = 0.0
+
+        for i in range(steps_per_chunk):
+
+            # ================= MPC =================
+            state_obj = type("S", (), {})()
+            state_obj.Tg_burning = Tg
+            state_obj.Ts_burning = Ts
+            state_obj.Tw_burning = Tw
+
+            ctrl = mpc_controller.compute_control(
+                state_obj, t=chunk * chunk_time + t_local
+            )
+
+            plant_inputs["Fuel_rate"] = ctrl["Fuel_rate"]
+
+            # ================= PLANT =================
+            Tg, Ts, Tw = plant_model.thermal_step(Tg, Ts, Tw, plant_inputs, dt)
+
+            t_local += dt
+
+            # ================= LOG (10 min) =================
+            if t_local >= next_log:
+
+                record = {
+                    "chunk": chunk,
+                    "time_h": f"{(chunk * chunk_time + t_local)/3600.0:.4f}",
+                    "Tg": float(Tg[outlet]),
+                    "Ts": float(Ts[outlet]),
+                    "Tw": float(Tw[outlet]),
+                    "Fuel": float(plant_inputs["Fuel_rate"]),
+                }
+
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(record) + "\n")
+
+                next_log += 600.0
+
+        # ================= CHECKPOINT =================
+        global_t = (chunk + 1) * chunk_time
+
+        save_ckpt(ckpt_path, {"Tg": Tg, "Ts": Ts, "Tw": Tw, "t": global_t})
+
+        print(
+            f"[CHUNK {chunk}] "
+            f"t={global_t/3600:.2f} h | "
+            f"Tg={Tg[outlet]:.2f} | "
+            f"Ts={Ts[outlet]:.2f} | "
+            f"Tw={Tw[outlet]:.2f}"
+        )
