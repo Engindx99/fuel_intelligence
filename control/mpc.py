@@ -11,8 +11,8 @@ class MasterMPC:
         self.Nc = 5
         self.dt = 0.05
 
-        self.Tg_ref = 1823.15  # K
-        self.Ts_ref = 1723.15  # K
+        self.Tg_ref = 1823.15  # K (setpoint)
+        self.Ts_ref = 1723.15  # K (setpoint)
 
         self.model = Burning(N=5)
 
@@ -38,23 +38,6 @@ class MasterMPC:
         tgt = np.linspace(0, 1, N_target)
 
         return np.interp(tgt, src, x)
-
-    # ======================================================
-    def _log(self, t, state, fuel):
-
-        if t - self.last_log_time < self.log_interval:
-            return
-
-        self.last_log_time = t
-
-        idx = len(state.Tg_burning) // 2
-
-        print(
-            f"[MPC] t={t/60:.2f} min | "
-            f"Fuel={fuel:.3f} | "
-            f"Tg={state.Tg_burning[idx]:.2f} K | "
-            f"Ts={state.Ts_burning[idx]:.2f} K"
-        )
 
     # ======================================================
     def _build(self):
@@ -154,8 +137,8 @@ class MasterMPC:
             Tg_mean = ca.sum1(self.Tg[:, k]) / N
             Ts_mean = ca.sum1(self.Ts[:, k]) / N
 
-            cost += 1e-3 * (Tg_mean - self.Tg_ref) ** 2
-            cost += 1e-3 * (Ts_mean - self.Ts_ref) ** 2
+            cost += 1e-2 * (Tg_mean - self.Tg_ref) ** 2
+            cost += 1e-2 * (Ts_mean - self.Ts_ref) ** 2
             cost += 1e-2 * Fuel_k**2
 
         self.opti.minimize(cost)

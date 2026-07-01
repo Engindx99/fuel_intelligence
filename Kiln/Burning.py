@@ -21,9 +21,16 @@ class Burning:
 
         # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
-        self.a_gs = 6.0 * (1.0 - self.epsilon_bed) / self.D
+
+        # fiziksel taban
+        a_gs_base = 6.0 * (1.0 - self.epsilon_bed) / self.D
+
+        # tuning factor (çok kritik: 1.0 fiziksel referans, >1 hızlandırır)
+        self.k_interfacial = 1.0
+
+        self.a_gs = self.k_interfacial * a_gs_base
         self.a_gw = 2.0 * np.pi * self.D
-        self.a_ws = self.a_gs * 0.6
+        self.a_ws = 0.6 * self.a_gs
 
         # ================= WALL =================
         self.A_wall = self.a_gw * self.L
@@ -33,7 +40,7 @@ class Burning:
         self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
-        self.rho_g = 48.1
+        self.rho_g = 6.3
         self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
@@ -43,17 +50,17 @@ class Burning:
 
         # ================= VELOCITIES =================
         self.u_g = 2.5
-        self.u_s = 0.02
+        self.u_s = 0.005
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 900.0
+        self.hv_gs = 1800.0
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
         # ================= FUEL =================
         self.LHV_petcoke = 32e6
         self.LHV_lignite = 18e6
-        self.LHV_RDF = 16e6
+        self.LHV_RDF = 20e6
 
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
@@ -144,7 +151,9 @@ class Burning:
             self.V_cell if V_active > self.V_cell else max(V_active, 0.01 * self.V_cell)
         )
 
-        C_s = 0.1 * self._rho_s_Cp_s * V_cell_eff
+        effectife = 0.001
+
+        C_s = effectife * self._rho_s_Cp_s * V_cell_eff
         if C_s < self.eps:
             C_s = self.eps
 
@@ -207,7 +216,7 @@ if __name__ == "__main__":
     model = Burning(N=5)
 
     inputs = {
-        "Fuel_rate": 2.0,
+        "Fuel_rate": 5.0,
         "Petcoke": 0.6,
         "RDF_Fuel": 0.2,
         "O2": 3.5,
