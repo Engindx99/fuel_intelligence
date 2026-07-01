@@ -27,8 +27,7 @@ class Burning:
         self.A_wall = self.a_gw * self.L
         self.h_ext = 12.0
 
-        # 🔥 KELVIN BASELINE (FIXED)
-        self.T_amb = 300.0
+        self.T_amb = 300.0  # K
 
         self.V_wall = self.A_wall * 0.05
 
@@ -67,7 +66,6 @@ class Burning:
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
 
-        # ⚡ direct reference (FASTER, NO COPY)
         Tg_n = Tg
         Ts_n = Ts
         Tw_n = Tw
@@ -117,7 +115,6 @@ class Burning:
         delta_T = np.sqrt(max(alpha_s * tau_flow, 0.0))
         V_active = self.a_gs * delta_T
 
-        # 🔥 safety clamp (NUMERICAL STABILITY)
         V_cell_eff = min(self.V_cell, max(V_active, 0.01 * self.V_cell))
 
         phi_coupling = 1e-1
@@ -170,9 +167,9 @@ if __name__ == "__main__":
 
     model = Burning(N=5)
 
-    Tg = np.ones(5) * (1450.0 + 273.15)
-    Ts = np.ones(5) * (1400.0 + 273.15)
-    Tw = np.ones(5) * (1200.0 + 273.15)
+    Tg = np.ones(5) * (1773.15)  # K
+    Ts = np.ones(5) * (1673.15)  # K
+    Tw = np.ones(5) * (873.15)  # K
 
     inputs = {
         "Fuel_rate": 5.5,
@@ -182,7 +179,7 @@ if __name__ == "__main__":
     }
 
     dt = 0.05
-    t_end = 3 * 3600
+    t_end = 1 * 3600
     n_steps = int(t_end / dt)
 
     t = 0.0
@@ -198,7 +195,7 @@ if __name__ == "__main__":
             print(
                 f"step={i:06d} | "
                 f"time={t/3600:.4f} h | "
-                f"Tg={Tg[idx]-273.15:7.2f} °C | "
-                f"Ts={Ts[idx]-273.15:7.2f} °C | "
-                f"Tw={Tw[idx]-273.15:7.2f} °C"
+                f"Tg={Tg[idx]:7.2f} °C | "
+                f"Ts={Ts[idx]:7.2f} °C | "
+                f"Tw={Tw[idx]:7.2f} °C"
             )
