@@ -1,0 +1,22 @@
+mpc:
+  prediction_horizon: 20
+  control_horizon: 5
+
+  dt: 60.0              # Prediction model sampling time [s]
+
+  fuel_min: 2.0
+  fuel_max: 6.0
+
+  Tg_setpoint: 1823.15
+  Ts_setpoint: 1723.15
+
+  w_T: 1.0
+  w_F: 1e-3
+  w_ramp: 1e-2
+
+solver:
+  max_iter: 80
+  tolerance: 1e-3
+
+logging:
+  interval_sec: 60

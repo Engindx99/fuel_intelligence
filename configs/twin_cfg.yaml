@@ -1,0 +1,21 @@
+plant:
+  N: 5
+  length: 60.0
+
+simulation:
+  dt: 0.05              # Plant integration time [s]
+  total_hours: 6.0
+  chunk_hours: 1.0
+
+logging:
+  interval_sec: 600     # 10 min
+
+checkpoint:
+  enabled: true
+  file: burning_ckpt.pkl
+
+fuel:
+  petcoke_fraction: 0.6
+  rdf_fraction: 0.2
+  oxygen: 3.5
+  fuel_rate: 5.5

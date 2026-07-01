@@ -2,47 +2,61 @@ from Kiln.GlobalState import GlobalState
 from Kiln.Burning import Burning
 from control.mpc import MasterMPC
 import numpy as np
+import yaml
+
+
+def load_cfg(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+cfg = load_cfg("configs/twin_cfg.yaml")
 
 
 class Twin:
 
-    def __init__(self, state, mpc=None, N=5):
+    def __init__(self, state, cfg, mpc=None):
 
         self.state = state
-        self.model = Burning(N=N)
+        self.model = Burning(
+            N=cfg["plant"]["N"],
+            L=cfg["plant"]["length"],
+        )
         self.mpc = mpc
 
         self.time = 0.0
-        self.dt = 0.05
+        self.dt = cfg["simulation"]["dt"]
 
         self.debug = True
-        self.verbose_mpc = False  # 🔇 MPC spam kapalı
+        self.verbose_mpc = False  #  MPC spam kapalı
 
         # ================= LOG CONTROL =================
-        self.log_interval = 600.0  # 10 minutes (REALISTIC for kiln)
+        self.log_interval = cfg["logging"]["interval_sec"]
         self._next_log_time = 0.0
 
         # ================= MPC CONTROL =================
-        self.mpc_interval = 1.0  # 1 second MPC update
+        self.mpc_interval = cfg["control"]["mpc_interval"]
         self._next_mpc_time = 0.0
 
         self._last_inputs = {
-            "Fuel_rate": 5.5,
-            "Petcoke": 0.6,
-            "Lignite": 0.2,
-            "RDF_Fuel": 0.2,
-            "O2": 3.5,
+            "Fuel_rate": cfg["fuel"]["fuel_rate"],
+            "Petcoke": cfg["fuel"]["petcoke_fraction"],
+            "Lignite": 1.0
+            - cfg["fuel"]["petcoke_fraction"]
+            - cfg["fuel"]["rdf_fraction"],
+            "RDF_Fuel": cfg["fuel"]["rdf_fraction"],
+            "O2": cfg["fuel"]["oxygen"],
         }
 
     # --------------------------------------------------
     def _safe_inputs(self, raw):
 
         return {
-            "Fuel_rate": raw.get("Fuel_rate", 5.5),
-            "Petcoke": raw.get("Petcoke", 0.6),
-            "Lignite": raw.get("Lignite", 0.2),
-            "RDF_Fuel": raw.get("RDF_Fuel", 0.2),
-            "O2": raw.get("O2", 3.5),
+            "Fuel_rate": raw.get("Fuel_rate", self._last_inputs["Fuel_rate"]),
+            "Petcoke": raw.get("Petcoke", self._last_inputs["Petcoke"]),
+            "Lignite": raw.get("Lignite", self._last_inputs["Lignite"]),
+            "RDF_Fuel": raw.get("RDF_Fuel", self._last_inputs["RDF_Fuel"]),
+            "O2": raw.get("O2", self._last_inputs["O2"]),
         }
 
     # --------------------------------------------------
@@ -144,11 +158,18 @@ class Twin:
 # ======================================================
 if __name__ == "__main__":
 
+    twin_cfg = load_cfg("configs/twin_cfg.yaml")
+    mpc_cfg = load_cfg("configs/mpc_cfg.yaml")
+
     print("STARTING TWIN SIMULATION", flush=True)
 
     state = GlobalState()
-    mpc = MasterMPC()
+    mpc = MasterMPC(mpc_cfg)
 
-    twin = Twin(state, mpc, N=5)
+    twin = Twin(
+        state=state,
+        cfg=twin_cfg,
+        mpc=mpc,
+    )
 
     twin.run(t_end=3600, report_every=2000)

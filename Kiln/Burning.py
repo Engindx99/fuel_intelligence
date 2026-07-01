@@ -216,7 +216,7 @@ if __name__ == "__main__":
     model = Burning(N=5)
 
     inputs = {
-        "Fuel_rate": 5.0,
+        "Fuel_rate": 3.5,
         "Petcoke": 0.6,
         "RDF_Fuel": 0.2,
         "O2": 3.5,
