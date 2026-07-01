@@ -1,4 +1,5 @@
 # ================================= TEMPERATURE =================================
+import json
 import pickle
 import os
 import numpy as np
@@ -186,8 +187,25 @@ class Burning:
 if __name__ == "__main__":
 
     import numpy as np
+    import os
+    import json
+    import pickle
     from Kiln.Burning import Burning
 
+    # ======================================================
+    # CHECKPOINT HELPERS
+    # ======================================================
+    def save_checkpoint(path, state):
+        with open(path, "wb") as f:
+            pickle.dump(state, f)
+
+    def load_checkpoint(path):
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    # ======================================================
+    # MODEL
+    # ======================================================
     model = Burning(N=5)
 
     inputs = {
@@ -198,14 +216,19 @@ if __name__ == "__main__":
     }
 
     dt = 0.1
+
+    # ======================================================
+    # CHUNK CONFIG
+    # ======================================================
     chunk_hours = 1.0
     chunk_time = chunk_hours * 3600
     n_steps_chunk = int(chunk_time / dt)
 
-    total_hours = 3.0
+    total_hours = 6.0
     n_chunks = int(total_hours / chunk_hours)
 
     ckpt_file = "burning_ckpt.pkl"
+    status_file = "burning_status.jsonl"
 
     # ======================================================
     # LOAD OR INIT STATE
@@ -224,26 +247,53 @@ if __name__ == "__main__":
     idx = 5 // 2
 
     # ======================================================
-    # CHUNK LOOP (1 HOUR EACH)
+    # CHUNK LOOP
     # ======================================================
     for chunk in range(start_chunk, n_chunks):
 
         t_local = 0.0
+        next_log_time = 0.0
 
         for i in range(n_steps_chunk):
 
             Tg, Ts, Tw = model.thermal_step(Tg, Ts, Tw, inputs, dt)
             t_local += dt
 
-        # ================= SAVE CHECKPOINT =================
-        state = {"Tg": Tg, "Ts": Ts, "Tw": Tw, "t": (chunk + 1) * chunk_time}
+            # ==================================================
+            # 10 MIN LOG (SCALAR OUTLET ONLY)
+            # ==================================================
+            if t_local >= next_log_time:
+
+                log_entry = {
+                    "chunk": chunk,
+                    "time_h": (chunk * chunk_time + t_local) / 3600.0,
+                    # ONLY OUTLET VALUES (1 SCALAR EACH)
+                    "Tg": float(Tg[-1]),
+                    "Ts": float(Ts[-1]),
+                    "Tw": float(Tw[-1]),
+                }
+
+                with open(status_file, "a") as f:
+                    f.write(json.dumps(log_entry) + "\n")
+
+                next_log_time += 600.0  # 10 min
+
+        # ======================================================
+        # CHECKPOINT SAVE (chunk end)
+        # ======================================================
+        global_time = (chunk + 1) * chunk_time
+
+        state = {"Tg": Tg, "Ts": Ts, "Tw": Tw, "t": global_time}
 
         save_checkpoint(ckpt_file, state)
 
+        # ======================================================
+        # PRINT LOG
+        # ======================================================
         print(
             f"[CHUNK {chunk}] "
-            f"t={state['t']/3600:.2f} h | "
-            f"Tg={Tg[idx]:.2f} K | "
-            f"Ts={Ts[idx]:.2f} K | "
-            f"Tw={Tw[idx]:.2f} K"
+            f"t={global_time/3600:.2f} h | "
+            f"Tg={Tg[-1]:.2f} K | "
+            f"Ts={Ts[-1]:.2f} K | "
+            f"Tw={Tw[-1]:.2f} K"
         )
