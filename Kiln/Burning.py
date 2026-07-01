@@ -1,6 +1,17 @@
 # ================================= TEMPERATURE =================================
-
+import pickle
+import os
 import numpy as np
+
+
+def save_checkpoint(path, state):
+    with open(path, "wb") as f:
+        pickle.dump(state, f)
+
+
+def load_checkpoint(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
 
 class Burning:
@@ -27,8 +38,7 @@ class Burning:
         self.A_wall = self.a_gw * self.L
         self.h_ext = 12.0
 
-        self.T_amb = 300.0  # K
-
+        self.T_amb = 300.0
         self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
@@ -59,6 +69,15 @@ class Burning:
 
         self.eps = 1e-9
 
+        # ================= PERFORMANCE BUFFERS =================
+        self._dTg_dz = np.zeros(N)
+        self._dTs_dz = np.zeros(N)
+
+        # ================= CACHE CONSTANTS =================
+        self._rho_s_Cp_s = self.rho_s * self.Cp_s
+        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
+        self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
+
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
@@ -66,13 +85,9 @@ class Burning:
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
 
-        Tg_n = Tg
-        Ts_n = Ts
-        Tw_n = Tw
-
-        # ================= GRADIENTS =================
-        dTg_dz = np.zeros_like(Tg)
-        dTs_dz = np.zeros_like(Ts)
+        # ================= GRADIENTS (NO ALLOC) =================
+        dTg_dz = self._dTg_dz
+        dTs_dz = self._dTs_dz
 
         dTg_dz[1:] = (Tg[1:] - Tg[:-1]) / self.dz
         dTs_dz[1:] = (Ts[1:] - Ts[:-1]) / self.dz
@@ -83,10 +98,14 @@ class Burning:
         # ================= FUEL MIX =================
         p = inputs.get("Petcoke", 0.6)
         a = inputs.get("RDF_Fuel", 0.2)
-        l = max(1.0 - p - a, 0.0)
+        l = 1.0 - p - a
+        if l < 0.0:
+            l = 0.0
 
         norm = p + a + l + self.eps
-        p, a, l = p / norm, a / norm, l / norm
+        p /= norm
+        a /= norm
+        l /= norm
 
         fuel_rate = inputs.get("Fuel_rate", 1.0)
         O2 = inputs.get("O2", 3.5)
@@ -99,7 +118,6 @@ class Burning:
         Q_in = fuel_rate * LHV_mix * eta
         q_vol = Q_in / (self.V_total + self.eps)
 
-        # ================= CALCINATION COUPLING =================
         sink_density = calcination_sink / (self.V_total + self.eps)
         q_vol = q_vol - 0.05 * sink_density
 
@@ -108,25 +126,32 @@ class Burning:
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ================= SOLID EFFECTIVE CAPACITY =================
-        alpha_s = self.hv_gs * self.a_gs / (self.rho_s * self.Cp_s + self.eps)
+        # ======================================================
+        # SOLID EFFECTIVE CAPACITY (KORUNDU - SADECE SAFEIFY)
+        # ======================================================
+        alpha_s = (self.hv_gs * self.a_gs) / (self._rho_s_Cp_s + self.eps)
         tau_flow = self.dz / max(self.u_s, self.eps)
 
         delta_T = np.sqrt(max(alpha_s * tau_flow, 0.0))
         V_active = self.a_gs * delta_T
 
-        V_cell_eff = min(self.V_cell, max(V_active, 0.01 * self.V_cell))
+        V_cell_eff = (
+            self.V_cell if V_active > self.V_cell else max(V_active, 0.01 * self.V_cell)
+        )
 
-        phi_coupling = 1e-1
-        C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
-        C_s = max(C_s, self.eps)
+        C_s = 0.1 * self._rho_s_Cp_s * V_cell_eff
+        if C_s < self.eps:
+            C_s = self.eps
 
-        # ================= GAS CAPACITY =================
-        C_g = max(self.rho_g * self.V_cell * self.Cp_g, self.eps)
+        # ================= GAS CAPACITY (CACHED) =================
+        C_g = self._rho_g_Vcell_Cp_g
+        if C_g < self.eps:
+            C_g = self.eps
 
-        # ================= WALL CAPACITY =================
-        m_w = self.rho_wall * self.V_wall
-        C_w = max(m_w * self.Cp_wall, self.eps)
+        # ================= WALL CAPACITY (CACHED) =================
+        C_w = self._rho_wall_Vwall_Cp
+        if C_w < self.eps:
+            C_w = self.eps
 
         q_loss = (self.h_ext * self.A_wall * (Tw - self.T_amb)) / (
             self.V_cell + self.eps
@@ -134,9 +159,7 @@ class Burning:
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
-
         Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / C_s)
-
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
         return Tg_n, Ts_n, Tw_n
@@ -160,16 +183,12 @@ class Burning:
         return state
 
 
-# ======================================================
-# TEST RUN
-# ======================================================
 if __name__ == "__main__":
 
-    model = Burning(N=5)
+    import numpy as np
+    from Kiln.Burning import Burning
 
-    Tg = np.ones(5) * (1773.15)  # K
-    Ts = np.ones(5) * (1673.15)  # K
-    Tw = np.ones(5) * (873.15)  # K
+    model = Burning(N=5)
 
     inputs = {
         "Fuel_rate": 5.5,
@@ -178,24 +197,53 @@ if __name__ == "__main__":
         "O2": 3.5,
     }
 
-    dt = 0.05
-    t_end = 1 * 3600
-    n_steps = int(t_end / dt)
+    dt = 0.1
+    chunk_hours = 1.0
+    chunk_time = chunk_hours * 3600
+    n_steps_chunk = int(chunk_time / dt)
 
-    t = 0.0
+    total_hours = 3.0
+    n_chunks = int(total_hours / chunk_hours)
+
+    ckpt_file = "burning_ckpt.pkl"
+
+    # ======================================================
+    # LOAD OR INIT STATE
+    # ======================================================
+    if os.path.exists(ckpt_file):
+        state = load_checkpoint(ckpt_file)
+        Tg, Ts, Tw = state["Tg"], state["Ts"], state["Tw"]
+        start_chunk = int(state["t"] // chunk_time)
+        print(f"Resuming from chunk {start_chunk}")
+    else:
+        Tg = np.ones(5) * 1773.15
+        Ts = np.ones(5) * 1673.15
+        Tw = np.ones(5) * 873.15
+        start_chunk = 0
+
     idx = 5 // 2
 
-    for i in range(n_steps):
+    # ======================================================
+    # CHUNK LOOP (1 HOUR EACH)
+    # ======================================================
+    for chunk in range(start_chunk, n_chunks):
 
-        Tg, Ts, Tw = model.thermal_step(Tg, Ts, Tw, inputs, dt)
+        t_local = 0.0
 
-        t += dt
+        for i in range(n_steps_chunk):
 
-        if i % 1000 == 0:
-            print(
-                f"step={i:06d} | "
-                f"time={t/3600:.4f} h | "
-                f"Tg={Tg[idx]:7.2f} °C | "
-                f"Ts={Ts[idx]:7.2f} °C | "
-                f"Tw={Tw[idx]:7.2f} °C"
-            )
+            Tg, Ts, Tw = model.thermal_step(Tg, Ts, Tw, inputs, dt)
+            t_local += dt
+
+        # ================= SAVE CHECKPOINT =================
+        state = {"Tg": Tg, "Ts": Ts, "Tw": Tw, "t": (chunk + 1) * chunk_time}
+
+        save_checkpoint(ckpt_file, state)
+
+        print(
+            f"[CHUNK {chunk}] "
+            f"t={state['t']/3600:.2f} h | "
+            f"Tg={Tg[idx]:.2f} K | "
+            f"Ts={Ts[idx]:.2f} K | "
+            f"Tw={Tw[idx]:.2f} K"
+        )

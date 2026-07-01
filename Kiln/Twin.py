@@ -16,14 +16,14 @@ class Twin:
         self.dt = 0.05
 
         self.debug = True
-        self.verbose_mpc = False  # 🔥 terminal spam engellendi
+        self.verbose_mpc = False  # 🔇 MPC spam kapalı
 
         # ================= LOG CONTROL =================
-        self.log_interval = 60.0  # 1 minute
+        self.log_interval = 600.0  # 10 minutes (REALISTIC for kiln)
         self._next_log_time = 0.0
 
         # ================= MPC CONTROL =================
-        self.mpc_interval = 1.0  # 🔥 MPC 1 saniyede bir çalışır
+        self.mpc_interval = 1.0  # 1 second MPC update
         self._next_mpc_time = 0.0
 
         self._last_inputs = {
@@ -52,12 +52,10 @@ class Twin:
         # CONTROL (THROTTLED MPC)
         # =========================
         if self.mpc is None:
-
             inputs = self._last_inputs
 
         else:
-
-            # 🔥 MPC only every 1 second
+            # MPC only every 1 second
             if self.time >= self._next_mpc_time:
 
                 try:
@@ -65,7 +63,7 @@ class Twin:
                     self._last_inputs = self._safe_inputs(raw_inputs)
 
                 except Exception as e:
-
+                    # FAIL SAFE (NO PRINT FLOOD)
                     print("MPC FAILED:", repr(e), flush=True)
 
                 self._next_mpc_time += self.mpc_interval
@@ -93,17 +91,21 @@ class Twin:
         self.time += self.dt
 
         # =========================
-        # LOGGING (1 MIN INTERVAL)
+        # LOGGING (10 MIN GLOBAL VIEW)
         # =========================
         if self.time >= self._next_log_time:
 
             idx = len(self.state.Tg_burning) // 2
 
+            Tg = float(self.state.Tg_burning[idx])
+            Ts = float(self.state.Ts_burning[idx])
+            Tw = float(self.state.Tw_burning[idx])
+
             print(
-                f"[t={self.time:6.1f}s] "
-                f"Tg={self.state.Tg_burning[idx]:7.2f}K | "
-                f"Ts={self.state.Ts_burning[idx]:7.2f}K | "
-                f"Tw={self.state.Tw_burning[idx]:7.2f}K",
+                f"[REPORT 10m] t={self.time/60:.1f} min | "
+                f"Tg={Tg:.2f} K | "
+                f"Ts={Ts:.2f} K | "
+                f"Tw={Tw:.2f} K",
                 flush=True,
             )
 
@@ -112,7 +114,7 @@ class Twin:
         return self.state
 
     # --------------------------------------------------
-    def run(self, t_end, report_every=1000):
+    def run(self, t_end, report_every=2000):
 
         n_steps = int(t_end / self.dt)
 
@@ -122,7 +124,7 @@ class Twin:
 
             self.step()
 
-            # extra debug report
+            # OPTIONAL DEBUG (RARE)
             if report_every > 0 and i % report_every == 0:
 
                 idx = len(self.state.Tg_burning) // 2
@@ -130,9 +132,9 @@ class Twin:
                 print(
                     f"step={i:06d} | "
                     f"time={self.time/3600:.4f} h | "
-                    f"Tg={self.state.Tg_burning[idx]:7.2f}K | "
-                    f"Ts={self.state.Ts_burning[idx]:7.2f}K | "
-                    f"Tw={self.state.Tw_burning[idx]:7.2f}K",
+                    f"Tg={self.state.Tg_burning[idx]:7.2f} K | "
+                    f"Ts={self.state.Ts_burning[idx]:7.2f} K | "
+                    f"Tw={self.state.Tw_burning[idx]:7.2f} K",
                     flush=True,
                 )
 
@@ -149,4 +151,4 @@ if __name__ == "__main__":
 
     twin = Twin(state, mpc, N=5)
 
-    twin.run(t_end=3600, report_every=1000)
+    twin.run(t_end=3600, report_every=2000)
