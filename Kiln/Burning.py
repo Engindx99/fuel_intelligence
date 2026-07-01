@@ -5,7 +5,7 @@ import numpy as np
 
 class Burning:
 
-    def __init__(self, N=80, L=60.0):
+    def __init__(self, N=5, L=60.0):
 
         self.N = N
         self.L = L
@@ -26,7 +26,10 @@ class Burning:
         # ================= WALL =================
         self.A_wall = self.a_gw * self.L
         self.h_ext = 12.0
+
+        # 🔥 KELVIN BASELINE (FIXED)
         self.T_amb = 300.0
+
         self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
@@ -57,9 +60,6 @@ class Burning:
 
         self.eps = 1e-9
 
-        # ================= NUMERICAL SAFETY =================
-        self.alpha_mix = 0.5  # fuel smoothing (optional stability)
-
     # ======================================================
     def combustion_efficiency(self, O2):
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
@@ -67,9 +67,10 @@ class Burning:
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
 
-        Tg_n = Tg.copy()
-        Ts_n = Ts.copy()
-        Tw_n = Tw.copy()
+        # ⚡ direct reference (FASTER, NO COPY)
+        Tg_n = Tg
+        Ts_n = Ts
+        Tw_n = Tw
 
         # ================= GRADIENTS =================
         dTg_dz = np.zeros_like(Tg)
@@ -102,8 +103,7 @@ class Burning:
 
         # ================= CALCINATION COUPLING =================
         sink_density = calcination_sink / (self.V_total + self.eps)
-        coupling_gain = 0.05
-        q_vol = q_vol - coupling_gain * sink_density
+        q_vol = q_vol - 0.05 * sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
@@ -117,7 +117,8 @@ class Burning:
         delta_T = np.sqrt(max(alpha_s * tau_flow, 0.0))
         V_active = self.a_gs * delta_T
 
-        V_cell_eff = min(self.V_cell, V_active)
+        # 🔥 safety clamp (NUMERICAL STABILITY)
+        V_cell_eff = min(self.V_cell, max(V_active, 0.01 * self.V_cell))
 
         phi_coupling = 1e-1
         C_s = phi_coupling * self.rho_s * V_cell_eff * self.Cp_s
@@ -134,13 +135,11 @@ class Burning:
             self.V_cell + self.eps
         )
 
-        # ================= GAS =================
+        # ================= DYNAMICS =================
         Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
 
-        # ================= SOLID =================
         Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / C_s)
 
-        # ================= WALL =================
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
         return Tg_n, Ts_n, Tw_n
@@ -169,24 +168,25 @@ class Burning:
 # ======================================================
 if __name__ == "__main__":
 
-    model = Burning(N=50)
+    model = Burning(N=5)
 
-    Tg = np.ones(50) * (1450.0 + 273.15)
-    Ts = np.ones(50) * (1400.0 + 273.15)
-    Tw = np.ones(50) * (1200.0 + 273.15)
+    Tg = np.ones(5) * (1450.0 + 273.15)
+    Ts = np.ones(5) * (1400.0 + 273.15)
+    Tw = np.ones(5) * (1200.0 + 273.15)
 
     inputs = {
-        "Fuel_rate": 5.0,
+        "Fuel_rate": 5.5,
         "Petcoke": 0.6,
         "RDF_Fuel": 0.2,
         "O2": 3.5,
     }
 
-    dt = 0.1
-    t_end = 3600
+    dt = 0.05
+    t_end = 3 * 3600
     n_steps = int(t_end / dt)
 
     t = 0.0
+    idx = 5 // 2
 
     for i in range(n_steps):
 
@@ -198,10 +198,7 @@ if __name__ == "__main__":
             print(
                 f"step={i:06d} | "
                 f"time={t/3600:.4f} h | "
-                f"Tg={Tg[25]-273.15:7.2f} °C | "
-                f"Ts={Ts[25]-273.15:7.2f} °C | "
-                f"Tw={Tw[25]-273.15:7.2f} °C"
+                f"Tg={Tg[idx]-273.15:7.2f} °C | "
+                f"Ts={Ts[idx]-273.15:7.2f} °C | "
+                f"Tw={Tw[idx]-273.15:7.2f} °C"
             )
-
-
-# ================================= REACTIONS =================================

@@ -6,36 +6,45 @@ import numpy as np
 
 class Twin:
 
-    def __init__(self, state, mpc=None, N=80):
+    def __init__(self, state, mpc=None, N=5):
 
         self.state = state
-        self.burning = Burning(N=N)
+
+        # 🔥 SINGLE SOURCE OF TRUTH (physics)
+        self.model = Burning(N=N)
 
         self.mpc = mpc
 
         self.time = 0.0
+        self.dt = 0.05
 
-        # debug flags
         self.debug = True
         self.verbose_mpc = True
 
     # --------------------------------------------------
+    def _safe_inputs(self, raw):
 
-    def step(self, dt):
+        return {
+            "Fuel_rate": raw.get("Fuel_rate", 5.5),
+            "Petcoke": raw.get("Petcoke", 0.6),
+            "Lignite": raw.get("Lignite", 0.2),
+            "RDF_Fuel": raw.get("RDF_Fuel", 0.2),
+            "O2": raw.get("O2", 3.5),
+        }
+
+    # --------------------------------------------------
+    def step(self):
 
         # =========================
-        # CONTROL INPUT
+        # CONTROL (MPC OR FALLBACK)
         # =========================
         if self.mpc is None:
 
-            if self.debug:
-                print("[CONTROL] Using fallback controller", flush=True)
-
             inputs = {
-                "Fuel_rate": 5.0,
-                "Petcoke": 0.60,
-                "Lignite": 0.20,
-                "RDF_Fuel": 0.20,
+                "Fuel_rate": 5.5,
+                "Petcoke": 0.6,
+                "Lignite": 0.2,
+                "RDF_Fuel": 0.2,
                 "O2": 3.5,
             }
 
@@ -45,12 +54,12 @@ class Twin:
                 print("CALLING MPC", flush=True)
 
             try:
-                inputs = self.mpc.compute_control(self.state)
+                raw_inputs = self.mpc.compute_control(self.state)
+                inputs = self._safe_inputs(raw_inputs)
 
                 if self.verbose_mpc:
                     print(
-                        f"MPC OK | Fuel={inputs['Fuel_rate']:.3f} | "
-                        f"O2={inputs['O2']:.3f}",
+                        f"MPC OK | Fuel={inputs['Fuel_rate']:.3f} | O2={inputs['O2']:.3f}",
                         flush=True,
                     )
 
@@ -59,74 +68,72 @@ class Twin:
                 print("MPC FAILED:", repr(e), flush=True)
 
                 inputs = {
-                    "Fuel_rate": 5.0,
-                    "Petcoke": 0.60,
-                    "Lignite": 0.20,
-                    "RDF_Fuel": 0.20,
+                    "Fuel_rate": 5.5,
+                    "Petcoke": 0.6,
+                    "Lignite": 0.2,
+                    "RDF_Fuel": 0.2,
                     "O2": 3.5,
                 }
 
         # =========================
-        # BEFORE STATE
+        # PHYSICS (EXACT MATCH WITH TEST RUN)
         # =========================
-        Tg_before = np.mean(self.state.Tg_burning)
-
-        # NaN guard (çok kritik)
-        if np.isnan(Tg_before):
-            print("WARNING: NaN detected in state BEFORE step", flush=True)
-
-        # =========================
-        # PHYSICS STEP
-        # =========================
-        self.state = self.burning.apply(self.state, inputs, dt)
-
-        # =========================
-        # AFTER STATE
-        # =========================
-        Tg_after = np.mean(self.state.Tg_burning)
-
-        if np.isnan(Tg_after):
-            print("WARNING: NaN detected in state AFTER step", flush=True)
+        self.state.Tg_burning, self.state.Ts_burning, self.state.Tw_burning = (
+            self.model.thermal_step(
+                self.state.Tg_burning,
+                self.state.Ts_burning,
+                self.state.Tw_burning,
+                inputs,
+                self.dt,
+            )
+        )
 
         # =========================
-        # EFFECT CHECK
+        # LOG (IDENTICAL STYLE)
         # =========================
+        idx = len(self.state.Tg_burning) // 2
+
         if self.debug:
             print(
-                f"[STATE] Tg: {Tg_before:.2f} → {Tg_after:.2f} | "
-                f"Δ={Tg_after - Tg_before:.5f}",
+                f"[step] time={self.time:6.2f}s | "
+                f"Tg={self.state.Tg_burning[idx]-273.15:7.2f}°C | "
+                f"Ts={self.state.Ts_burning[idx]-273.15:7.2f}°C | "
+                f"Tw={self.state.Tw_burning[idx]-273.15:7.2f}°C",
                 flush=True,
             )
 
-        self.time += dt
+        self.time += self.dt
 
         return self.state
 
     # --------------------------------------------------
+    def run(self, t_end, report_every=1000):
 
-    def run(self, t_end, dt, report_every=100):
-
-        n_steps = int(t_end / dt)
+        n_steps = int(t_end / self.dt)
 
         print("TWIN STARTED", flush=True)
 
-        for step in range(n_steps):
+        for i in range(n_steps):
 
-            self.step(dt)
+            self.step()
 
-            if step % report_every == 0:
+            if i % report_every == 0:
 
                 idx = len(self.state.Tg_burning) // 2
 
                 print(
-                    f"time={self.time:8.1f}s | "
-                    f"Tg={self.state.Tg_burning[idx]-273.15:7.2f}°C | "
-                    f"Ts={self.state.Ts_burning[idx]-273.15:7.2f}°C | "
-                    f"Tw={self.state.Tw_burning[idx]-273.15:7.2f}°C",
+                    f"step={i:06d} | "
+                    f"time={self.time/3600:.4f} h | "
+                    f"Tg={self.state.Tg_burning[idx]-273.15:7.2f} °C | "
+                    f"Ts={self.state.Ts_burning[idx]-273.15:7.2f} °C | "
+                    f"Tw={self.state.Tw_burning[idx]-273.15:7.2f} °C",
                     flush=True,
                 )
 
 
+# ======================================================
+# MAIN
+# ======================================================
 if __name__ == "__main__":
 
     print("STARTING TWIN SIMULATION", flush=True)
@@ -134,6 +141,6 @@ if __name__ == "__main__":
     state = GlobalState()
     mpc = MasterMPC()
 
-    twin = Twin(state, mpc)
+    twin = Twin(state, mpc, N=5)
 
-    twin.run(t_end=100, dt=0.1)
+    twin.run(t_end=3600, report_every=1000)

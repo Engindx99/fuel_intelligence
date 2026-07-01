@@ -4,7 +4,7 @@ import numpy as np
 
 
 # ==========================================================
-# GLOBAL STATE
+# GLOBAL STATE (CONSISTENT 5-CELL SYSTEM)
 # ==========================================================
 @dataclass
 class GlobalState:
@@ -39,7 +39,6 @@ class GlobalState:
     # ======================================================
     # ENERGY
     # ======================================================
-
     E_preheater: float = 0.0
     E_calcination: float = 0.0
     E_burning: float = 0.0
@@ -62,62 +61,52 @@ class GlobalState:
     Free_Lime: float = 0.0
 
     # ======================================================
-    # PREHEATER STATES
+    # PREHEATER STATES (5 CELL)
     # ======================================================
     Tg_preheater: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (300.0 + 273.15)
+        default_factory=lambda: np.ones(5) * (300.0 + 273.15)
     )
 
     Ts_preheater: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (300.0 + 273.15)
+        default_factory=lambda: np.ones(5) * (300.0 + 273.15)
     )
 
     Tw_preheater: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (250.0 + 273.15)
+        default_factory=lambda: np.ones(5) * (250.0 + 273.15)
     )
 
     # ======================================================
-    # CALCINATION STATES
+    # CALCINATION STATES (5 CELL)
     # ======================================================
     Tg_calcination: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (1200.0 + 273.15)
+        default_factory=lambda: np.ones(5) * (1200.0 + 273.15)
     )
 
     Ts_calcination: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (950.0 + 273.15)
+        default_factory=lambda: np.ones(5) * (950.0 + 273.15)
     )
 
     Tw_calcination: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (500.0 + 273.15)
+        default_factory=lambda: np.ones(5) * (500.0 + 273.15)
     )
 
     # ======================================================
-    # BURNING STATES
+    # BURNING STATES (5 CELL)
     # ======================================================
-    Tg_burning: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (1500.0 + 273.15)
-    )
+    Tg_burning: np.ndarray = field(default_factory=lambda: np.ones(5) * (1500.0))
 
-    Ts_burning: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (1100.0 + 273.15)
-    )
+    Ts_burning: np.ndarray = field(default_factory=lambda: np.ones(5) * (1400.0))
 
-    Tw_burning: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (600.0 + 273.15)
-    )
+    Tw_burning: np.ndarray = field(default_factory=lambda: np.ones(5) * (600.0))
 
     # ======================================================
-    # COOLER STATES
+    # COOLER STATES (5 CELL)
     # ======================================================
-    Tg_cooler: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (150.0 + 273.15)
-    )
+    Tg_cooler: np.ndarray = field(default_factory=lambda: np.ones(5) * (150.0 + 273.15))
 
-    Ts_cooler: np.ndarray = field(
-        default_factory=lambda: np.ones(80) * (120.0 + 273.15)
-    )
+    Ts_cooler: np.ndarray = field(default_factory=lambda: np.ones(5) * (120.0 + 273.15))
 
-    Tw_cooler: np.ndarray = field(default_factory=lambda: np.ones(80) * (80.0 + 273.15))
+    Tw_cooler: np.ndarray = field(default_factory=lambda: np.ones(5) * (80.0 + 273.15))
 
     # ======================================================
     # GLOBAL MASS & ENERGY

@@ -1,218 +1,232 @@
 import casadi as ca
 import numpy as np
+from Kiln.Burning import Burning
 
 
 class MasterMPC:
 
     def __init__(self):
 
-        # =========================
-        # MPC SETTINGS
-        # =========================
-        self.N = 10
-        self.dt = 0.5
-        self.T_target = 1450 + 273.15
+        self.Np = 60
+        self.Nc = 10
+        self.dt = 0.05
 
-        # =========================
-        # SCALING
-        # =========================
-        self.T_scale = 2000.0
-        self.F_scale = 8.0
-        self.O2_scale = 6.0
+        self.Tg_ref = 1550.0
+        self.Ts_ref = 1450.0
 
-        # =========================
-        # FUEL LHV
-        # =========================
-        self.LHV = {"Petcoke": 32e6, "Lignite": 18e6, "RDF_Fuel": 25e6}
-
-        # radiation coefficient (NEW FIX)
-        self.rad_k = 1.2e-12
-
-        self.opti = None
-        self.prev_sol = None
-        self._build_problem()
-
-    # ======================================================
-    # BUILD OPTIMIZATION GRAPH
-    # ======================================================
-    def _build_problem(self):
+        self.model = Burning(N=5)
 
         self.opti = ca.Opti()
+        self.prev_sol = None
 
-        # STATES
-        self.Tg = self.opti.variable(self.N + 1)
-        self.Ts = self.opti.variable(self.N + 1)
-        self.Tw = self.opti.variable(self.N + 1)
+        self._build()
 
-        # CONTROLS
-        self.Fuel = self.opti.variable(self.N)
-        self.p = self.opti.variable(self.N)
-        self.l = self.opti.variable(self.N)
-        self.a = self.opti.variable(self.N)
-        self.O2 = self.opti.variable(self.N)
+    # ======================================================
+    # 🔥 STATE PROJECTION (SAFE + ROBUST)
+    # ======================================================
+    def _project_state(self, x, N_target):
+
+        x = np.asarray(x).flatten()
+        N_src = x.shape[0]
+
+        if N_src == N_target:
+            return x
+
+        # interpolation (better than indexing)
+        src_idx = np.linspace(0, 1, N_src)
+        tgt_idx = np.linspace(0, 1, N_target)
+
+        return np.interp(tgt_idx, src_idx, x)
+
+    # ======================================================
+    # 🧾 CLEAN LOGGING (PHYSICS STYLE)
+    # ======================================================
+    def _log(self, t, sol, state, fuel):
+
+        idx = len(state.Tg_burning) // 2
+
+        Tg = state.Tg_burning[idx] - 273.15
+        Ts = state.Ts_burning[idx] - 273.15
+        Tw = state.Tw_burning[idx] - 273.15
+
+        print(
+            f"t={t:7.1f}s | "
+            f"Fuel={fuel:4.2f} | "
+            f"Tg[{idx}]={Tg:7.2f}°C | "
+            f"Ts[{idx}]={Ts:7.2f}°C | "
+            f"Tw[{idx}]={Tw:7.2f}°C"
+        )
+
+    # ======================================================
+    def _build(self):
+
+        N = self.model.N
+        eps = self.model.eps
+
+        # ================= STATES =================
+        self.Tg = self.opti.variable(N, self.Np + 1)
+        self.Ts = self.opti.variable(N, self.Np + 1)
+        self.Tw = self.opti.variable(N, self.Np + 1)
+
+        # ================= CONTROL =================
+        self.Fuel = self.opti.variable(self.Nc)
+
+        # ================= PARAMETERS =================
+        self.Tg0 = self.opti.parameter(N)
+        self.Ts0 = self.opti.parameter(N)
+        self.Tw0 = self.opti.parameter(N)
+
+        self.opti.subject_to(self.Tg[:, 0] == self.Tg0)
+        self.opti.subject_to(self.Ts[:, 0] == self.Ts0)
+        self.opti.subject_to(self.Tw[:, 0] == self.Tw0)
+
+        # ================= INIT GUESS =================
+        self.opti.set_initial(self.Tg, 1500.0)
+        self.opti.set_initial(self.Ts, 1400.0)
+        self.opti.set_initial(self.Tw, 800.0)
+        self.opti.set_initial(self.Fuel, 4.0)
 
         cost = 0
 
-        for k in range(self.N):
+        def u(k):
+            return min(k, self.Nc - 1)
 
-            # =========================
-            # MIXTURE
-            # =========================
-            mix_sum = self.p[k] + self.l[k] + self.a[k] + 1e-6
+        # ================= FUEL MIX =================
+        p0, a0, l0 = 0.6, 0.2, 0.2
+        norm = p0 + a0 + l0 + eps
+        p0, a0, l0 = p0 / norm, a0 / norm, l0 / norm
 
-            p = self.p[k] / mix_sum
-            l = self.l[k] / mix_sum
-            a = self.a[k] / mix_sum
+        O2 = 3.5
+        eta = ca.exp(-((O2 - self.model.O2_opt) ** 2) / self.model.O2_sigma2)
 
-            LHV_mix = (
-                p * self.LHV["Petcoke"]
-                + l * self.LHV["Lignite"]
-                + a * self.LHV["RDF_Fuel"]
+        LHV_mix = (
+            p0 * self.model.LHV_petcoke
+            + l0 * self.model.LHV_lignite
+            + a0 * self.model.LHV_RDF
+        )
+
+        # ======================================================
+        for k in range(self.Np):
+
+            uk = u(k)
+            Fuel_k = self.Fuel[uk]
+
+            # 🔥 HARD SAFETY CLAMP
+            Fuel_k = ca.fmax(2.0, ca.fmin(6.0, Fuel_k))
+
+            # ================= HEAT SOURCE =================
+            Q_in = Fuel_k * LHV_mix * eta
+            q_vol = Q_in / (self.model.V_total + eps)
+
+            # ================= GRADIENTS =================
+            dTg_dz = ca.vertcat(
+                self.Tg[0, k], (self.Tg[1:, k] - self.Tg[:-1, k]) / self.model.dz
             )
 
-            # =========================
-            # O2 EFFECT
-            # =========================
-            eta = ca.exp(-0.08 * (self.O2[k] - 3.5) ** 2)
-
-            # =========================
-            # HEAT INPUT
-            # =========================
-            Q_in = (self.Fuel[k] * self.F_scale) * LHV_mix * eta
-
-            # =========================
-            # DYNAMICS (FIXED BALANCE)
-            # =========================
-            loss_conv = 0.006 * (self.Tg[k] - self.Ts[k])
-            loss_rad = self.rad_k * (self.Tg[k] ** 4 - (300 + 273.15) ** 4)
-
-            Tg_next = self.Tg[k] + self.dt * (
-                2.5e-8 * Q_in / 1e7 - loss_conv - loss_rad
+            dTs_dz = ca.vertcat(
+                self.Ts[0, k], (self.Ts[1:, k] - self.Ts[:-1, k]) / self.model.dz
             )
 
-            Ts_next = self.Ts[k] + self.dt * (
-                0.008 * (self.Tg[k] - self.Ts[k])  # stronger coupling
+            # ================= HEAT TRANSFER =================
+            q_gs = (
+                self.model.hv_gs * self.model.a_gs * (self.Tg[:, k] - self.Ts[:, k])
+            ) / self.model.V_cell
+
+            q_gw = (
+                self.model.hv_gw * self.model.a_gw * (self.Tg[:, k] - self.Tw[:, k])
+            ) / self.model.V_cell
+
+            q_ws = (
+                self.model.hv_ws * self.model.a_ws * (self.Ts[:, k] - self.Tw[:, k])
+            ) / self.model.V_cell
+
+            # ================= CAPACITIES =================
+            C_g = self.model.rho_g * self.model.V_cell * self.model.Cp_g
+            C_s = self.model.rho_s * self.model.V_cell * self.model.Cp_s
+            C_w = self.model.rho_wall * self.model.V_wall * self.model.Cp_wall
+
+            q_loss = (
+                self.model.h_ext
+                * self.model.A_wall
+                * (self.Tw[:, k] - self.model.T_amb)
+            ) / (self.model.V_cell + eps)
+
+            # ================= DYNAMICS =================
+            Tg_next = self.Tg[:, k] + self.dt * (
+                -self.model.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
             )
 
-            Tw_next = self.Tw[k] + self.dt * (0.0015 * (self.Tg[k] - self.Tw[k]))
+            Ts_next = self.Ts[:, k] + self.dt * (
+                -self.model.u_s * dTg_dz + (q_gs - q_ws) / C_s
+            )
 
-            self.opti.subject_to(self.Tg[k + 1] == Tg_next)
-            self.opti.subject_to(self.Ts[k + 1] == Ts_next)
-            self.opti.subject_to(self.Tw[k + 1] == Tw_next)
+            Tw_next = self.Tw[:, k] + self.dt * ((q_gw + q_ws - q_loss) / C_w)
 
-            # =========================
-            # COST
-            # =========================
-            err = self.Tg[k] - self.T_target
+            self.opti.subject_to(self.Tg[:, k + 1] == Tg_next)
+            self.opti.subject_to(self.Ts[:, k + 1] == Ts_next)
+            self.opti.subject_to(self.Tw[:, k + 1] == Tw_next)
 
-            cost += 3e-4 * err**2  #  stronger tracking
+            # ================= COST =================
+            Tg_mean = ca.sum1(self.Tg[:, k]) / N
+            Ts_mean = ca.sum1(self.Ts[:, k]) / N
 
-            cost += 1e-4 * self.Fuel[k] ** 2
-            cost += 1e-2 * (self.O2[k] - 3.5) ** 2
+            cost += 1e-4 * (Tg_mean - self.Tg_ref) ** 2
+            cost += 1e-4 * (Ts_mean - self.Ts_ref) ** 2
+            cost += 1e-3 * Fuel_k**2
 
-            # smoothness
             if k > 0:
-                cost += 5e-2 * (self.Fuel[k] - self.Fuel[k - 1]) ** 2
-                cost += 1e-2 * (self.O2[k] - self.O2[k - 1]) ** 2
+                cost += 5e-2 * (Fuel_k - self.Fuel[u(k - 1)]) ** 2
 
-        # terminal cost (stronger)
-        cost += 80 * (self.Tg[self.N] - self.T_target) ** 2
+        # ================= TERMINAL =================
+        Tg_end = ca.sum1(self.Tg[:, self.Np]) / N
+        cost += 10.0 * (Tg_end - self.Tg_ref) ** 2
 
         self.opti.minimize(cost)
 
-        # =========================
-        # BOUNDS
-        # =========================
-        self.opti.subject_to(self.Fuel >= 0.5)
-        self.opti.subject_to(self.Fuel <= 8.0)
+        # ================= BOUNDS =================
+        self.opti.subject_to(self.Fuel >= 2.0)
+        self.opti.subject_to(self.Fuel <= 6.0)
 
-        self.opti.subject_to(self.p >= 0.01)
-        self.opti.subject_to(self.l >= 0.01)
-        self.opti.subject_to(self.a >= 0.01)
-
-        self.opti.subject_to(self.O2 >= 2.2)
-        self.opti.subject_to(self.O2 <= 5.8)
-
-        # =========================
-        # INITIAL CONDITIONS
-        # =========================
-        self.Tg0 = self.opti.parameter()
-        self.Ts0 = self.opti.parameter()
-        self.Tw0 = self.opti.parameter()
-
-        self.opti.subject_to(self.Tg[0] == self.Tg0)
-        self.opti.subject_to(self.Ts[0] == self.Ts0)
-        self.opti.subject_to(self.Tw[0] == self.Tw0)
-
-        # =========================
-        # SOLVER
-        # =========================
+        # ================= SOLVER =================
         self.opti.solver(
             "ipopt",
             {
                 "ipopt.print_level": 0,
                 "print_time": 0,
-                "ipopt.max_iter": 120,
+                "ipopt.max_iter": 80,
                 "ipopt.tol": 1e-4,
-                "ipopt.linear_solver": "mumps",
                 "ipopt.mu_strategy": "adaptive",
+                "ipopt.linear_solver": "mumps",
             },
         )
 
     # ======================================================
-    def _reset(self):
-        self._build_problem()
+    def compute_control(self, state, t=0.0):
 
-    # ======================================================
-    def _warm_start(self):
-        if self.prev_sol is None:
-            return
+        Tg0 = self._project_state(state.Tg_burning, self.model.N)
+        Ts0 = self._project_state(state.Ts_burning, self.model.N)
+        Tw0 = self._project_state(state.Tw_burning, self.model.N)
 
-        try:
-            sol = self.prev_sol
+        self.opti.set_value(self.Tg0, Tg0)
+        self.opti.set_value(self.Ts0, Ts0)
+        self.opti.set_value(self.Tw0, Tw0)
 
-            for k in range(self.N):
-                self.opti.set_initial(self.Fuel[k], sol.value(self.Fuel[k]))
-                self.opti.set_initial(self.O2[k], sol.value(self.O2[k]))
-                self.opti.set_initial(self.p[k], sol.value(self.p[k]))
-                self.opti.set_initial(self.l[k], sol.value(self.l[k]))
-                self.opti.set_initial(self.a[k], sol.value(self.a[k]))
-        except:
-            pass
+        # ================= WARM START =================
+        if self.prev_sol is not None:
+            try:
+                for k in range(self.Nc):
+                    self.opti.set_initial(
+                        self.Fuel[k], self.prev_sol.value(self.Fuel[k])
+                    )
+            except:
+                pass
 
-    # ======================================================
-    def compute_control(self, state):
+        sol = self.opti.solve()
+        self.prev_sol = sol
 
-        try:
-            Tg0 = float(np.mean(state.Tg_burning))
-            Ts0 = float(np.mean(state.Ts_burning))
-            Tw0 = float(np.mean(state.Tw_burning))
+        fuel = float(sol.value(self.Fuel[0]))
 
-            self.opti.set_value(self.Tg0, Tg0)
-            self.opti.set_value(self.Ts0, Ts0)
-            self.opti.set_value(self.Tw0, Tw0)
+        # ================= CLEAN LOG =================
+        self._log(t, sol, state, fuel)
 
-            self._warm_start()
-
-            sol = self.opti.solve()
-            self.prev_sol = sol
-
-            return {
-                "Fuel_rate": float(sol.value(self.Fuel[0])),
-                "Petcoke": float(sol.value(self.p[0])),
-                "Lignite": float(sol.value(self.l[0])),
-                "RDF_Fuel": float(sol.value(self.a[0])),
-                "O2": float(sol.value(self.O2[0])),
-            }
-
-        except Exception as e:
-            print("MPC FAILED → RESETTING OPTIMIZER:", str(e))
-            self._reset()
-
-            return {
-                "Fuel_rate": 3.5,
-                "Petcoke": 0.33,
-                "Lignite": 0.33,
-                "RDF_Fuel": 0.33,
-                "O2": 3.5,
-            }
+        return {"Fuel_rate": fuel}
