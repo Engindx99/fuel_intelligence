@@ -1,4 +1,5 @@
 # ================================= TEMPERATURE =================================
+from bdb import effective
 import json
 import pickle
 import os
@@ -40,7 +41,7 @@ class Burning:
         self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
-        self.rho_g = 6.3
+        self.rho_g = 4.1
         self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
@@ -49,11 +50,11 @@ class Burning:
         self.Cp_wall = 1000.0
 
         # ================= VELOCITIES =================
-        self.u_g = 2.5
+        self.u_g = 1.4
         self.u_s = 0.005
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 1800.0
+        self.hv_gs = 1300.0
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
@@ -138,34 +139,19 @@ class Burning:
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ======================================================
-        # SOLID EFFECTIVE CAPACITY (KORUNDU - SADECE SAFEIFY)
-        # ======================================================
-        alpha_s = (self.hv_gs * self.a_gs) / (self._rho_s_Cp_s + self.eps)
-        tau_flow = self.dz / max(self.u_s, self.eps)
+        # ================= SOLID CAPACITY =================
 
-        delta_T = np.sqrt(max(alpha_s * tau_flow, 0.0))
-        V_active = self.a_gs * delta_T
+        effective = 0.01
+        C_s = self._rho_s_Cp_s
+        effective_C_s = effective * C_s
 
-        V_cell_eff = (
-            self.V_cell if V_active > self.V_cell else max(V_active, 0.01 * self.V_cell)
-        )
+        # ================= GAS CAPACITY =================
 
-        effectife = 0.001
-
-        C_s = effectife * self._rho_s_Cp_s * V_cell_eff
-        if C_s < self.eps:
-            C_s = self.eps
-
-        # ================= GAS CAPACITY (CACHED) =================
         C_g = self._rho_g_Vcell_Cp_g
-        if C_g < self.eps:
-            C_g = self.eps
 
         # ================= WALL CAPACITY (CACHED) =================
+
         C_w = self._rho_wall_Vwall_Cp
-        if C_w < self.eps:
-            C_w = self.eps
 
         q_loss = (self.h_ext * self.A_wall * (Tw - self.T_amb)) / (
             self.V_cell + self.eps
@@ -173,7 +159,7 @@ class Burning:
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
-        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / C_s)
+        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / effective_C_s)
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
         return Tg_n, Ts_n, Tw_n
@@ -216,7 +202,7 @@ if __name__ == "__main__":
     model = Burning(N=5)
 
     inputs = {
-        "Fuel_rate": 3.5,
+        "Fuel_rate": 5.0,  # ton/h
         "Petcoke": 0.6,
         "RDF_Fuel": 0.2,
         "O2": 3.5,
