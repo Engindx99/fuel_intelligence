@@ -11,9 +11,6 @@ def load_cfg(path):
         return yaml.safe_load(f)
 
 
-
-
-
 class Twin:
 
     def __init__(self, state, cfg, mpc_cfg):
@@ -41,6 +38,8 @@ class Twin:
         # ======================================================
         self.time = 0.0
         self.dt = cfg["simulation"]["dt"]
+        self.total_hours = cfg["simulation"]["total_hours"]
+        self.chunk_hours = cfg["simulation"]["chunk_hours"]
 
         # ======================================================
         # LOGGING
@@ -157,9 +156,12 @@ class Twin:
             Ts = float(self.state.Ts_burning[idx])
             Tw = float(self.state.Tw_burning[idx])
 
+            fuel_rate = inputs["Fuel_rate"]
+
             print(
-                f"[REPORT 10m] "
+                f"[REPORT] "
                 f"t={self.time/60:.1f} min | "
+                f"Fuel={fuel_rate:.3f} t/h | "
                 f"Tg={Tg:.2f} K | "
                 f"Ts={Ts:.2f} K | "
                 f"Tw={Tw:.2f} K",
@@ -171,28 +173,15 @@ class Twin:
         return self.state
 
     # --------------------------------------------------
-    def run(self, t_end, report_every=2000):
+    def run(self):
 
+        t_end = self.total_hours * 3600.0
         n_steps = int(t_end / self.dt)
 
         print("TWIN STARTED", flush=True)
 
-        for i in range(n_steps):
-
+        for _ in range(n_steps):
             self.step()
-
-            if report_every > 0 and i % report_every == 0:
-
-                idx = len(self.state.Tg_burning) // 2
-
-                print(
-                    f"step={i:06d} | "
-                    f"time={self.time/3600:.4f} h | "
-                    f"Tg={self.state.Tg_burning[idx]:7.2f} K | "
-                    f"Ts={self.state.Ts_burning[idx]:7.2f} K | "
-                    f"Tw={self.state.Tw_burning[idx]:7.2f} K",
-                    flush=True,
-                )
 
 if __name__ == "__main__":
 
@@ -207,7 +196,5 @@ if __name__ == "__main__":
         mpc_cfg=mpc_cfg,
     )
 
-    twin.run(
-        t_end=3600,
-        report_every=2000,
-    )
+    twin.run()
+    

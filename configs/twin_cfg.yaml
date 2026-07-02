@@ -3,19 +3,29 @@ plant:
   length: 60.0
 
 simulation:
-  dt: 0.05              # Plant integration time [s]
-  total_hours: 6.0
+  
+  dt: 0.05 # Plant integration time [s]
+
+  total_hours: 6.0 # Total simulation duration [hours]
+
+  # Optional chunk size for long simulations/checkpoints [hours]
   chunk_hours: 1.0
 
 logging:
-  interval_sec: 300     # 5 min
+  
+  interval_sec: 300      # Temperature & control report interval [s]
 
 checkpoint:
   enabled: true
   file: burning_ckpt.pkl
 
 fuel:
-  petcoke_fraction: 0.6
+  
+  petcoke_fraction: 0.6 # Initial fuel composition
   rdf_fraction: 0.2
-  oxygen: 3.5
-  fuel_rate: 5.5
+
+  
+  oxygen: 3.5 # Initial combustion conditions
+
+  
+  fuel_rate: 5.5 # Initial MPC fuel rate [t/h]
