@@ -1,15 +1,13 @@
+from tracemalloc import start
+
 import casadi as ca
 import numpy as np
+from datetime import datetime
 from Kiln.Burning import Burning
 import os
 import json
 import pickle
 import yaml
-
-
-import casadi as ca
-import numpy as np
-from Kiln.Burning import Burning
 
 
 class MasterMPC:
@@ -20,7 +18,14 @@ class MasterMPC:
 
         self.Np = int(cfg["mpc"]["prediction_horizon"])
         self.Nc = int(cfg["mpc"]["control_horizon"])
-        self.dt = float(cfg["mpc"]["dt"])
+        self.dt_model = float(cfg["mpc"]["dt_model"])
+        self.dt_prediction = float(cfg["mpc"]["dt_prediction"])
+        self.dt_control = float(cfg["mpc"]["dt_control"])
+
+        self.n_substeps = int(self.dt_prediction / self.dt_model)
+
+        self.last_control_time = -1e30
+        self.last_control = 5.0
 
         self.fuel_min = float(cfg["mpc"]["fuel_min"])
         self.fuel_max = float(cfg["mpc"]["fuel_max"])
@@ -72,7 +77,6 @@ class MasterMPC:
         self.Ts0 = self.opti.parameter(N)
         self.Tw0 = self.opti.parameter(N)
 
-        # ✅ SOFT INITIAL CONDITION (CRITICAL FIX)
         self.opti.subject_to(
             ca.sumsqr(self.Tg[:, 0] - self.Tg0)
             + ca.sumsqr(self.Ts[:, 0] - self.Ts0)
@@ -115,76 +119,107 @@ class MasterMPC:
 
             Fuel_k = self.Fuel[u(k)]
 
-            Q_in = Fuel_k * LHV_mix * eta
-            q_vol = Q_in / (self.model.V_total + eps)
+            Tg_pred = self.Tg[:, k]
+            Ts_pred = self.Ts[:, k]
+            Tw_pred = self.Tw[:, k]
 
-            # ================= GRADIENTS =================
-            dTg_dz = ca.vertcat(
-                self.Tg[0, k], (self.Tg[1:, k] - self.Tg[:-1, k]) / self.model.dz
-            )
+        # ================= PREDICTION LOOP =================
+        for k in range(self.Np):
 
-            dTs_dz = ca.vertcat(
-                self.Ts[0, k], (self.Ts[1:, k] - self.Ts[:-1, k]) / self.model.dz
-            )
+            Fuel_k = self.Fuel[u(k)]
 
-            # ================= HEAT TRANSFER =================
-            q_gs = (
-                self.model.hv_gs * self.model.a_gs * (self.Tg[:, k] - self.Ts[:, k])
-            ) / self.model.V_cell
+            # Prediction starts from current optimization state
+            Tg_pred = self.Tg[:, k]
+            Ts_pred = self.Ts[:, k]
+            Tw_pred = self.Tw[:, k]
 
-            q_gw = (
-                self.model.hv_gw * self.model.a_gw * (self.Tg[:, k] - self.Tw[:, k])
-            ) / self.model.V_cell
+            # ======================================================
+            # Integrate physical plant model over one prediction step
+            # ======================================================
+            for _ in range(self.n_substeps):
 
-            q_ws = (
-                self.model.hv_ws * self.model.a_ws * (self.Ts[:, k] - self.Tw[:, k])
-            ) / self.model.V_cell
+                # ---------------- Fuel ----------------
+                fuel_rate_kg_s = Fuel_k * 1000.0 / 3600.0
 
-            # ================= CAPACITIES =================
-            C_g = self.model.rho_g * self.model.V_cell * self.model.Cp_g
-            C_s = self.model.rho_s * self.model.V_cell * self.model.Cp_s
-            C_w = self.model.rho_wall * self.model.V_wall * self.model.Cp_wall
+                Q_in = fuel_rate_kg_s * LHV_mix * eta
+                q_vol = Q_in / (self.model.V_total + eps)
 
-            # ================= LOSS =================
-            q_loss = (
-                self.model.h_ext
-                * self.model.A_wall
-                * (self.Tw[:, k] - self.model.T_amb)
-            ) / (self.model.V_cell + eps)
+                # ---------------- Gradients ----------------
+                dTg = (Tg_pred[1:] - Tg_pred[:-1]) / self.model.dz
+                dTg_dz = ca.vertcat(dTg[0], dTg)
 
-            # ================= DYNAMICS =================
-            Tg_next = self.Tg[:, k] + self.dt * (
-                -self.model.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
-            )
+                dTs = (Ts_pred[1:] - Ts_pred[:-1]) / self.model.dz
+                dTs_dz = ca.vertcat(dTs[0], dTs)
 
-            Ts_next = self.Ts[:, k] + self.dt * (
-                -self.model.u_s * dTs_dz + (q_gs - q_ws) / C_s
-            )
+                # ---------------- Heat Transfer ----------------
+                q_gs = (
+                    self.model.hv_gs * self.model.a_gs * (Tg_pred - Ts_pred)
+                ) / self.model.V_cell
 
-            Tw_next = self.Tw[:, k] + self.dt * ((q_gw + q_ws - q_loss) / C_w)
+                q_gw = (
+                    self.model.hv_gw * self.model.a_gw * (Tg_pred - Tw_pred)
+                ) / self.model.V_cell
 
-            self.opti.subject_to(self.Tg[:, k + 1] == Tg_next)
-            self.opti.subject_to(self.Ts[:, k + 1] == Ts_next)
-            self.opti.subject_to(self.Tw[:, k + 1] == Tw_next)
+                q_ws = (
+                    self.model.hv_ws * self.model.a_ws * (Ts_pred - Tw_pred)
+                ) / self.model.V_cell
 
-            # ================= OUTPUT COST =================
-            Tg_out = self.Tg[-1, k]
-            Ts_out = self.Ts[-1, k]
+                # ---------------- Capacities ----------------
+                C_g = self.model.rho_g * self.model.V_cell * self.model.Cp_g
+
+                effective = 0.01
+
+                C_s = effective * self.model.rho_s * self.model.Cp_s
+
+                C_w = self.model.rho_wall * self.model.V_wall * self.model.Cp_wall
+
+                # ---------------- Wall Loss ----------------
+                q_loss = (
+                    self.model.h_ext * self.model.A_wall * (Tw_pred - self.model.T_amb)
+                ) / (self.model.V_cell + eps)
+
+                # ---------------- Euler Integration ----------------
+                Tg_pred = Tg_pred + self.dt_model * (
+                    -self.model.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
+                )
+
+                Ts_pred = Ts_pred + self.dt_model * (
+                    -self.model.u_s * dTs_dz + (q_gs - q_ws) / C_s
+                )
+
+                Tw_pred = Tw_pred + self.dt_model * ((q_gw + q_ws - q_loss) / C_w)
+
+            # ======================================================
+            # End of one prediction interval (5 s)
+            # ======================================================
+
+            self.opti.subject_to(self.Tg[:, k + 1] == Tg_pred)
+            self.opti.subject_to(self.Ts[:, k + 1] == Ts_pred)
+            self.opti.subject_to(self.Tw[:, k + 1] == Tw_pred)
+
+            # ---------------- Tracking Cost ----------------
+            Tg_out = Tg_pred[-1]
+            Ts_out = Ts_pred[-1]
 
             cost += self.w_T * (Tg_out - self.Tg_ref) ** 2
             cost += self.w_T * (Ts_out - self.Ts_ref) ** 2
 
-            # ================= FUEL COST =================
+            # ---------------- Fuel Cost ----------------
             cost += self.w_F * Fuel_k**2
 
         # ======================================================
-        # RAMP COST (VERY IMPORTANT FIX)
+        # RAMP COST
         # ======================================================
         cost += self.w_ramp * ca.sumsqr(self.Fuel[1:] - self.Fuel[:-1])
 
+        # ======================================================
+        # OBJECTIVE
+        # ======================================================
         self.opti.minimize(cost)
 
-        # ================= SOLVER =================
+        # ======================================================
+        # SOLVER
+        # ======================================================
         self.opti.solver(
             "ipopt",
             {
@@ -198,6 +233,9 @@ class MasterMPC:
     # ======================================================
     def compute_control(self, state, t=0.0):
 
+        if t - self.last_control_time < self.dt_control:
+            return {"Fuel_rate": self.last_control}
+
         Tg0 = self._project_state(state.Tg_burning, self.model.N)
         Ts0 = self._project_state(state.Ts_burning, self.model.N)
         Tw0 = self._project_state(state.Tw_burning, self.model.N)
@@ -210,19 +248,33 @@ class MasterMPC:
             try:
                 for k in range(self.Nc):
                     self.opti.set_initial(
-                        self.Fuel[k], self.prev_sol.value(self.Fuel[k])
+                        self.Fuel[k],
+                        self.prev_sol.value(self.Fuel[k]),
                     )
-            except:
+            except Exception:
                 pass
+
+        start = datetime.now()
+        print(f"[{start.strftime('%H:%M:%S')}] MPC Solve started at t={t:.1f} s")
 
         try:
             sol = self.opti.solve()
+
+            end = datetime.now()
+            print(
+                f"[{end.strftime('%H:%M:%S')}] MPC Solve finished "
+                f"({(end-start).total_seconds():.2f} s)"
+            )
+
             self.prev_sol = sol
             fuel = float(sol.value(self.Fuel[0]))
 
+            self.last_control = fuel
+            self.last_control_time = t
+
         except Exception as e:
             print("MPC FAILED → fallback:", repr(e))
-            fuel = 5.0
+            fuel = self.last_control
 
         return {"Fuel_rate": fuel}
 
@@ -269,6 +321,7 @@ if __name__ == "__main__":
 
     # ================= LOGGING =================
     log_interval = twin_cfg["logging"]["interval_sec"]
+    next_log = 0.0
 
     # ================= CHECKPOINT =================
     ckpt_path = twin_cfg["checkpoint"]["file"]
@@ -304,9 +357,10 @@ if __name__ == "__main__":
     for chunk in range(start_chunk, n_chunks):
 
         t_local = 0.0
-        next_log = 0.0
 
         for i in range(steps_per_chunk):
+
+            global_time = chunk * chunk_time + t_local
 
             # ================= STATE OBJECT =================
             state_obj = type("S", (), {})()
@@ -316,22 +370,31 @@ if __name__ == "__main__":
 
             # ================= MPC =================
             ctrl = mpc_controller.compute_control(
-                state_obj, t=chunk * chunk_time + t_local
+                state_obj,
+                t=global_time,
             )
 
             plant_inputs["Fuel_rate"] = ctrl["Fuel_rate"]
 
             # ================= PLANT =================
-            Tg, Ts, Tw = plant_model.thermal_step(Tg, Ts, Tw, plant_inputs, dt)
+            Tg, Ts, Tw = plant_model.thermal_step(
+                Tg,
+                Ts,
+                Tw,
+                plant_inputs,
+                dt,
+            )
 
             t_local += dt
+            global_time = chunk * chunk_time + t_local
 
             # ================= LOGGING =================
-            if t_local >= next_log:
+            if global_time >= next_log:
 
                 record = {
                     "chunk": chunk,
-                    "time_h": f"{(chunk * chunk_time + t_local)/3600.0:.4f}",
+                    "time_h": f"{global_time/3600.0:.4f}",
+                    "time_s": round(global_time, 2),
                     "Tg": float(Tg[outlet]),
                     "Ts": float(Ts[outlet]),
                     "Tw": float(Tw[outlet]),
@@ -347,7 +410,15 @@ if __name__ == "__main__":
         global_t = (chunk + 1) * chunk_time
 
         if ckpt_enabled:
-            save_ckpt(ckpt_path, {"Tg": Tg, "Ts": Ts, "Tw": Tw, "t": global_t})
+            save_ckpt(
+                ckpt_path,
+                {
+                    "Tg": Tg,
+                    "Ts": Ts,
+                    "Tw": Tw,
+                    "t": global_t,
+                },
+            )
 
         print(
             f"[CHUNK {chunk}] "

@@ -1,8 +1,10 @@
 mpc:
-  prediction_horizon: 20
-  control_horizon: 5
+  prediction_horizon: 200
+  control_horizon: 10
 
-  dt: 60.0              # Prediction model sampling time [s]
+  dt_model: 0.05
+  dt_prediction: 5.0
+  dt_control: 60.0              # Prediction model sampling time [s]
 
   fuel_min: 2.0
   fuel_max: 6.0
