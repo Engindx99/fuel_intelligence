@@ -1,24 +1,49 @@
 mpc:
+  # ======================================================
+  # HORIZON SETTINGS
+  # ======================================================
   prediction_horizon: 200
   control_horizon: 10
 
-  dt_model: 0.05
-  dt_prediction: 5.0
-  dt_control: 60.0              # Prediction model sampling time [s]
+  # ======================================================
+  # TIME SCALES (REFACTORED)
+  # ======================================================
+  dt_model: 0.05        # physics integration step
+  dt_mpc: 5.0           # MPC update step (NEW, replaces dt_prediction conceptually)
+  dt_control: 60.0      # actuator update step
 
+  # (optional backward compatibility)
+  dt_prediction: 5.0    # kept for legacy code compatibility
+
+  # ======================================================
+  # PHYSICAL CONSTRAINTS
+  # ======================================================
   fuel_min: 2.0
   fuel_max: 6.0
 
+  # ======================================================
+  # SETPOINTS
+  # ======================================================
   Tg_setpoint: 1823.15
   Ts_setpoint: 1723.15
 
+  # ======================================================
+  # COST WEIGHTS
+  # ======================================================
   w_T: 1.0
-  w_F: 1e-3
-  w_ramp: 1e-2
+  w_F: 0.001
+  w_ramp: 0.01
+
+  # ======================================================
+  # MULTI-RATE CONTROL LOGIC
+  # ======================================================
+  mpc_update_sec: 5.0
+  actuator_update_sec: 60.0
+  model_dt_sec: 0.05
 
 solver:
   max_iter: 80
-  tolerance: 1e-3
+  tolerance: 0.001
 
 logging:
   interval_sec: 60

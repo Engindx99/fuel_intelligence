@@ -4,7 +4,11 @@ python -m Kiln.Calcination
 
 python -m Kiln.Twin
 
+
+
 python -m control.mpc
+
+
 
 
 Bu yeni düzenlemeleri al ve  aşağıdaki modele entegre edip tam kod olarak ver:  

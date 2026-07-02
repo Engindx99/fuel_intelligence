@@ -1,0 +1,1351 @@
+/*
+ * Copyright (c) The acados authors.
+ *
+ * This file is part of acados.
+ *
+ * The 2-Clause BSD License
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.;
+ */
+
+// standard
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <string.h> // memcpy
+// acados
+// #include "acados/utils/print.h"
+#include "acados_c/ocp_nlp_interface.h"
+#include "acados_c/external_function_interface.h"
+
+// example specific
+
+#include "burning_zone_model/burning_zone_model.h"
+
+
+#include "burning_zone_cost/burning_zone_cost.h"
+
+
+
+#include "acados_solver_burning_zone.h"
+
+#define NX     BURNING_ZONE_NX
+#define NZ     BURNING_ZONE_NZ
+#define NU     BURNING_ZONE_NU
+#define NP     BURNING_ZONE_NP
+#define NP_GLOBAL     BURNING_ZONE_NP_GLOBAL
+#define NY0    BURNING_ZONE_NY0
+#define NY     BURNING_ZONE_NY
+#define NYN    BURNING_ZONE_NYN
+
+#define NBX    BURNING_ZONE_NBX
+#define NBX0   BURNING_ZONE_NBX0
+#define NBU    BURNING_ZONE_NBU
+#define NG     BURNING_ZONE_NG
+#define NBXN   BURNING_ZONE_NBXN
+#define NGN    BURNING_ZONE_NGN
+
+#define NH     BURNING_ZONE_NH
+#define NHN    BURNING_ZONE_NHN
+#define NH0    BURNING_ZONE_NH0
+#define NPHI   BURNING_ZONE_NPHI
+#define NPHIN  BURNING_ZONE_NPHIN
+#define NPHI0  BURNING_ZONE_NPHI0
+#define NR     BURNING_ZONE_NR
+
+#define NS     BURNING_ZONE_NS
+#define NS0    BURNING_ZONE_NS0
+#define NSN    BURNING_ZONE_NSN
+
+#define NSBX   BURNING_ZONE_NSBX
+#define NSBU   BURNING_ZONE_NSBU
+#define NSH0   BURNING_ZONE_NSH0
+#define NSH    BURNING_ZONE_NSH
+#define NSHN   BURNING_ZONE_NSHN
+#define NSG    BURNING_ZONE_NSG
+#define NSPHI0 BURNING_ZONE_NSPHI0
+#define NSPHI  BURNING_ZONE_NSPHI
+#define NSPHIN BURNING_ZONE_NSPHIN
+#define NSGN   BURNING_ZONE_NSGN
+#define NSBXN  BURNING_ZONE_NSBXN
+
+
+
+
+
+// ** solver data **
+
+burning_zone_solver_capsule * burning_zone_acados_create_capsule(void)
+{
+    void* capsule_mem = malloc(sizeof(burning_zone_solver_capsule));
+    burning_zone_solver_capsule *capsule = (burning_zone_solver_capsule *) capsule_mem;
+
+    return capsule;
+}
+
+
+int burning_zone_acados_free_capsule(burning_zone_solver_capsule *capsule)
+{
+    free(capsule);
+    return 0;
+}
+
+
+int burning_zone_acados_create(burning_zone_solver_capsule* capsule)
+{
+    int N_shooting_intervals = BURNING_ZONE_N;
+    double* new_time_steps = NULL; // NULL -> don't alter the code generated time-steps
+    return burning_zone_acados_create_with_discretization(capsule, N_shooting_intervals, new_time_steps);
+}
+
+
+int burning_zone_acados_update_time_steps(burning_zone_solver_capsule* capsule, int N, double* new_time_steps)
+{
+
+    if (N != capsule->nlp_solver_plan->N) {
+        fprintf(stderr, "burning_zone_acados_update_time_steps: given number of time steps (= %d) " \
+            "differs from the currently allocated number of " \
+            "time steps (= %d)!\n" \
+            "Please recreate with new discretization and provide a new vector of time_stamps!\n",
+            N, capsule->nlp_solver_plan->N);
+        return 1;
+    }
+
+    ocp_nlp_config * nlp_config = capsule->nlp_config;
+    ocp_nlp_dims * nlp_dims = capsule->nlp_dims;
+    ocp_nlp_in * nlp_in = capsule->nlp_in;
+
+    for (int i = 0; i < N; i++)
+    {
+        ocp_nlp_in_set(nlp_config, nlp_dims, nlp_in, i, "Ts", &new_time_steps[i]);
+        ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "scaling", &new_time_steps[i]);
+    }
+    return 0;
+
+}
+
+/**
+ * Internal function for burning_zone_acados_create: step 1
+ */
+void burning_zone_acados_create_set_plan(ocp_nlp_plan_t* nlp_solver_plan, const int N)
+{
+    assert(N == nlp_solver_plan->N);
+
+    /************************************************
+    *  plan
+    ************************************************/
+
+    nlp_solver_plan->nlp_solver = SQP_RTI;
+
+    nlp_solver_plan->ocp_qp_solver_plan.qp_solver = PARTIAL_CONDENSING_HPIPM;
+    nlp_solver_plan->relaxed_ocp_qp_solver_plan.qp_solver = PARTIAL_CONDENSING_HPIPM;
+    nlp_solver_plan->nlp_cost[0] = EXTERNAL;
+    for (int i = 1; i < N; i++)
+        nlp_solver_plan->nlp_cost[i] = EXTERNAL;
+
+    nlp_solver_plan->nlp_cost[N] = EXTERNAL;
+
+    for (int i = 0; i < N; i++)
+    {
+        nlp_solver_plan->nlp_dynamics[i] = CONTINUOUS_MODEL;
+        nlp_solver_plan->sim_solver_plan[i].sim_solver = IRK;
+    }
+
+    nlp_solver_plan->nlp_constraints[0] = BGH;
+
+    for (int i = 1; i < N; i++)
+    {
+        nlp_solver_plan->nlp_constraints[i] = BGH;
+    }
+    nlp_solver_plan->nlp_constraints[N] = BGH;
+
+    nlp_solver_plan->regularization = NO_REGULARIZE;
+
+    nlp_solver_plan->globalization = FIXED_STEP;
+}
+
+
+static ocp_nlp_dims* burning_zone_acados_create_setup_dimensions(burning_zone_solver_capsule* capsule)
+{
+    ocp_nlp_plan_t* nlp_solver_plan = capsule->nlp_solver_plan;
+    const int N = nlp_solver_plan->N;
+    ocp_nlp_config* nlp_config = capsule->nlp_config;
+
+    /************************************************
+    *  dimensions
+    ************************************************/
+    #define NINTNP1MEMS 18
+    int* intNp1mem = (int*)malloc( (N+1)*sizeof(int)*NINTNP1MEMS );
+
+    int* nx    = intNp1mem + (N+1)*0;
+    int* nu    = intNp1mem + (N+1)*1;
+    int* nbx   = intNp1mem + (N+1)*2;
+    int* nbu   = intNp1mem + (N+1)*3;
+    int* nsbx  = intNp1mem + (N+1)*4;
+    int* nsbu  = intNp1mem + (N+1)*5;
+    int* nsg   = intNp1mem + (N+1)*6;
+    int* nsh   = intNp1mem + (N+1)*7;
+    int* nsphi = intNp1mem + (N+1)*8;
+    int* ns    = intNp1mem + (N+1)*9;
+    int* ng    = intNp1mem + (N+1)*10;
+    int* nh    = intNp1mem + (N+1)*11;
+    int* nphi  = intNp1mem + (N+1)*12;
+    int* nz    = intNp1mem + (N+1)*13;
+    int* ny    = intNp1mem + (N+1)*14;
+    int* nr    = intNp1mem + (N+1)*15;
+    int* nbxe  = intNp1mem + (N+1)*16;
+    int* np  = intNp1mem + (N+1)*17;
+
+    for (int i = 0; i < N+1; i++)
+    {
+        // common
+        nx[i]     = NX;
+        nu[i]     = NU;
+        nz[i]     = NZ;
+        ns[i]     = NS;
+        // cost
+        ny[i]     = NY;
+        // constraints
+        nbx[i]    = NBX;
+        nbu[i]    = NBU;
+        nsbx[i]   = NSBX;
+        nsbu[i]   = NSBU;
+        nsg[i]    = NSG;
+        nsh[i]    = NSH;
+        nsphi[i]  = NSPHI;
+        ng[i]     = NG;
+        nh[i]     = NH;
+        nphi[i]   = NPHI;
+        nr[i]     = NR;
+        nbxe[i]   = 0;
+        np[i]     = NP;
+    }
+
+    // for initial state
+    nbx[0] = NBX0;
+    nsbx[0] = 0;
+    ns[0] = NS0;
+    
+    nbxe[0] = 15;
+    
+    ny[0] = NY0;
+    nh[0] = NH0;
+    nsh[0] = NSH0;
+    nsphi[0] = NSPHI0;
+    nphi[0] = NPHI0;
+
+
+    // terminal - common
+    nu[N]   = 0;
+    nz[N]   = 0;
+    ns[N]   = NSN;
+    // cost
+    ny[N]   = NYN;
+    // constraint
+    nbx[N]   = NBXN;
+    nbu[N]   = 0;
+    ng[N]    = NGN;
+    nh[N]    = NHN;
+    nphi[N]  = NPHIN;
+    nr[N]    = 0;
+
+    nsbx[N]  = NSBXN;
+    nsbu[N]  = 0;
+    nsg[N]   = NSGN;
+    nsh[N]   = NSHN;
+    nsphi[N] = NSPHIN;
+
+    /* create and set ocp_nlp_dims */
+    ocp_nlp_dims * nlp_dims = ocp_nlp_dims_create(nlp_config);
+
+    ocp_nlp_dims_set_opt_vars(nlp_config, nlp_dims, "nx", nx);
+    ocp_nlp_dims_set_opt_vars(nlp_config, nlp_dims, "nu", nu);
+    ocp_nlp_dims_set_opt_vars(nlp_config, nlp_dims, "nz", nz);
+    ocp_nlp_dims_set_opt_vars(nlp_config, nlp_dims, "ns", ns);
+    ocp_nlp_dims_set_opt_vars(nlp_config, nlp_dims, "np", np);
+
+    ocp_nlp_dims_set_global(nlp_config, nlp_dims, "np_global", 0);
+    ocp_nlp_dims_set_global(nlp_config, nlp_dims, "n_global_data", 0);
+
+    for (int i = 0; i <= N; i++)
+    {
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nbx", &nbx[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nbu", &nbu[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nsbx", &nsbx[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nsbu", &nsbu[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "ng", &ng[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nsg", &nsg[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nbxe", &nbxe[i]);
+    }
+    ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, 0, "nh", &nh[0]);
+    ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, 0, "nsh", &nsh[0]);
+
+    for (int i = 1; i < N; i++)
+    {
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nh", &nh[i]);
+        ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, i, "nsh", &nsh[i]);
+    }
+    ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, N, "nh", &nh[N]);
+    ocp_nlp_dims_set_constraints(nlp_config, nlp_dims, N, "nsh", &nsh[N]);
+    free(intNp1mem);
+
+    return nlp_dims;
+}
+
+
+/**
+ * Internal function for burning_zone_acados_create: step 3
+ */
+void burning_zone_acados_create_setup_functions(burning_zone_solver_capsule* capsule)
+{
+    const int N = capsule->nlp_solver_plan->N;
+
+    /************************************************
+    *  external functions
+    ************************************************/
+
+#define MAP_CASADI_FNC(__CAPSULE_FNC__, __MODEL_BASE_FNC__) do{ \
+        capsule->__CAPSULE_FNC__.casadi_fun = & __MODEL_BASE_FNC__ ;\
+        capsule->__CAPSULE_FNC__.casadi_n_in = & __MODEL_BASE_FNC__ ## _n_in; \
+        capsule->__CAPSULE_FNC__.casadi_n_out = & __MODEL_BASE_FNC__ ## _n_out; \
+        capsule->__CAPSULE_FNC__.casadi_sparsity_in = & __MODEL_BASE_FNC__ ## _sparsity_in; \
+        capsule->__CAPSULE_FNC__.casadi_sparsity_out = & __MODEL_BASE_FNC__ ## _sparsity_out; \
+        capsule->__CAPSULE_FNC__.casadi_work = & __MODEL_BASE_FNC__ ## _work; \
+        external_function_external_param_casadi_create(&capsule->__CAPSULE_FNC__, &ext_fun_opts); \
+    } while(false)
+
+    external_function_opts ext_fun_opts;
+    external_function_opts_set_to_default(&ext_fun_opts);
+
+
+    ext_fun_opts.external_workspace = true;
+    if (N > 0)
+    {
+        // external cost
+        MAP_CASADI_FNC(ext_cost_0_fun, burning_zone_cost_ext_cost_0_fun);
+        MAP_CASADI_FNC(ext_cost_0_fun_jac, burning_zone_cost_ext_cost_0_fun_jac);
+        MAP_CASADI_FNC(ext_cost_0_fun_jac_hess, burning_zone_cost_ext_cost_0_fun_jac_hess);
+
+
+
+    
+        // implicit dae
+        capsule->impl_dae_fun = (external_function_external_param_casadi *) malloc(sizeof(external_function_external_param_casadi)*N);
+        for (int i = 0; i < N; i++) {
+            MAP_CASADI_FNC(impl_dae_fun[i], burning_zone_impl_dae_fun);
+        }
+
+        capsule->impl_dae_fun_jac_x_xdot_z = (external_function_external_param_casadi *) malloc(sizeof(external_function_external_param_casadi)*N);
+        for (int i = 0; i < N; i++) {
+            MAP_CASADI_FNC(impl_dae_fun_jac_x_xdot_z[i], burning_zone_impl_dae_fun_jac_x_xdot_z);
+        }
+
+        capsule->impl_dae_jac_x_xdot_u_z = (external_function_external_param_casadi *) malloc(sizeof(external_function_external_param_casadi)*N);
+        for (int i = 0; i < N; i++) {
+            MAP_CASADI_FNC(impl_dae_jac_x_xdot_u_z[i], burning_zone_impl_dae_jac_x_xdot_u_z);
+        }
+
+        
+    
+        // external cost
+        capsule->ext_cost_fun = (external_function_external_param_casadi *) malloc(sizeof(external_function_external_param_casadi)*(N-1));
+        for (int i = 0; i < N-1; i++)
+        {
+            MAP_CASADI_FNC(ext_cost_fun[i], burning_zone_cost_ext_cost_fun);
+        }
+
+        capsule->ext_cost_fun_jac = (external_function_external_param_casadi *) malloc(sizeof(external_function_external_param_casadi)*(N-1));
+        for (int i = 0; i < N-1; i++)
+        {
+            MAP_CASADI_FNC(ext_cost_fun_jac[i], burning_zone_cost_ext_cost_fun_jac);
+        }
+
+        capsule->ext_cost_fun_jac_hess = (external_function_external_param_casadi *) malloc(sizeof(external_function_external_param_casadi)*(N-1));
+        for (int i = 0; i < N-1; i++)
+        {
+            MAP_CASADI_FNC(ext_cost_fun_jac_hess[i], burning_zone_cost_ext_cost_fun_jac_hess);
+        }
+
+        
+
+        
+    } // N > 0
+    // external cost - function
+    MAP_CASADI_FNC(ext_cost_e_fun, burning_zone_cost_ext_cost_e_fun);
+
+    // external cost - jacobian
+    MAP_CASADI_FNC(ext_cost_e_fun_jac, burning_zone_cost_ext_cost_e_fun_jac);
+
+    // external cost - hessian
+    MAP_CASADI_FNC(ext_cost_e_fun_jac_hess, burning_zone_cost_ext_cost_e_fun_jac_hess);
+
+    // external cost - jacobian wrt params
+    
+
+    
+
+#undef MAP_CASADI_FNC
+}
+
+
+/**
+ * Internal function for burning_zone_acados_create: step 5
+ */
+void burning_zone_acados_create_set_default_parameters(burning_zone_solver_capsule* capsule)
+{
+
+    const int N = capsule->nlp_solver_plan->N;
+
+    // initialize parameters to initial value
+    
+    double* p = calloc(NP, sizeof(double));
+
+    for (int i = 0; i <= N; i++) {
+        burning_zone_acados_update_params(capsule, i, p, NP);
+    }
+    free(p);
+
+
+    // no global parameters defined
+}
+
+
+/**
+ * Internal function for burning_zone_acados_create: step 5
+ */
+void burning_zone_acados_create_setup_nlp_in_numerical_values(burning_zone_solver_capsule* capsule, const int N, double* new_time_steps)
+{
+    assert(N == capsule->nlp_solver_plan->N);
+    ocp_nlp_config* nlp_config = capsule->nlp_config;
+    ocp_nlp_dims* nlp_dims = capsule->nlp_dims;
+
+    int tmp_int = 0;
+
+    /************************************************
+    *  nlp_in
+    ************************************************/
+    ocp_nlp_in * nlp_in = capsule->nlp_in;
+    /************************************************
+    *  nlp_out
+    ************************************************/
+    ocp_nlp_out * nlp_out = capsule->nlp_out;
+
+    // set up time_steps and cost_scaling
+
+    if (new_time_steps)
+    {
+        // NOTE: this sets scaling and time_steps
+        burning_zone_acados_update_time_steps(capsule, N, new_time_steps);
+    }
+    else
+    {
+        // set time_steps
+    
+        double time_step = 5;
+        for (int i = 0; i < N; i++)
+        {
+            ocp_nlp_in_set(nlp_config, nlp_dims, nlp_in, i, "Ts", &time_step);
+        }
+        // set cost scaling
+        double* cost_scaling = malloc((N+1)*sizeof(double));
+        cost_scaling[0] = 5;
+        cost_scaling[1] = 5;
+        cost_scaling[2] = 5;
+        cost_scaling[3] = 5;
+        cost_scaling[4] = 5;
+        cost_scaling[5] = 5;
+        cost_scaling[6] = 5;
+        cost_scaling[7] = 5;
+        cost_scaling[8] = 5;
+        cost_scaling[9] = 5;
+        cost_scaling[10] = 5;
+        cost_scaling[11] = 5;
+        cost_scaling[12] = 5;
+        cost_scaling[13] = 5;
+        cost_scaling[14] = 5;
+        cost_scaling[15] = 5;
+        cost_scaling[16] = 5;
+        cost_scaling[17] = 5;
+        cost_scaling[18] = 5;
+        cost_scaling[19] = 5;
+        cost_scaling[20] = 5;
+        cost_scaling[21] = 5;
+        cost_scaling[22] = 5;
+        cost_scaling[23] = 5;
+        cost_scaling[24] = 5;
+        cost_scaling[25] = 5;
+        cost_scaling[26] = 5;
+        cost_scaling[27] = 5;
+        cost_scaling[28] = 5;
+        cost_scaling[29] = 5;
+        cost_scaling[30] = 5;
+        cost_scaling[31] = 5;
+        cost_scaling[32] = 5;
+        cost_scaling[33] = 5;
+        cost_scaling[34] = 5;
+        cost_scaling[35] = 5;
+        cost_scaling[36] = 5;
+        cost_scaling[37] = 5;
+        cost_scaling[38] = 5;
+        cost_scaling[39] = 5;
+        cost_scaling[40] = 5;
+        cost_scaling[41] = 5;
+        cost_scaling[42] = 5;
+        cost_scaling[43] = 5;
+        cost_scaling[44] = 5;
+        cost_scaling[45] = 5;
+        cost_scaling[46] = 5;
+        cost_scaling[47] = 5;
+        cost_scaling[48] = 5;
+        cost_scaling[49] = 5;
+        cost_scaling[50] = 5;
+        cost_scaling[51] = 5;
+        cost_scaling[52] = 5;
+        cost_scaling[53] = 5;
+        cost_scaling[54] = 5;
+        cost_scaling[55] = 5;
+        cost_scaling[56] = 5;
+        cost_scaling[57] = 5;
+        cost_scaling[58] = 5;
+        cost_scaling[59] = 5;
+        cost_scaling[60] = 5;
+        cost_scaling[61] = 5;
+        cost_scaling[62] = 5;
+        cost_scaling[63] = 5;
+        cost_scaling[64] = 5;
+        cost_scaling[65] = 5;
+        cost_scaling[66] = 5;
+        cost_scaling[67] = 5;
+        cost_scaling[68] = 5;
+        cost_scaling[69] = 5;
+        cost_scaling[70] = 5;
+        cost_scaling[71] = 5;
+        cost_scaling[72] = 5;
+        cost_scaling[73] = 5;
+        cost_scaling[74] = 5;
+        cost_scaling[75] = 5;
+        cost_scaling[76] = 5;
+        cost_scaling[77] = 5;
+        cost_scaling[78] = 5;
+        cost_scaling[79] = 5;
+        cost_scaling[80] = 5;
+        cost_scaling[81] = 5;
+        cost_scaling[82] = 5;
+        cost_scaling[83] = 5;
+        cost_scaling[84] = 5;
+        cost_scaling[85] = 5;
+        cost_scaling[86] = 5;
+        cost_scaling[87] = 5;
+        cost_scaling[88] = 5;
+        cost_scaling[89] = 5;
+        cost_scaling[90] = 5;
+        cost_scaling[91] = 5;
+        cost_scaling[92] = 5;
+        cost_scaling[93] = 5;
+        cost_scaling[94] = 5;
+        cost_scaling[95] = 5;
+        cost_scaling[96] = 5;
+        cost_scaling[97] = 5;
+        cost_scaling[98] = 5;
+        cost_scaling[99] = 5;
+        cost_scaling[100] = 5;
+        cost_scaling[101] = 5;
+        cost_scaling[102] = 5;
+        cost_scaling[103] = 5;
+        cost_scaling[104] = 5;
+        cost_scaling[105] = 5;
+        cost_scaling[106] = 5;
+        cost_scaling[107] = 5;
+        cost_scaling[108] = 5;
+        cost_scaling[109] = 5;
+        cost_scaling[110] = 5;
+        cost_scaling[111] = 5;
+        cost_scaling[112] = 5;
+        cost_scaling[113] = 5;
+        cost_scaling[114] = 5;
+        cost_scaling[115] = 5;
+        cost_scaling[116] = 5;
+        cost_scaling[117] = 5;
+        cost_scaling[118] = 5;
+        cost_scaling[119] = 5;
+        cost_scaling[120] = 5;
+        cost_scaling[121] = 5;
+        cost_scaling[122] = 5;
+        cost_scaling[123] = 5;
+        cost_scaling[124] = 5;
+        cost_scaling[125] = 5;
+        cost_scaling[126] = 5;
+        cost_scaling[127] = 5;
+        cost_scaling[128] = 5;
+        cost_scaling[129] = 5;
+        cost_scaling[130] = 5;
+        cost_scaling[131] = 5;
+        cost_scaling[132] = 5;
+        cost_scaling[133] = 5;
+        cost_scaling[134] = 5;
+        cost_scaling[135] = 5;
+        cost_scaling[136] = 5;
+        cost_scaling[137] = 5;
+        cost_scaling[138] = 5;
+        cost_scaling[139] = 5;
+        cost_scaling[140] = 5;
+        cost_scaling[141] = 5;
+        cost_scaling[142] = 5;
+        cost_scaling[143] = 5;
+        cost_scaling[144] = 5;
+        cost_scaling[145] = 5;
+        cost_scaling[146] = 5;
+        cost_scaling[147] = 5;
+        cost_scaling[148] = 5;
+        cost_scaling[149] = 5;
+        cost_scaling[150] = 5;
+        cost_scaling[151] = 5;
+        cost_scaling[152] = 5;
+        cost_scaling[153] = 5;
+        cost_scaling[154] = 5;
+        cost_scaling[155] = 5;
+        cost_scaling[156] = 5;
+        cost_scaling[157] = 5;
+        cost_scaling[158] = 5;
+        cost_scaling[159] = 5;
+        cost_scaling[160] = 5;
+        cost_scaling[161] = 5;
+        cost_scaling[162] = 5;
+        cost_scaling[163] = 5;
+        cost_scaling[164] = 5;
+        cost_scaling[165] = 5;
+        cost_scaling[166] = 5;
+        cost_scaling[167] = 5;
+        cost_scaling[168] = 5;
+        cost_scaling[169] = 5;
+        cost_scaling[170] = 5;
+        cost_scaling[171] = 5;
+        cost_scaling[172] = 5;
+        cost_scaling[173] = 5;
+        cost_scaling[174] = 5;
+        cost_scaling[175] = 5;
+        cost_scaling[176] = 5;
+        cost_scaling[177] = 5;
+        cost_scaling[178] = 5;
+        cost_scaling[179] = 5;
+        cost_scaling[180] = 5;
+        cost_scaling[181] = 5;
+        cost_scaling[182] = 5;
+        cost_scaling[183] = 5;
+        cost_scaling[184] = 5;
+        cost_scaling[185] = 5;
+        cost_scaling[186] = 5;
+        cost_scaling[187] = 5;
+        cost_scaling[188] = 5;
+        cost_scaling[189] = 5;
+        cost_scaling[190] = 5;
+        cost_scaling[191] = 5;
+        cost_scaling[192] = 5;
+        cost_scaling[193] = 5;
+        cost_scaling[194] = 5;
+        cost_scaling[195] = 5;
+        cost_scaling[196] = 5;
+        cost_scaling[197] = 5;
+        cost_scaling[198] = 5;
+        cost_scaling[199] = 5;
+        cost_scaling[200] = 1;
+        for (int i = 0; i <= N; i++)
+        {
+            ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "scaling", &cost_scaling[i]);
+        }
+        free(cost_scaling);
+    }
+
+
+
+    /**** Cost ****/
+
+
+
+
+
+
+    /**** Constraints ****/
+
+    // bounds for initial stage
+    // x0
+    int* idxbx0 = malloc(NBX0 * sizeof(int));
+    idxbx0[0] = 0;
+    idxbx0[1] = 1;
+    idxbx0[2] = 2;
+    idxbx0[3] = 3;
+    idxbx0[4] = 4;
+    idxbx0[5] = 5;
+    idxbx0[6] = 6;
+    idxbx0[7] = 7;
+    idxbx0[8] = 8;
+    idxbx0[9] = 9;
+    idxbx0[10] = 10;
+    idxbx0[11] = 11;
+    idxbx0[12] = 12;
+    idxbx0[13] = 13;
+    idxbx0[14] = 14;
+
+    double* lubx0 = calloc(2*NBX0, sizeof(double));
+    double* lbx0 = lubx0;
+    double* ubx0 = lubx0 + NBX0;
+    // change only the non-zero elements:
+
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "idxbx", idxbx0);
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "lbx", lbx0);
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "ubx", ubx0);
+    free(idxbx0);
+    free(lubx0);
+    // idxbxe_0
+    int* idxbxe_0 = malloc(15 * sizeof(int));
+    idxbxe_0[0] = 0;
+    idxbxe_0[1] = 1;
+    idxbxe_0[2] = 2;
+    idxbxe_0[3] = 3;
+    idxbxe_0[4] = 4;
+    idxbxe_0[5] = 5;
+    idxbxe_0[6] = 6;
+    idxbxe_0[7] = 7;
+    idxbxe_0[8] = 8;
+    idxbxe_0[9] = 9;
+    idxbxe_0[10] = 10;
+    idxbxe_0[11] = 11;
+    idxbxe_0[12] = 12;
+    idxbxe_0[13] = 13;
+    idxbxe_0[14] = 14;
+    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "idxbxe", idxbxe_0);
+    free(idxbxe_0);
+
+
+
+
+
+
+
+
+
+
+
+
+    /* constraints that are the same for initial and intermediate */
+    // u
+    int* idxbu = malloc(NBU * sizeof(int));
+    idxbu[0] = 0;
+    double* lubu = calloc(2*NBU, sizeof(double));
+    double* lbu = lubu;
+    double* ubu = lubu + NBU;
+    lbu[0] = 2;
+    ubu[0] = 6;
+
+    for (int i = 0; i < N; i++)
+    {
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, i, "idxbu", idxbu);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, i, "lbu", lbu);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, i, "ubu", ubu);
+    }
+    free(idxbu);
+    free(lubu);
+
+
+
+
+
+
+    /* Path constraints */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    /* terminal constraints */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+// this function only sets external functions, numerical values are set in burning_zone_acados_create_setup_nlp_in_numerical_values
+void burning_zone_acados_create_setup_nlp_in(burning_zone_solver_capsule* capsule, const int N)
+{
+    assert(N == capsule->nlp_solver_plan->N);
+    ocp_nlp_config* nlp_config = capsule->nlp_config;
+    ocp_nlp_dims* nlp_dims = capsule->nlp_dims;
+
+    /************************************************
+    *  nlp_in
+    ************************************************/
+    ocp_nlp_in * nlp_in = capsule->nlp_in;
+    /************************************************
+    *  nlp_out
+    ************************************************/
+    ocp_nlp_out * nlp_out = capsule->nlp_out;
+
+
+    /**** Dynamics ****/
+    for (int i = 0; i < N; i++)
+    {
+        ocp_nlp_dynamics_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, i, "impl_dae_fun", &capsule->impl_dae_fun[i]);
+        ocp_nlp_dynamics_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, i,
+                                   "impl_dae_fun_jac_x_xdot_z", &capsule->impl_dae_fun_jac_x_xdot_z[i]);
+        ocp_nlp_dynamics_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, i,
+                                   "impl_dae_jac_x_xdot_u", &capsule->impl_dae_jac_x_xdot_u_z[i]);
+        
+    }
+
+    /**** Cost ****/
+    ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, 0, "ext_cost_fun", &capsule->ext_cost_0_fun);
+    ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, 0, "ext_cost_fun_jac", &capsule->ext_cost_0_fun_jac);
+    ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, 0, "ext_cost_fun_jac_hess", &capsule->ext_cost_0_fun_jac_hess);
+    
+    
+    for (int i = 1; i < N; i++)
+    {
+        ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, i, "ext_cost_fun", &capsule->ext_cost_fun[i-1]);
+        ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, i, "ext_cost_fun_jac", &capsule->ext_cost_fun_jac[i-1]);
+        ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, i, "ext_cost_fun_jac_hess", &capsule->ext_cost_fun_jac_hess[i-1]);
+        
+        
+    }
+    ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, N, "ext_cost_fun", &capsule->ext_cost_e_fun);
+    ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, N, "ext_cost_fun_jac", &capsule->ext_cost_e_fun_jac);
+    ocp_nlp_cost_model_set_external_param_fun(nlp_config, nlp_dims, nlp_in, N, "ext_cost_fun_jac_hess", &capsule->ext_cost_e_fun_jac_hess);
+    
+    
+
+    /**** Constraints ****/
+
+    // bounds for initial stage
+
+
+
+
+
+
+    /* terminal constraints */
+}
+
+
+static void burning_zone_acados_create_set_opts(burning_zone_solver_capsule* capsule)
+{
+    const int N = capsule->nlp_solver_plan->N;
+    ocp_nlp_config* nlp_config = capsule->nlp_config;
+    void *nlp_opts = capsule->nlp_opts;
+
+    /************************************************
+    *  opts
+    ************************************************/
+
+
+
+    int fixed_hess = 0;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "fixed_hess", &fixed_hess);
+
+    double globalization_fixed_step_length = 1;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "globalization_fixed_step_length", &globalization_fixed_step_length);
+
+
+
+
+    int with_solution_sens_wrt_params = false;
+    ocp_nlp_solver_opts_set(nlp_config, capsule->nlp_opts, "with_solution_sens_wrt_params", &with_solution_sens_wrt_params);
+
+    int with_value_sens_wrt_params = false;
+    ocp_nlp_solver_opts_set(nlp_config, capsule->nlp_opts, "with_value_sens_wrt_params", &with_value_sens_wrt_params);
+
+    double solution_sens_qp_t_lam_min = 0.000000001;
+    ocp_nlp_solver_opts_set(nlp_config, capsule->nlp_opts, "solution_sens_qp_t_lam_min", &solution_sens_qp_t_lam_min);
+
+    int globalization_full_step_dual = 0;
+    ocp_nlp_solver_opts_set(nlp_config, capsule->nlp_opts, "globalization_full_step_dual", &globalization_full_step_dual);
+
+    // set collocation type (relevant for implicit integrators)
+    sim_collocation_type collocation_type = GAUSS_LEGENDRE;
+    for (int i = 0; i < N; i++)
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "dynamics_collocation_type", &collocation_type);
+
+    // set up sim_method_num_steps
+    // all sim_method_num_steps are identical
+    int sim_method_num_steps = 1;
+    for (int i = 0; i < N; i++)
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "dynamics_num_steps", &sim_method_num_steps);
+
+    // set up sim_method_num_stages
+    // all sim_method_num_stages are identical
+    int sim_method_num_stages = 4;
+    for (int i = 0; i < N; i++)
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "dynamics_num_stages", &sim_method_num_stages);
+
+    int newton_iter_val = 3;
+    for (int i = 0; i < N; i++)
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "dynamics_newton_iter", &newton_iter_val);
+
+    double newton_tol_val = 0;
+    for (int i = 0; i < N; i++)
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "dynamics_newton_tol", &newton_tol_val);
+
+    // set up sim_method_jac_reuse
+    bool tmp_bool = (bool) 0;
+    for (int i = 0; i < N; i++)
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "dynamics_jac_reuse", &tmp_bool);
+
+    double levenberg_marquardt = 0;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "levenberg_marquardt", &levenberg_marquardt);
+
+    /* options QP solver */
+    int qp_solver_cond_N;const int qp_solver_cond_N_ori = 200;
+    qp_solver_cond_N = N < qp_solver_cond_N_ori ? N : qp_solver_cond_N_ori; // use the minimum value here
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_cond_N", &qp_solver_cond_N);
+
+    int nlp_solver_ext_qp_res = 0;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "ext_qp_res", &nlp_solver_ext_qp_res);
+
+    bool store_iterates = false;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "store_iterates", &store_iterates);
+    // set HPIPM mode: should be done before setting other QP solver options
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_hpipm_mode", "BALANCE");
+
+
+
+    int qp_solver_t0_init = 2;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_t0_init", &qp_solver_t0_init);
+
+
+
+
+    int as_rti_iter = 1;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "as_rti_iter", &as_rti_iter);
+
+    int as_rti_level = 4;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "as_rti_level", &as_rti_level);
+
+    int rti_log_residuals = 0;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "rti_log_residuals", &rti_log_residuals);
+
+    int rti_log_only_available_residuals = 0;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "rti_log_only_available_residuals", &rti_log_only_available_residuals);
+
+    bool with_anderson_acceleration = false;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "with_anderson_acceleration", &with_anderson_acceleration);
+
+    double anderson_activation_threshold = 10;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "anderson_activation_threshold", &anderson_activation_threshold);
+
+    int qp_solver_iter_max = 50;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_iter_max", &qp_solver_iter_max);
+
+
+
+    int print_level = 0;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "print_level", &print_level);
+    int qp_solver_cond_ric_alg = 1;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_cond_ric_alg", &qp_solver_cond_ric_alg);
+
+    int qp_solver_ric_alg = 1;
+    ocp_nlp_solver_opts_set(nlp_config, nlp_opts, "qp_ric_alg", &qp_solver_ric_alg);
+
+
+    int ext_cost_num_hess = 0;
+    for (int i = 0; i < N; i++)
+    {
+        ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, i, "cost_numerical_hessian", &ext_cost_num_hess);
+    }
+    ocp_nlp_solver_opts_set_at_stage(nlp_config, nlp_opts, N, "cost_numerical_hessian", &ext_cost_num_hess);
+}
+
+
+/**
+ * Internal function for burning_zone_acados_create: step 7
+ */
+void burning_zone_acados_set_nlp_out(burning_zone_solver_capsule* capsule)
+{
+    const int N = capsule->nlp_solver_plan->N;
+    ocp_nlp_config* nlp_config = capsule->nlp_config;
+    ocp_nlp_dims* nlp_dims = capsule->nlp_dims;
+    ocp_nlp_out* nlp_out = capsule->nlp_out;
+    ocp_nlp_in* nlp_in = capsule->nlp_in;
+
+    // initialize primal solution
+    double* xu0 = calloc(NX+NU, sizeof(double));
+    double* x0 = xu0;
+
+    // initialize with x0
+
+
+    double* u0 = xu0 + NX;
+
+    for (int i = 0; i < N; i++)
+    {
+        // x0
+        ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, i, "x", x0);
+        // u0
+        ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, i, "u", u0);
+    }
+    ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, N, "x", x0);
+    free(xu0);
+}
+
+
+/**
+ * Internal function for burning_zone_acados_create: step 9
+ */
+int burning_zone_acados_create_precompute(burning_zone_solver_capsule* capsule) {
+    int status = ocp_nlp_precompute(capsule->nlp_solver, capsule->nlp_in, capsule->nlp_out);
+
+    if (status != ACADOS_SUCCESS) {
+        printf("\nocp_nlp_precompute failed!\n\n");
+        exit(1);
+    }
+
+    return status;
+}
+
+
+int burning_zone_acados_create_with_discretization(burning_zone_solver_capsule* capsule, int N, double* new_time_steps)
+{
+    // If N does not match the number of shooting intervals used for code generation, new_time_steps must be given.
+    if (N != BURNING_ZONE_N && !new_time_steps) {
+        fprintf(stderr, "burning_zone_acados_create_with_discretization: new_time_steps is NULL " \
+            "but the number of shooting intervals (= %d) differs from the number of " \
+            "shooting intervals (= %d) during code generation! Please provide a new vector of time_stamps!\n", \
+             N, BURNING_ZONE_N);
+        return 1;
+    }
+
+    // number of expected runtime parameters
+    capsule->nlp_np = NP;
+
+    // 1) create and set nlp_solver_plan; create nlp_config
+    capsule->nlp_solver_plan = ocp_nlp_plan_create(N);
+    burning_zone_acados_create_set_plan(capsule->nlp_solver_plan, N);
+    capsule->nlp_config = ocp_nlp_config_create(*capsule->nlp_solver_plan);
+
+    // 2) create and set dimensions
+    capsule->nlp_dims = burning_zone_acados_create_setup_dimensions(capsule);
+
+    // 3) create and set nlp_opts
+    capsule->nlp_opts = ocp_nlp_solver_opts_create(capsule->nlp_config, capsule->nlp_dims);
+    burning_zone_acados_create_set_opts(capsule);
+
+    // 4) create and set nlp_out
+    // 4.1) nlp_out
+    capsule->nlp_out = ocp_nlp_out_create(capsule->nlp_config, capsule->nlp_dims);
+    // 4.2) sens_out
+    capsule->sens_out = ocp_nlp_out_create(capsule->nlp_config, capsule->nlp_dims);
+    burning_zone_acados_set_nlp_out(capsule);
+
+    // 5) create nlp_in
+    capsule->nlp_in = ocp_nlp_in_create(capsule->nlp_config, capsule->nlp_dims);
+
+    // 6) setup functions, nlp_in and default parameters
+    burning_zone_acados_create_setup_functions(capsule);
+    burning_zone_acados_create_setup_nlp_in(capsule, N);
+    burning_zone_acados_create_setup_nlp_in_numerical_values(capsule, N, new_time_steps);
+    burning_zone_acados_create_set_default_parameters(capsule);
+
+    // 7) create solver
+    capsule->nlp_solver = ocp_nlp_solver_create(capsule->nlp_config, capsule->nlp_dims, capsule->nlp_opts, capsule->nlp_in);
+
+
+    // 8) do precomputations
+    int status = burning_zone_acados_create_precompute(capsule);
+
+    return status;
+}
+
+/**
+ * This function is for updating an already initialized solver with a different number of qp_cond_N. It is useful for code reuse after code export.
+ */
+int burning_zone_acados_update_qp_solver_cond_N(burning_zone_solver_capsule* capsule, int qp_solver_cond_N)
+{
+    // 1) destroy solver
+    ocp_nlp_solver_destroy(capsule->nlp_solver);
+
+    // 2) set new value for "qp_cond_N"
+    const int N = capsule->nlp_solver_plan->N;
+    if(qp_solver_cond_N > N)
+        printf("Warning: qp_solver_cond_N = %d > N = %d\n", qp_solver_cond_N, N);
+    ocp_nlp_solver_opts_set(capsule->nlp_config, capsule->nlp_opts, "qp_cond_N", &qp_solver_cond_N);
+
+    // 3) continue with the remaining steps from burning_zone_acados_create_with_discretization(...):
+    // -> 8) create solver
+    capsule->nlp_solver = ocp_nlp_solver_create(capsule->nlp_config, capsule->nlp_dims, capsule->nlp_opts, capsule->nlp_in);
+
+    // -> 9) do precomputations
+    int status = burning_zone_acados_create_precompute(capsule);
+    return status;
+}
+
+
+int burning_zone_acados_reset(burning_zone_solver_capsule* capsule, int reset_qp_solver_mem, int reset_numerical_values, int reset_solver_options, int reset_x_to_x0_bar)
+{
+
+    // set initialization to all zeros
+    const int N = capsule->nlp_solver_plan->N;
+    ocp_nlp_config* nlp_config = capsule->nlp_config;
+    ocp_nlp_dims* nlp_dims = capsule->nlp_dims;
+    ocp_nlp_out* nlp_out = capsule->nlp_out;
+    ocp_nlp_in* nlp_in = capsule->nlp_in;
+    ocp_nlp_solver* nlp_solver = capsule->nlp_solver;
+
+    // sets primal and dual iterates to zero
+    ocp_nlp_out_set_values_to_zero(nlp_config, nlp_dims, nlp_out);
+
+    // TODO this should be implemented using blasfeo_dvecse
+    double* buffer = calloc(NX+NZ, sizeof(double));
+    for (int i=0; i<N; i++)
+    {
+            ocp_nlp_set(nlp_solver, i, "xdot_guess", buffer);
+            ocp_nlp_set(nlp_solver, i, "z_guess", buffer);
+    }
+    // get qp_status: if NaN -> reset memory
+    int qp_status;
+    ocp_nlp_get(capsule->nlp_solver, "qp_status", &qp_status);
+    if (reset_qp_solver_mem || (qp_status == 3))
+    {
+        // printf("\nin reset qp_status %d -> resetting QP memory\n", qp_status);
+        ocp_nlp_solver_reset_qp_memory(nlp_solver, nlp_in, nlp_out);
+    }
+
+    if (reset_numerical_values)
+    {
+        // reset parameters to initial values
+        burning_zone_acados_create_set_default_parameters(capsule);
+
+        // reset numerical values in nlp_in
+        burning_zone_acados_create_setup_nlp_in_numerical_values(capsule, N, NULL);
+    }
+
+    if (reset_solver_options)
+    {
+        // reset solver options to initial values
+        burning_zone_acados_create_set_opts(capsule);
+    }
+
+    if (reset_x_to_x0_bar)
+    {ocp_nlp_constraints_model_get(nlp_config, nlp_dims, nlp_in, 0, "lbx", buffer);
+        for (int i=0; i<N+1; i++)
+        {
+            ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, i, "x", buffer);
+        }
+    }
+
+    free(buffer);
+    return 0;
+}
+
+
+
+
+int burning_zone_acados_update_params(burning_zone_solver_capsule* capsule, int stage, double *p, int np)
+{
+    int solver_status = 0;
+
+    int casadi_np = 4;
+    if (casadi_np != np) {
+        printf("acados_update_params: trying to set %i parameters for external functions."
+            " External function has %i parameters. Exiting.\n", np, casadi_np);
+        exit(1);
+    }
+    ocp_nlp_in_set(capsule->nlp_config, capsule->nlp_dims, capsule->nlp_in, stage, "parameter_values", p);
+
+    return solver_status;
+}
+
+
+int burning_zone_acados_update_params_sparse(burning_zone_solver_capsule * capsule, int stage, int *idx, double *p, int n_update)
+{
+    ocp_nlp_in_set_params_sparse(capsule->nlp_config, capsule->nlp_dims, capsule->nlp_in, stage, idx, p, n_update);
+
+    return 0;
+}
+
+
+int burning_zone_acados_set_p_global_and_precompute_dependencies(burning_zone_solver_capsule* capsule, double* data, int data_len)
+{
+
+    // printf("No global_data, burning_zone_acados_set_p_global_and_precompute_dependencies does nothing.\n");
+    return 0;
+}
+
+
+
+
+int burning_zone_acados_solve(burning_zone_solver_capsule* capsule)
+{
+    // solve NLP
+    int solver_status = ocp_nlp_solve(capsule->nlp_solver, capsule->nlp_in, capsule->nlp_out);
+
+    return solver_status;
+}
+
+
+
+int burning_zone_acados_setup_qp_matrices_and_factorize(burning_zone_solver_capsule* capsule)
+{
+    int solver_status = ocp_nlp_setup_qp_matrices_and_factorize(capsule->nlp_solver, capsule->nlp_in, capsule->nlp_out);
+
+    return solver_status;
+}
+
+
+
+
+
+
+int burning_zone_acados_free(burning_zone_solver_capsule* capsule)
+{
+    // before destroying, keep some info
+    const int N = capsule->nlp_solver_plan->N;
+    // free memory
+    ocp_nlp_solver_opts_destroy(capsule->nlp_opts);
+    ocp_nlp_in_destroy(capsule->nlp_in);
+    ocp_nlp_out_destroy(capsule->nlp_out);
+    ocp_nlp_out_destroy(capsule->sens_out);
+    ocp_nlp_solver_destroy(capsule->nlp_solver);
+    ocp_nlp_dims_destroy(capsule->nlp_dims);
+    ocp_nlp_config_destroy(capsule->nlp_config);
+    ocp_nlp_plan_destroy(capsule->nlp_solver_plan);
+
+    /* free external function */
+    // dynamics
+    for (int i = 0; i < N; i++)
+    {
+        external_function_external_param_casadi_free(&capsule->impl_dae_fun[i]);
+        external_function_external_param_casadi_free(&capsule->impl_dae_fun_jac_x_xdot_z[i]);
+        external_function_external_param_casadi_free(&capsule->impl_dae_jac_x_xdot_u_z[i]);
+        
+    }
+    free(capsule->impl_dae_fun);
+    free(capsule->impl_dae_fun_jac_x_xdot_z);
+    free(capsule->impl_dae_jac_x_xdot_u_z);
+    
+
+    // cost
+    external_function_external_param_casadi_free(&capsule->ext_cost_0_fun);
+    external_function_external_param_casadi_free(&capsule->ext_cost_0_fun_jac);
+    external_function_external_param_casadi_free(&capsule->ext_cost_0_fun_jac_hess);
+    
+    
+    for (int i = 0; i < N - 1; i++)
+    {
+        external_function_external_param_casadi_free(&capsule->ext_cost_fun[i]);
+        external_function_external_param_casadi_free(&capsule->ext_cost_fun_jac[i]);
+        external_function_external_param_casadi_free(&capsule->ext_cost_fun_jac_hess[i]);
+        
+        
+    }
+    free(capsule->ext_cost_fun);
+    free(capsule->ext_cost_fun_jac);
+    free(capsule->ext_cost_fun_jac_hess);
+    external_function_external_param_casadi_free(&capsule->ext_cost_e_fun);
+    external_function_external_param_casadi_free(&capsule->ext_cost_e_fun_jac);
+    external_function_external_param_casadi_free(&capsule->ext_cost_e_fun_jac_hess);
+    
+    
+
+    // constraints
+
+
+
+    return 0;
+}
+
+
+void burning_zone_acados_print_stats(burning_zone_solver_capsule* capsule)
+{
+    int nlp_iter, stat_m, stat_n, tmp_int;
+    ocp_nlp_get(capsule->nlp_solver, "nlp_iter", &nlp_iter);
+    ocp_nlp_get(capsule->nlp_solver, "stat_n", &stat_n);
+    ocp_nlp_get(capsule->nlp_solver, "stat_m", &stat_m);
+
+
+    int stat_n_max = 16;
+    if (stat_n > stat_n_max)
+    {
+        printf("stat_n_max = %d is too small, increase it in the template!\n", stat_n_max);
+        exit(1);
+    }
+    double stat[1296];
+    ocp_nlp_get(capsule->nlp_solver, "statistics", stat);
+
+    int nrow = nlp_iter+1 < stat_m ? nlp_iter+1 : stat_m;
+
+
+    printf("iter\tqp_stat\tqp_iter\n");
+    for (int i = 0; i < nrow; i++)
+    {
+        for (int j = 0; j < stat_n + 1; j++)
+        {
+            tmp_int = (int) stat[i + j * nrow];
+            printf("%d\t", tmp_int);
+        }
+        printf("\n");
+    }
+}
+
+int burning_zone_acados_custom_update(burning_zone_solver_capsule* capsule, double* data, int data_len)
+{
+    (void)capsule;
+    (void)data;
+    (void)data_len;
+    printf("\ndummy function that can be called in between solver calls to update parameters or numerical data efficiently in C.\n");
+    printf("nothing set yet..\n");
+    return 1;
+
+}
+
+
+
+ocp_nlp_in *burning_zone_acados_get_nlp_in(burning_zone_solver_capsule* capsule) { return capsule->nlp_in; }
+ocp_nlp_out *burning_zone_acados_get_nlp_out(burning_zone_solver_capsule* capsule) { return capsule->nlp_out; }
+ocp_nlp_out *burning_zone_acados_get_sens_out(burning_zone_solver_capsule* capsule) { return capsule->sens_out; }
+ocp_nlp_solver *burning_zone_acados_get_nlp_solver(burning_zone_solver_capsule* capsule) { return capsule->nlp_solver; }
+ocp_nlp_config *burning_zone_acados_get_nlp_config(burning_zone_solver_capsule* capsule) { return capsule->nlp_config; }
+void *burning_zone_acados_get_nlp_opts(burning_zone_solver_capsule* capsule) { return capsule->nlp_opts; }
+ocp_nlp_dims *burning_zone_acados_get_nlp_dims(burning_zone_solver_capsule* capsule) { return capsule->nlp_dims; }
+ocp_nlp_plan_t *burning_zone_acados_get_nlp_plan(burning_zone_solver_capsule* capsule) { return capsule->nlp_solver_plan; }

@@ -1,449 +1,515 @@
-import os
-import json
-import pickle
 import numpy as np
-import yaml
-
-from datetime import datetime
-
 import casadi as ca
+import yaml
+from Kiln.Burning import Burning
+from Kiln.GlobalState import GlobalState
+from acados_template import AcadosOcp, AcadosModel, AcadosOcpSolver
 
-def load_cfg(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-    
+
 class BurningMPCModel:
 
     def __init__(self, burning_model):
+        
+        self.np = 4
+
+        # ======================================================
+        # REFERENCE TO PHYSICAL MODEL
+        # ======================================================
         self.m = burning_model
+
+        # ======================================================
+        # DISCRETIZATION
+        # ======================================================
         self.N = burning_model.N
 
-    def dynamics(self, x, u):
+        # ======================================================
+        # STATE DIMENSIONS
+        # ======================================================
+        self.n_Tg = self.N
+        self.n_Ts = self.N
+        self.n_Tw = self.N
 
-        N = self.N
-        m = self.m
-        eps = m.eps
+        self.nx = self.n_Tg + self.n_Ts + self.n_Tw
+        self.nu = 1      # Fuel_rate
 
-        Tg = x[0:N]
-        Ts = x[N:2*N]
-        Tw = x[2*N:3*N]
+    # ======================================================
+    # STATE VECTOR
+    # ======================================================
+    def build_state(self):
 
-        fuel_rate = u * 1000.0 / 3600.0
-        Q_in = fuel_rate * m.LHV_petcoke  # baseline
-        q_vol = Q_in / (m.V_total + eps)
+        Tg = ca.SX.sym("Tg", self.N)
+        Ts = ca.SX.sym("Ts", self.N)
+        Tw = ca.SX.sym("Tw", self.N)
 
-        dTg = ca.vertcat((Tg[1:] - Tg[:-1]) / m.dz, 0)
-        dTs = ca.vertcat((Ts[1:] - Ts[:-1]) / m.dz, 0)
+        x = ca.vertcat(Tg, Ts, Tw)
 
-        q_gs = (m.hv_gs * m.a_gs * (Tg - Ts)) / m.V_cell
-        q_gw = (m.hv_gw * m.a_gw * (Tg - Tw)) / m.V_cell
-        q_ws = (m.hv_ws * m.a_ws * (Ts - Tw)) / m.V_cell
+        return x, Tg, Ts, Tw
 
-        C_g = m.rho_g * m.V_cell * m.Cp_g
-        C_s = 0.01 * m.rho_s * m.Cp_s
-        C_w = m.rho_wall * m.V_wall * m.Cp_wall
+    # ======================================================
+    # CONTROL VECTOR
+    # ======================================================
+    def build_control(self):
 
-        q_loss = (m.h_ext * m.A_wall * (Tw - m.T_amb)) / (m.V_cell + eps)
+        Fuel_rate = ca.SX.sym("Fuel_rate")
+        u = ca.vertcat(Fuel_rate)
 
-        Tg_dot = -m.u_g * dTg + (q_vol - q_gs - q_gw) / C_g
-        Ts_dot = -m.u_s * dTs + (q_gs - q_ws) / C_s
-        Tw_dot = (q_gw + q_ws - q_loss) / C_w
+        return u, Fuel_rate
 
-        return ca.vertcat(Tg_dot, Ts_dot, Tw_dot)
+    # ======================================================
+    # PARAMETERS
+    # ======================================================
+    def build_parameters(self):
+
+        O2 = ca.SX.sym("O2")
+        Petcoke = ca.SX.sym("Petcoke")
+        RDF_Fuel = ca.SX.sym("RDF_Fuel")
+        Calcination_sink = ca.SX.sym("Calcination_sink")
+
+        p = ca.vertcat(O2, Petcoke, RDF_Fuel, Calcination_sink)
+
+        return p, O2, Petcoke, RDF_Fuel, Calcination_sink
+
+    # ======================================================
+    # COMBUSTION EFFICIENCY
+    # ======================================================
+    def combustion_efficiency(self, O2):
+
+        return ca.exp(-((O2 - self.m.O2_opt) ** 2) / self.m.O2_sigma2)
+
+    # ======================================================
+    # HEAT SOURCE
+    # ======================================================
+    def build_heat_source(self, Fuel_rate, O2, Petcoke, RDF_Fuel, Calcination_sink):
+
+        # --------------------------------------------------
+        # Fuel fractions
+        # --------------------------------------------------
+        p = Petcoke
+        a = RDF_Fuel
+        l = ca.fmax(1.0 - p - a, 0.0)
+
+        norm = p + a + l + self.m.eps
+        p /= norm
+        a /= norm
+        l /= norm
+
+        # --------------------------------------------------
+        # Combustion efficiency
+        # --------------------------------------------------
+        eta = self.combustion_efficiency(O2)
+
+        # --------------------------------------------------
+        # Mixed fuel heating value
+        # --------------------------------------------------
+        LHV_mix = p * self.m.LHV_petcoke + l * self.m.LHV_lignite + a * self.m.LHV_RDF
+
+        # --------------------------------------------------
+        # Fuel conversion
+        # --------------------------------------------------
+        fuel_rate_kg_s = Fuel_rate * 1000.0 / 3600.0
+
+        # --------------------------------------------------
+        # Heat input
+        # --------------------------------------------------
+        Q_in = fuel_rate_kg_s * LHV_mix * eta
+        q_vol = Q_in / (self.m.V_total + self.m.eps)
+
+        # --------------------------------------------------
+        # Calcination sink
+        # --------------------------------------------------
+        sink_density = Calcination_sink / (self.m.V_total + self.m.eps)
+        q_vol -= 0.05 * sink_density
+
+        return q_vol
+
+    # ======================================================
+    # HEAT TRANSFER
+    # ======================================================
+    def build_heat_transfer(self, Tg, Ts, Tw):
+
+        q_gs = self.m.hv_gs * self.m.a_gs * (Tg - Ts) / self.m.V_cell
+        q_gw = self.m.hv_gw * self.m.a_gw * (Tg - Tw) / self.m.V_cell
+        q_ws = self.m.hv_ws * self.m.a_ws * (Ts - Tw) / self.m.V_cell
+
+        return q_gs, q_gw, q_ws
+
+    # ======================================================
+    # SPATIAL GRADIENTS
+    # ======================================================
+    def build_gradients(self, Tg, Ts):
+
+        dTg = (Tg[1:] - Tg[:-1]) / self.m.dz
+        dTs = (Ts[1:] - Ts[:-1]) / self.m.dz
+
+        dTg_dz = ca.vertcat(dTg[0], dTg)
+        dTs_dz = ca.vertcat(dTs[0], dTs)
+
+        return dTg_dz, dTs_dz
     
+    # ======================================================
+    # THERMAL CAPACITIES
+    # ======================================================
+    def build_capacities(self):
 
+        effective = 0.01
 
-        from acados_template import (
-            AcadosOcp,
-            AcadosOcpSolver,
-            AcadosModel,
+        C_s = self.m.rho_s * self.m.Cp_s
+        effective_C_s = effective * C_s
+
+        C_g = self.m.rho_g * self.m.V_cell * self.m.Cp_g
+        C_w = self.m.rho_wall * self.m.V_wall * self.m.Cp_wall
+
+        return C_g, effective_C_s, C_w
+    
+    # ======================================================
+    # WALL HEAT LOSSES
+    # ======================================================
+    def build_wall_losses(self, Tw):
+
+        q_loss = (
+            self.m.h_ext
+            * self.m.A_wall
+            * (Tw - self.m.T_amb)
+        ) / (self.m.V_cell + self.m.eps)
+
+        return q_loss
+    
+    # ======================================================
+    # DYNAMICS
+    # ======================================================
+    def build_dynamics(self):
+        
+        """
+        Build symbolic nonlinear kiln dynamics.
+
+        Returns
+        -------
+        x : CasADi state vector
+        u : CasADi control vector
+        p : CasADi parameter vector
+        xdot : Continuous-time state derivatives
+        """
+
+        x, Tg, Ts, Tw = self.build_state()
+        u, Fuel_rate = self.build_control()
+
+        p, O2, Petcoke, RDF_Fuel, Calcination_sink = self.build_parameters()
+
+        dTg_dz, dTs_dz = self.build_gradients(Tg, Ts)
+
+        q_vol = self.build_heat_source(
+            Fuel_rate, O2, Petcoke, RDF_Fuel, Calcination_sink
         )
 
-        # ==========================================================
-        # 1. CASADI DYNAMICS WRAPPER (Burning Model)
-        # ==========================================================
+        q_gs, q_gw, q_ws = self.build_heat_transfer(Tg, Ts, Tw)
 
-        def build_dynamics(model):
+        C_g, C_s, C_w = self.build_capacities()
 
-            N = model.N
-            dz = model.dz
+        q_loss = self.build_wall_losses(Tw)
 
-            Tg = ca.SX.sym("Tg", N)
-            Ts = ca.SX.sym("Ts", N)
-            Tw = ca.SX.sym("Tw", N)
+        Tg_dot = -self.m.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
+        Ts_dot = -self.m.u_s * dTs_dz + (q_gs - q_ws) / C_s
+        Tw_dot = (q_gw + q_ws - q_loss) / C_w
 
-            u = ca.SX.sym("Fuel")
-            eta = ca.SX.sym("eta")
+        xdot = ca.vertcat(Tg_dot, Ts_dot, Tw_dot)
 
-            # parameters (mix simplified)
-            LHV = ca.SX.sym("LHV")
-
-            eps = model.eps
-
-            fuel_rate = u * 1000.0 / 3600.0
-            Q_in = fuel_rate * LHV * eta
-            q_vol = Q_in / (model.V_total + eps)
-
-            # gradients
-            dTg = (Tg[1:] - Tg[:-1]) / dz
-            dTs = (Ts[1:] - Ts[:-1]) / dz
-
-            dTg_dz = ca.vertcat(dTg[0], dTg)
-            dTs_dz = ca.vertcat(dTs[0], dTs)
-
-            # heat transfer
-            q_gs = (model.hv_gs * model.a_gs * (Tg - Ts)) / model.V_cell
-            q_gw = (model.hv_gw * model.a_gw * (Tg - Tw)) / model.V_cell
-            q_ws = (model.hv_ws * model.a_ws * (Ts - Tw)) / model.V_cell
-
-            # capacities
-            C_g = model.rho_g * model.V_cell * model.Cp_g
-            C_s = 0.01 * model.rho_s * model.Cp_s
-            C_w = model.rho_wall * model.V_wall * model.Cp_wall
-
-            q_loss = (model.h_ext * model.A_wall * (Tw - model.T_amb)) / (model.V_cell + eps)
-
-            # dynamics
-            Tg_dot = -model.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
-            Ts_dot = -model.u_s * dTs_dz + (q_gs - q_ws) / C_s
-            Tw_dot = (q_gw + q_ws - q_loss) / C_w
-
-            xdot = ca.vertcat(Tg_dot, Ts_dot, Tw_dot)
-
-            x = ca.vertcat(Tg, Ts, Tw)
-
-            return x, xdot, u, eta, LHV
-
-
-        # ==========================================================
-        # 2. ACADOS OCP BUILDER
-        # ==========================================================
-
-        def build_acados_ocp(model, cfg):
-
-            ocp = AcadosOcp()
-
-            # ------------------------------------------------------
-            # MODEL
-            # ------------------------------------------------------
-            x, xdot, u, eta, LHV = build_dynamics(model)
-
-            nx = x.size1()
-            nu = u.size1()
-
-            acados_model = AcadosModel()
-            acados_model.x = x
-            acados_model.xdot = xdot
-            acados_model.u = u
-
-            acados_model.name = "burning_ocp"
-
-            ocp.model = acados_model
-
-            # ------------------------------------------------------
-            # TIME SETTINGS
-            # ------------------------------------------------------
-            ocp.dims.N = cfg["mpc"]["prediction_horizon"]
-            ocp.solver_options.tf = cfg["mpc"]["dt_prediction"] * ocp.dims.N
-
-            # ------------------------------------------------------
-            # COST
-            # ------------------------------------------------------
-            Tg_ref = cfg["mpc"]["Tg_setpoint"]
-            Ts_ref = cfg["mpc"]["Ts_setpoint"]
-
-            Q_T = cfg["mpc"]["w_T"]
-            R_F = cfg["mpc"]["w_F"]
-
-            cost_expr = (
-                Q_T * ca.sumsqr(x[:model.N] - Tg_ref)
-                + Q_T * ca.sumsqr(x[model.N:2*model.N] - Ts_ref)
-                + R_F * u**2
-            )
-
-            ocp.cost.cost_type = "EXTERNAL"
-            ocp.model.cost_expr_ext_cost = cost_expr
-
-            # ------------------------------------------------------
-            # CONSTRAINTS
-            # ------------------------------------------------------
-            ocp.constraints.lbu = np.array([cfg["mpc"]["fuel_min"]])
-            ocp.constraints.ubu = np.array([cfg["mpc"]["fuel_max"]])
-            ocp.constraints.idxbu = np.array([0])
-
-            # ------------------------------------------------------
-            # INITIAL CONDITION PLACEHOLDER
-            # ------------------------------------------------------
-            ocp.constraints.x0 = np.zeros(nx)
-
-            # ------------------------------------------------------
-            # SOLVER OPTIONS
-            # ------------------------------------------------------
-            ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-            ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
-            ocp.solver_options.integrator_type = "IRK"
-            ocp.solver_options.nlp_solver_type = "SQP_RTI"
-
-            ocp.solver_options.print_level = 0
-
-            return ocp
-
-
-        # ==========================================================
-        # 3. SOLVER WRAPPER (RL READY)
-        # ==========================================================
-
-from acados_template import AcadosOcp, AcadosModel, AcadosOcpSolver
-
+        return x, u, p, xdot
+    
 class ACADOSMPC:
 
-    def __init__(self, burning_model, cfg):
+    def __init__(self, cfg, burning_model):
 
-        self.m = burning_model
+        # ======================================================
+        # CONFIG
+        # ======================================================
         self.cfg = cfg
-        self.model = BurningMPCModel(burning_model)
 
-        self.N = burning_model.N
+        # ======================================================
+        # PHYSICAL MODEL
+        # ======================================================
+        self.burning_model = burning_model
 
-        self.ocp = AcadosOcp()
-        self.build()
+        # ======================================================
+        # CASADI MODEL
+        # ======================================================
+        self.casadi_model = BurningMPCModel(burning_model)
 
-        self.solver = AcadosOcpSolver(self.ocp)
+        # ======================================================
+        # BUILD MODEL
+        # ======================================================
+        self.model = self.build_model()
 
-    def build(self):
+        # ======================================================
+        # BUILD OCP
+        # ======================================================
+        self.ocp = self.build_ocp()
+        self.ocp = self.build_cost(self.ocp)
+        self.ocp = self.build_constraints(self.ocp)
+        self.ocp = self.build_solver_options(self.ocp)
 
-        N = self.N
+        # ======================================================
+        # SOLVER
+        # ======================================================
+        self.solver = self.build_solver()
 
-        x = ca.SX.sym("x", 3*N)
-        u = ca.SX.sym("u")
+    # ======================================================
+    # BUILD ACADOS MODEL
+    # ======================================================
+    def build_model(self):
 
-        xdot = self.model.dynamics(x, u)
+        x, u, p, xdot = self.casadi_model.build_dynamics()
 
         model = AcadosModel()
+        model.name = "burning_zone"
+
         model.x = x
-        model.xdot = xdot
         model.u = u
-        model.name = "burning"
+        model.p = p
 
-        self.ocp.model = model
+        model.xdot = ca.SX.sym("xdot", self.casadi_model.nx)
 
-        # -------------------------
-        # TIME
-        # -------------------------
-        self.ocp.dims.N = self.cfg["mpc"]["prediction_horizon"]
-        self.ocp.solver_options.tf = self.cfg["mpc"]["dt_prediction"] * self.ocp.dims.N
+        model.f_expl_expr = xdot
+        model.f_impl_expr = model.xdot - xdot
 
-        # -------------------------
-        # COST
-        # -------------------------
+        return model
+
+    # ======================================================
+    # BUILD OCP
+    # ======================================================
+    def build_ocp(self):
+
+        ocp = AcadosOcp()
+
+        ocp.model = self.model
+
+        ocp.parameter_values = np.zeros(self.casadi_model.np)
+
+        ocp.dims.N = self.cfg["mpc"]["prediction_horizon"]
+
+        ocp.solver_options.tf = (
+            self.cfg["mpc"]["prediction_horizon"]
+            * self.cfg["mpc"]["dt_prediction"]
+        )
+
+        return ocp
+
+    # ======================================================
+    # STAGE COST
+    # ======================================================
+    def build_stage_cost(self):
+
+        N = self.casadi_model.N
+
+        x = self.model.x
+        u = self.model.u
+
+        Tg = x[0:N]
+        Ts = x[N:2 * N]
+
+        Fuel_rate = u[0]
+
         Tg_ref = self.cfg["mpc"]["Tg_setpoint"]
         Ts_ref = self.cfg["mpc"]["Ts_setpoint"]
 
-        Q = self.cfg["mpc"]["w_T"]
-        R = self.cfg["mpc"]["w_F"]
+        w_T = float(self.cfg["mpc"]["w_T"])
+        w_F = float(self.cfg["mpc"]["w_F"])
+
+        return (
+            w_T * ca.sumsqr(Tg - Tg_ref)
+            + w_T * ca.sumsqr(Ts - Ts_ref)
+            + w_F * Fuel_rate**2
+        )
+
+    # ======================================================
+    # TERMINAL COST
+    # ======================================================
+    def build_terminal_cost(self):
+
+        N = self.casadi_model.N
+
+        x = self.model.x
 
         Tg = x[0:N]
-        Ts = x[N:2*N]
+        Ts = x[N:2 * N]
 
-        cost = Q * ca.sumsqr(Tg - Tg_ref) + Q * ca.sumsqr(Ts - Ts_ref) + R * u**2
-
-        self.ocp.cost.cost_type = "EXTERNAL"
-        self.ocp.model.cost_expr_ext_cost = cost
-
-        # -------------------------
-        # INPUT CONSTRAINT
-        # -------------------------
-        self.ocp.constraints.lbu = np.array([self.cfg["mpc"]["fuel_min"]])
-        self.ocp.constraints.ubu = np.array([self.cfg["mpc"]["fuel_max"]])
-        self.ocp.constraints.idxbu = np.array([0])
-
-        # -------------------------
-        # INITIAL STATE
-        # -------------------------
-        self.ocp.constraints.x0 = np.zeros(3*N)
-
-        # -------------------------
-        # SOLVER
-        # -------------------------
-        self.ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-        self.ocp.solver_options.nlp_solver_type = "SQP_RTI"
-        self.ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
-        self.ocp.solver_options.integrator_type = "IRK"
-        self.ocp.solver_options.print_level = 0
-
-    # ==================================================
-    def build(self):
-
-        m = self.m
-        N = self.N
-
-        x = ca.SX.sym("x", 3*N)
-        u = ca.SX.sym("u")
-
-        eta = ca.SX.sym("eta")
-        LHV = ca.SX.sym("LHV")
-
-        xdot = self.model.dynamics(x, u, eta, LHV)
-
-        model = AcadosModel()
-        model.x = x
-        model.xdot = xdot
-        model.u = u
-        model.name = "burning"
-
-        self.ocp.model = model
-
-        # TIME
-        self.ocp.dims.N = self.cfg["mpc"]["prediction_horizon"]
-        self.ocp.solver_options.tf = self.cfg["mpc"]["dt_prediction"] * self.ocp.dims.N
-
-        # COST (REAL ACADOS STYLE)
         Tg_ref = self.cfg["mpc"]["Tg_setpoint"]
         Ts_ref = self.cfg["mpc"]["Ts_setpoint"]
 
-        Q = self.cfg["mpc"]["w_T"]
-        R = self.cfg["mpc"]["w_F"]
+        w_T = float(self.cfg["mpc"]["w_T"])
 
-        cost = 0
+        return (
+            w_T * ca.sumsqr(Tg - Tg_ref)
+            + w_T * ca.sumsqr(Ts - Ts_ref)
+        )
 
-        Tg = x[0:N]
-        Ts = x[N:2*N]
+    # ======================================================
+    # COST
+    # ======================================================
+    def build_cost(self, ocp):
 
-        cost += Q * ca.sumsqr(Tg - Tg_ref)
-        cost += Q * ca.sumsqr(Ts - Ts_ref)
-        cost += R * u**2
+        ocp.cost.cost_type = "EXTERNAL"
+        ocp.cost.cost_type_e = "EXTERNAL"
 
-        self.ocp.cost.cost_type = "EXTERNAL"
-        self.ocp.model.cost_expr_ext_cost = cost
+        ocp.model.cost_expr_ext_cost = self.build_stage_cost()
+        ocp.model.cost_expr_ext_cost_e = self.build_terminal_cost()
 
-        # CONSTRAINTS
-        self.ocp.constraints.lbu = np.array([self.cfg["mpc"]["fuel_min"]])
-        self.ocp.constraints.ubu = np.array([self.cfg["mpc"]["fuel_max"]])
-        self.ocp.constraints.idxbu = np.array([0])
+        return ocp
 
-        self.ocp.constraints.x0 = np.zeros(3*N)
+    # ======================================================
+    # CONSTRAINTS
+    # ======================================================
+    def build_constraints(self, ocp):
 
-        # SOLVER
-        self.ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-        self.ocp.solver_options.nlp_solver_type = "SQP_RTI"
-        self.ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
-        self.ocp.solver_options.integrator_type = "IRK"
-    
-    
+        ocp.constraints.lbu = np.array([self.cfg["mpc"]["fuel_min"]])
+        ocp.constraints.ubu = np.array([self.cfg["mpc"]["fuel_max"]])
+        ocp.constraints.idxbu = np.array([0])
+
+        ocp.constraints.x0 = np.zeros(self.casadi_model.nx)
+
+        return ocp
+
+    # ======================================================
+    # SOLVER OPTIONS
+    # ======================================================
+    def build_solver_options(self, ocp):
+        
+        solver_cfg = self.cfg["solver"]
+
+        print(solver_cfg)
+        print(solver_cfg["tolerance"])
+        print(type(solver_cfg["tolerance"]))
+
+
+        ocp.solver_options.nlp_solver_type = "SQP_RTI"
+        ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
+        ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
+        ocp.solver_options.integrator_type = "IRK"
+
+        ocp.solver_options.nlp_solver_max_iter = solver_cfg["max_iter"]
+
+        tol = float(solver_cfg["tolerance"])
+
+        ocp.solver_options.nlp_solver_tol_stat = tol
+        ocp.solver_options.nlp_solver_tol_eq   = tol
+        ocp.solver_options.nlp_solver_tol_ineq = tol
+        ocp.solver_options.nlp_solver_tol_comp = tol
+
+        ocp.solver_options.print_level = 0
+
+        return ocp
+
+    # ======================================================
+    # SOLVER
+    # ======================================================
+    def build_solver(self):
+
+        return AcadosOcpSolver(
+            self.ocp,
+            json_file="acados_ocp.json",
+        )
+
+    # ======================================================
+    # INITIAL STATE
+    # ======================================================
+    def set_initial_state(self, Tg, Ts, Tw):
+
+        x0 = np.concatenate([Tg, Ts, Tw])
+
+        self.solver.set(0, "lbx", x0)
+        self.solver.set(0, "ubx", x0)
+
+    # ======================================================
+    # PARAMETERS
+    # ======================================================
+    def set_parameters(self, parameters):
+
+        for k in range(self.ocp.dims.N + 1):
+            self.solver.set(k, "p", parameters)
+
+    # ======================================================
+    # SOLVE
+    # ======================================================
+    def solve(self):
+
+        status = self.solver.solve()
+
+        if status != 0:
+            raise RuntimeError(f"ACADOS solver failed with status {status}")
+
+        return float(self.solver.get(0, "u")[0])
+        
+
 class MasterMPC:
 
     def __init__(self, cfg, burning_model):
 
         self.cfg = cfg
-        self.mpc = ACADOSMPC(burning_model, cfg)
+        self.mpc = ACADOSMPC(cfg, burning_model)
 
-        self.last_u = cfg["mpc"]["fuel_min"]
-        self.last_t = -1e9
-        self.dt_control = cfg["mpc"]["dt_control"]
+        # rates
+        self.dt_mpc = cfg["mpc"]["mpc_update_sec"]          # 5s
+        self.dt_act = cfg["mpc"]["actuator_update_sec"]     # 60s
 
-    def compute_control(self, state, t=0.0):
+        self.last_mpc_time = -1e30
+        self.last_act_time = -1e30
 
-        if t - self.last_t < self.dt_control:
-            return {"Fuel_rate": self.last_u}
+        self.last_control = cfg["mpc"]["fuel_min"]
+        self._current_plan = None   # 🔥 trajectory cache
 
-        x0 = np.concatenate([
+    def update_state(self, state):
+        self.mpc.set_initial_state(
             state.Tg_burning,
             state.Ts_burning,
-            state.Tw_burning
-        ])
+            state.Tw_burning,
+        )
 
-        self.mpc.solver.set(0, "lbx", x0)
-        self.mpc.solver.set(0, "ubx", x0)
+    def update_parameters(self, inputs, state):
+        self.mpc.set_parameters(np.array([
+            inputs["O2"],
+            inputs["Petcoke"],
+            inputs["RDF_Fuel"],
+            getattr(state, "Calcination_Q_sink", 0.0),
+        ]))
 
-        self.mpc.solver.solve()
+    def solve(self):
+        status = self.mpc.solver.solve()
+        if status != 0:
+            raise RuntimeError(f"ACADOS failed: {status}")
 
-        u = self.mpc.solver.get(0, "u")[0]
+        # full horizon control sequence
+        U = []
+        N = self.mpc.cfg["mpc"]["prediction_horizon"]
 
-        self.last_u = float(u)
-        self.last_t = t
+        for k in range(N):
+            U.append(float(self.mpc.solver.get(k, "u")[0]))
 
-        return {"Fuel_rate": self.last_u}
-    
-    
-    if __name__ == "__main__":
+        self._current_plan = U
+        return U
 
-    twin_cfg = load_cfg("configs/twin_cfg.yaml")
-    mpc_cfg = load_cfg("configs/mpc_cfg.yaml")
+    def compute_control(self, state, inputs, t):
 
-    def save_ckpt(path, state):
-        with open(path, "wb") as f:
-            pickle.dump(state, f)
+        # =========================
+        # MPC UPDATE (5s)
+        # =========================
+        if t - self.last_mpc_time >= self.dt_mpc:
 
-    def load_ckpt(path):
-        with open(path, "rb") as f:
-            return pickle.load(f)
+            self.update_state(state)
+            self.update_parameters(inputs, state)
 
-    plant = Burning(N=twin_cfg["plant"]["N"])
-    mpc = MasterMPC(mpc_cfg, plant)
+            self.solve()
 
-    dt = twin_cfg["simulation"]["dt"]
-    chunk_hours = twin_cfg["simulation"]["chunk_hours"]
+            self.last_mpc_time = t
 
-    chunk_time = chunk_hours * 3600.0
-    steps_per_chunk = int(chunk_time / dt)
+        # =========================
+        # ACTUATOR UPDATE (60s)
+        # =========================
+        if t - self.last_act_time >= self.dt_act:
 
-    total_hours = twin_cfg["simulation"]["total_hours"]
-    n_chunks = int(total_hours / chunk_hours)
+            if self._current_plan is not None:
+                self.last_control = self._current_plan[0]  # commit first move
 
-    log_interval = twin_cfg["logging"]["interval_sec"]
-    next_log = 0.0
+            self.last_act_time = t
 
-    log_path = "control/mpc_status.jsonl"
-
-    Tg = np.ones(plant.N) * 1773
-    Ts = np.ones(plant.N) * 1673
-    Tw = np.ones(plant.N) * 873
-
-    outlet = -1
-
-    plant_inputs = {
-        "Petcoke": 0.6,
-        "RDF_Fuel": 0.2,
-        "O2": 3.5,
-        "Fuel_rate": 4.0,
-    }
-
-    for chunk in range(n_chunks):
-
-        t_local = 0.0
-
-        for i in range(steps_per_chunk):
-
-            t = chunk * chunk_time + t_local
-
-            state = type("S", (), {})()
-            state.Tg_burning = Tg
-            state.Ts_burning = Ts
-            state.Tw_burning = Tw
-
-            ctrl = mpc.compute_control(state, t)
-
-            plant_inputs["Fuel_rate"] = ctrl["Fuel_rate"]
-
-            Tg, Ts, Tw = plant.thermal_step(
-                Tg, Ts, Tw, plant_inputs, dt
-            )
-
-            t_local += dt
-
-            if t >= next_log:
-
-                record = {
-                    "t_h": t / 3600.0,
-                    "Tg": float(Tg[outlet]),
-                    "Ts": float(Ts[outlet]),
-                    "Tw": float(Tw[outlet]),
-                    "Fuel": float(plant_inputs["Fuel_rate"]),
-                }
-
-                with open(log_path, "a") as f:
-                    f.write(json.dumps(record) + "\n")
-
-                next_log += log_interval
-
-        print(f"[CHUNK {chunk}] Tg={Tg[outlet]:.2f} Ts={Ts[outlet]:.2f}")
+        # ZOH
+        return {"Fuel_rate": self.last_control}
+           
