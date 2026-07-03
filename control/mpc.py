@@ -4,13 +4,15 @@ import yaml
 from Kiln.Burning import Burning
 from Kiln.GlobalState import GlobalState
 from acados_template import AcadosOcp, AcadosModel, AcadosOcpSolver
+from enum import IntEnum
+from control.mpc_parameters import MPCParameter
 
 
 class BurningMPCModel:
 
     def __init__(self, burning_model):
         
-        self.np = 4
+        self.np = len(MPCParameter)
 
         # ======================================================
         # REFERENCE TO PHYSICAL MODEL
@@ -64,10 +66,24 @@ class BurningMPCModel:
         Petcoke = ca.SX.sym("Petcoke")
         RDF_Fuel = ca.SX.sym("RDF_Fuel")
         Calcination_sink = ca.SX.sym("Calcination_sink")
+        _Fuel_prev = ca.SX.sym("Fuel_prev")
 
-        p = ca.vertcat(O2, Petcoke, RDF_Fuel, Calcination_sink)
+        p = ca.vertcat(
+            O2,
+            Petcoke,
+            RDF_Fuel,
+            Calcination_sink,
+            _Fuel_prev,
+        )
 
-        return p, O2, Petcoke, RDF_Fuel, Calcination_sink
+        return (
+            p,
+            O2,
+            Petcoke,
+            RDF_Fuel,
+            Calcination_sink,
+            _Fuel_prev,
+        )
 
     # ======================================================
     # COMBUSTION EFFICIENCY
@@ -178,7 +194,7 @@ class BurningMPCModel:
     # DYNAMICS
     # ======================================================
     def build_dynamics(self):
-        
+
         """
         Build symbolic nonlinear kiln dynamics.
 
@@ -190,23 +206,55 @@ class BurningMPCModel:
         xdot : Continuous-time state derivatives
         """
 
+        # --------------------------------------------------
+        # States / Controls / Parameters
+        # --------------------------------------------------
         x, Tg, Ts, Tw = self.build_state()
         u, Fuel_rate = self.build_control()
 
-        p, O2, Petcoke, RDF_Fuel, Calcination_sink = self.build_parameters()
+        (
+            p,
+            O2,
+            Petcoke,
+            RDF_Fuel,
+            Calcination_sink,
+            _Fuel_prev,
+        ) = self.build_parameters()
 
+        # --------------------------------------------------
+        # Spatial gradients
+        # --------------------------------------------------
         dTg_dz, dTs_dz = self.build_gradients(Tg, Ts)
 
+        # --------------------------------------------------
+        # Heat generation
+        # --------------------------------------------------
         q_vol = self.build_heat_source(
-            Fuel_rate, O2, Petcoke, RDF_Fuel, Calcination_sink
+            Fuel_rate,
+            O2,
+            Petcoke,
+            RDF_Fuel,
+            Calcination_sink,
         )
 
+        # --------------------------------------------------
+        # Heat transfer
+        # --------------------------------------------------
         q_gs, q_gw, q_ws = self.build_heat_transfer(Tg, Ts, Tw)
 
+        # --------------------------------------------------
+        # Thermal capacities
+        # --------------------------------------------------
         C_g, C_s, C_w = self.build_capacities()
 
+        # --------------------------------------------------
+        # Wall losses
+        # --------------------------------------------------
         q_loss = self.build_wall_losses(Tw)
 
+        # --------------------------------------------------
+        # Differential equations
+        # --------------------------------------------------
         Tg_dot = -self.m.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
         Ts_dot = -self.m.u_s * dTs_dz + (q_gs - q_ws) / C_s
         Tw_dot = (q_gw + q_ws - q_loss) / C_w
@@ -302,23 +350,33 @@ class ACADOSMPC:
 
         x = self.model.x
         u = self.model.u
+        p = self.model.p
 
         Tg = x[0:N]
         Ts = x[N:2 * N]
 
         Fuel_rate = u[0]
 
+        Fuel_prev = p[MPCParameter.FUEL_PREV]
+
         Tg_ref = self.cfg["mpc"]["Tg_setpoint"]
         Ts_ref = self.cfg["mpc"]["Ts_setpoint"]
 
         w_T = float(self.cfg["mpc"]["w_T"])
         w_F = float(self.cfg["mpc"]["w_F"])
+        w_ramp = float(self.cfg["mpc"]["w_ramp"])
 
-        return (
+        tracking_cost = (
             w_T * ca.sumsqr(Tg - Tg_ref)
             + w_T * ca.sumsqr(Ts - Ts_ref)
-            + w_F * Fuel_rate**2
         )
+
+        fuel_cost = w_F * Fuel_rate**2
+
+        fuel_delta = Fuel_rate - Fuel_prev
+        ramp_cost = w_ramp * fuel_delta**2
+
+        return tracking_cost + fuel_cost + ramp_cost
 
     # ======================================================
     # TERMINAL COST
@@ -360,10 +418,30 @@ class ACADOSMPC:
     # ======================================================
     def build_constraints(self, ocp):
 
+        # --------------------------------------------------
+        # Fuel bounds
+        # --------------------------------------------------
         ocp.constraints.lbu = np.array([self.cfg["mpc"]["fuel_min"]])
         ocp.constraints.ubu = np.array([self.cfg["mpc"]["fuel_max"]])
         ocp.constraints.idxbu = np.array([0])
 
+        # --------------------------------------------------
+        # Ramp constraint (ΔFuel hard constraint)
+        # --------------------------------------------------
+        Fuel = self.model.u[0]
+        Fuel_prev = self.model.p[MPCParameter.FUEL_PREV]
+
+        fuel_delta = Fuel - Fuel_prev
+
+        delta_max = float(self.cfg["mpc"]["max_fuel_delta"])
+
+        ocp.model.con_h_expr = ca.vertcat(fuel_delta)
+        ocp.constraints.lh = np.array([-delta_max])
+        ocp.constraints.uh = np.array([ delta_max])
+
+        # --------------------------------------------------
+        # Initial state
+        # --------------------------------------------------
         ocp.constraints.x0 = np.zeros(self.casadi_model.nx)
 
         return ocp
@@ -372,13 +450,8 @@ class ACADOSMPC:
     # SOLVER OPTIONS
     # ======================================================
     def build_solver_options(self, ocp):
-        
+
         solver_cfg = self.cfg["solver"]
-
-        print(solver_cfg)
-        print(solver_cfg["tolerance"])
-        print(type(solver_cfg["tolerance"]))
-
 
         ocp.solver_options.nlp_solver_type = "SQP_RTI"
         ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
@@ -390,7 +463,7 @@ class ACADOSMPC:
         tol = float(solver_cfg["tolerance"])
 
         ocp.solver_options.nlp_solver_tol_stat = tol
-        ocp.solver_options.nlp_solver_tol_eq   = tol
+        ocp.solver_options.nlp_solver_tol_eq = tol
         ocp.solver_options.nlp_solver_tol_ineq = tol
         ocp.solver_options.nlp_solver_tol_comp = tol
 
@@ -423,6 +496,14 @@ class ACADOSMPC:
     # ======================================================
     def set_parameters(self, parameters):
 
+        parameters = np.asarray(parameters, dtype=float)
+
+        if len(parameters) != self.casadi_model.np:
+            raise ValueError(
+                f"Expected {self.casadi_model.np} MPC parameters, "
+                f"got {len(parameters)}."
+            )
+
         for k in range(self.ocp.dims.N + 1):
             self.solver.set(k, "p", parameters)
 
@@ -439,6 +520,7 @@ class ACADOSMPC:
         return float(self.solver.get(0, "u")[0])
         
 
+
 class MasterMPC:
 
     def __init__(self, cfg, burning_model):
@@ -446,16 +528,25 @@ class MasterMPC:
         self.cfg = cfg
         self.mpc = ACADOSMPC(cfg, burning_model)
 
-        # rates
+        # ======================================================
+        # TIMING
+        # ======================================================
         self.dt_mpc = cfg["mpc"]["mpc_update_sec"]          # 5s
         self.dt_act = cfg["mpc"]["actuator_update_sec"]     # 60s
 
         self.last_mpc_time = -1e30
         self.last_act_time = -1e30
 
+        # ======================================================
+        # CONTROL MEMORY
+        # ======================================================
         self.last_control = cfg["mpc"]["fuel_min"]
-        self._current_plan = None   # 🔥 trajectory cache
+        self._current_plan = None
+        self._plan_index = 0   #  actuator tracking fix
 
+    # ======================================================
+    # STATE UPDATE
+    # ======================================================
     def update_state(self, state):
         self.mpc.set_initial_state(
             state.Tg_burning,
@@ -463,29 +554,53 @@ class MasterMPC:
             state.Tw_burning,
         )
 
+    # ======================================================
+    # PARAMETER UPDATE
+    # ======================================================
     def update_parameters(self, inputs, state):
-        self.mpc.set_parameters(np.array([
-            inputs["O2"],
-            inputs["Petcoke"],
-            inputs["RDF_Fuel"],
-            getattr(state, "Calcination_Q_sink", 0.0),
-        ]))
 
+        p = np.zeros(len(MPCParameter))
+
+        p[MPCParameter.O2] = inputs["O2"]
+        p[MPCParameter.PETCOKE] = inputs["Petcoke"]
+        p[MPCParameter.RDF] = inputs["RDF_Fuel"]
+        p[MPCParameter.CALCINATION] = getattr(
+            state,
+            "Calcination_Q_sink",
+            0.0,
+        )
+
+        #  improved consistency: use current plan if exists
+        if self._current_plan is not None:
+            p[MPCParameter.FUEL_PREV] = self._current_plan[0]
+        else:
+            p[MPCParameter.FUEL_PREV] = self.last_control
+
+        self.mpc.set_parameters(p)
+
+    # ======================================================
+    # SOLVE MPC
+    # ======================================================
     def solve(self):
+
         status = self.mpc.solver.solve()
         if status != 0:
             raise RuntimeError(f"ACADOS failed: {status}")
 
-        # full horizon control sequence
-        U = []
         N = self.mpc.cfg["mpc"]["prediction_horizon"]
 
+        U = []
         for k in range(N):
             U.append(float(self.mpc.solver.get(k, "u")[0]))
 
         self._current_plan = U
+        self._plan_index = 0   # reset index each solve
+
         return U
 
+    # ======================================================
+    # CONTROL LOOP
+    # ======================================================
     def compute_control(self, state, inputs, t):
 
         # =========================
@@ -506,10 +621,19 @@ class MasterMPC:
         if t - self.last_act_time >= self.dt_act:
 
             if self._current_plan is not None:
-                self.last_control = self._current_plan[0]  # commit first move
+
+                # FIX: shift-based execution (not always [0])
+                if self._plan_index < len(self._current_plan):
+                    self.last_control = self._current_plan[self._plan_index]
+                    self._plan_index += 1
+                else:
+                    # fallback safety
+                    self.last_control = self._current_plan[-1]
 
             self.last_act_time = t
 
-        # ZOH
+        # =========================
+        # OUTPUT (ZOH)
+        # =========================
         return {"Fuel_rate": self.last_control}
            

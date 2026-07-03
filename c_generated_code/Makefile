@@ -48,6 +48,8 @@ MODEL_OBJ := $(MODEL_SRC:.c=.o)
 OCP_SRC=
 
 
+OCP_SRC+= burning_zone_constraints/burning_zone_constr_h_fun_jac_uxt_zt.c
+OCP_SRC+= burning_zone_constraints/burning_zone_constr_h_fun.c
 OCP_SRC+= burning_zone_cost/burning_zone_cost_ext_cost_0_fun.c
 OCP_SRC+= burning_zone_cost/burning_zone_cost_ext_cost_0_fun_jac_hess.c
 OCP_SRC+= burning_zone_cost/burning_zone_cost_ext_cost_0_fun_jac.c

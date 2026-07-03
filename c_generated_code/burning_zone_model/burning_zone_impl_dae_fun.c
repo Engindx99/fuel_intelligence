@@ -68,9 +68,9 @@ static const casadi_int casadi_s0[3] = {15, 1, 1};
 static const casadi_int casadi_s1[3] = {1, 1, 1};
 static const casadi_int casadi_s2[3] = {0, 1, 1};
 static const casadi_int casadi_s3[3] = {0, 0, 1};
-static const casadi_int casadi_s4[3] = {4, 1, 1};
+static const casadi_int casadi_s4[3] = {5, 1, 1};
 
-/* burning_zone_impl_dae_fun:(i0[15],i1[15],i2,i3[0],i4[],i5[4])->(o0[15]) */
+/* burning_zone_impl_dae_fun:(i0[15],i1[15],i2,i3[0],i4[],i5[5])->(o0[15]) */
 static int casadi_f0(const casadi_real** arg, casadi_real** res, casadi_int* iw, casadi_real* w, int mem) {
   casadi_real a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11;
   casadi_real a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23;

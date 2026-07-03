@@ -158,12 +158,21 @@ class Twin:
 
             fuel_rate = inputs["Fuel_rate"]
 
+            # --------------------------------------------------
+            # MPC reference tracking
+            # --------------------------------------------------
+            Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
+            Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
+
+            eTg = Tg_ref - Tg
+            eTs = Ts_ref - Ts
+
             print(
                 f"[REPORT] "
                 f"t={self.time/60:.1f} min | "
                 f"Fuel={fuel_rate:.3f} t/h | "
-                f"Tg={Tg:.2f} K | "
-                f"Ts={Ts:.2f} K | "
+                f"Tg={Tg:.2f} K | eTg={eTg:+.2f} K | "
+                f"Ts={Ts:.2f} K | eTs={eTs:+.2f} K | "
                 f"Tw={Tw:.2f} K",
                 flush=True,
             )

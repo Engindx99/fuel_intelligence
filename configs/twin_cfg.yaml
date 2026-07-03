@@ -13,7 +13,7 @@ simulation:
 
 logging:
   
-  interval_sec: 300      # Temperature & control report interval [s]
+  interval_sec: 60      # Temperature & control report interval [s]
 
 checkpoint:
   enabled: true

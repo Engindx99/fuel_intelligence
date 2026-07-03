@@ -72,7 +72,7 @@ static const casadi_int casadi_s0[3] = {15, 1, 1};
 static const casadi_int casadi_s1[3] = {1, 1, 1};
 static const casadi_int casadi_s2[3] = {0, 1, 1};
 static const casadi_int casadi_s3[3] = {0, 0, 1};
-static const casadi_int casadi_s4[3] = {4, 1, 1};
+static const casadi_int casadi_s4[3] = {5, 1, 1};
 static const casadi_int casadi_s5[73] = 
   {15, 15, 0, 4, 9, 13, 17, 20,
   24, 29, 33, 37, 40, 43, 46, 49,
@@ -95,7 +95,7 @@ static const casadi_int casadi_s7[9] =
   4};
 static const casadi_int casadi_s8[3] = {15, 0, 1};
 
-/* burning_zone_impl_dae_jac_x_xdot_u_z:(i0[15],i1[15],i2,i3[0],i4[],i5[4])->(o0[15x15,55nz],o1[15x15,15nz],o2[15x1,5nz],o3[15x0]) */
+/* burning_zone_impl_dae_jac_x_xdot_u_z:(i0[15],i1[15],i2,i3[0],i4[],i5[5])->(o0[15x15,55nz],o1[15x15,15nz],o2[15x1,5nz],o3[15x0]) */
 static int casadi_f0(const casadi_real** arg, casadi_real** res, casadi_int* iw, casadi_real* w, int mem) {
   casadi_real a0, a1, a2, a3, a4, a5, a6, a7, a8, a9;
   a0=-1.1660678094714094e-01;

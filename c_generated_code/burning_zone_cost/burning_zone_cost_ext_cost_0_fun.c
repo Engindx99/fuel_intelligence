@@ -56,9 +56,9 @@ casadi_real casadi_sq(casadi_real x) { return x*x;}
 static const casadi_int casadi_s0[3] = {15, 1, 1};
 static const casadi_int casadi_s1[3] = {1, 1, 1};
 static const casadi_int casadi_s2[3] = {0, 1, 1};
-static const casadi_int casadi_s3[3] = {4, 1, 1};
+static const casadi_int casadi_s3[3] = {5, 1, 1};
 
-/* burning_zone_cost_ext_cost_0_fun:(i0[15],i1,i2[0],i3[4])->(o0) */
+/* burning_zone_cost_ext_cost_0_fun:(i0[15],i1,i2[0],i3[5])->(o0) */
 static int casadi_f0(const casadi_real** arg, casadi_real** res, casadi_int* iw, casadi_real* w, int mem) {
   casadi_real a0, a1, a2, a3;
   a0=arg[0]? arg[0][0] : 0;
@@ -104,6 +104,12 @@ static int casadi_f0(const casadi_real** arg, casadi_real** res, casadi_int* iw,
   a0=(a0+a2);
   a2=1.0000000000000000e-03;
   a3=arg[1]? arg[1][0] : 0;
+  a1=casadi_sq(a3);
+  a2=(a2*a1);
+  a0=(a0+a2);
+  a2=1.0000000000000000e-02;
+  a1=arg[3]? arg[3][4] : 0;
+  a3=(a3-a1);
   a3=casadi_sq(a3);
   a2=(a2*a3);
   a0=(a0+a2);

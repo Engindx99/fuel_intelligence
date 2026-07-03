@@ -39,7 +39,7 @@
 #define BURNING_ZONE_NX     15
 #define BURNING_ZONE_NZ     0
 #define BURNING_ZONE_NU     1
-#define BURNING_ZONE_NP     4
+#define BURNING_ZONE_NP     5
 #define BURNING_ZONE_NP_GLOBAL     0
 #define BURNING_ZONE_NBX    0
 #define BURNING_ZONE_NBX0   15
@@ -64,8 +64,8 @@
 #define BURNING_ZONE_NY0    0
 #define BURNING_ZONE_NY     0
 #define BURNING_ZONE_NYN    0
-#define BURNING_ZONE_N      200
-#define BURNING_ZONE_NH     0
+#define BURNING_ZONE_N      800
+#define BURNING_ZONE_NH     1
 #define BURNING_ZONE_NHN    0
 #define BURNING_ZONE_NH0    0
 #define BURNING_ZONE_NPHI0  0
@@ -130,6 +130,10 @@ typedef struct burning_zone_solver_capsule
 
 
     // constraints
+    external_function_external_param_casadi *nl_constr_h_fun_jac;
+    external_function_external_param_casadi *nl_constr_h_fun;
+
+
 
 
 
