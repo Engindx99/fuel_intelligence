@@ -1,11 +1,11 @@
-python -m Kiln.Burning
+python -m kiln.burning
 
-python -m Kiln.Calcination
+python -m kiln.calcination
 
-python -m Kiln.Twin
+python -m kiln.twin
 
 
-python -m control.mpc
+python -m controls.mpc
 
 
 

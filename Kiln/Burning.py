@@ -1,4 +1,3 @@
-# ================================= TEMPERATURE =================================
 from bdb import effective
 import json
 import pickle
@@ -181,6 +180,10 @@ class Burning:
         state.Tw_burning = Tw
 
         return state
+    
+    
+            
+        
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 import numpy as np
 import casadi as ca
 import yaml
-from Kiln.Burning import Burning
-from Kiln.GlobalState import GlobalState
+from kiln.burning import Burning
+from kiln.globalstate import GlobalState
 from acados_template import AcadosOcp, AcadosModel, AcadosOcpSolver
 from enum import IntEnum
-from control.mpc_parameters import MPCParameter
+from controls.mpc_parameters import MPCParameter
 
 
 class BurningMPCModel:

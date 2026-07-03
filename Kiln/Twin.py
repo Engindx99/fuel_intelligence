@@ -1,6 +1,6 @@
-from Kiln.GlobalState import GlobalState
-from Kiln.Burning import Burning
-from control.mpc import MasterMPC
+from kiln.globalstate import GlobalState
+from kiln.burning import Burning
+from controls.mpc import MasterMPC
 
 import numpy as np
 import yaml
