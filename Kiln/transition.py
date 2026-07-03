@@ -141,6 +141,10 @@ class Transition:
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
+        
+        state.Tg_transition_old = state.Tg_transition.copy()
+        state.Ts_transition_old = state.Ts_transition.copy()
+        state.Tw_transition_old = state.Tw_transition.copy()
 
         Tg, Ts, Tw = self.thermal_step(
             state.Tg_transition,
@@ -148,11 +152,11 @@ class Transition:
             state.Tw_transition,
             Q_in_transition=state.Hgas_burning_out,
             dt=dt,
-            reaction_sink=getattr(state, "Transition_Q_sink", 0.0),
+            reaction_sink=getattr(state, "Calcination_Q_sink", 0.0),
         )
 
         # ================= ENERGY STORED =================
-        state.Transition_stored_energy_change = np.sum(
+        state.Calcination_stored_energy_change = np.sum(
             self._rho_g_Vcell_Cp_g * (Tg - state.Tg_transition_old) / dt
         )
 

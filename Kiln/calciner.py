@@ -64,7 +64,7 @@ class Calciner:
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
         
         # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, Q_in, dt, reaction_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, Q_in_calciner, dt, reaction_sink=0.0):
 
         # ================= GRADIENTS (NO ALLOC) =================
         dTg_dz = self._dTg_dz
@@ -78,16 +78,17 @@ class Calciner:
 
         # ======================================================
         # HEAT SOURCE
-        # Energy received from Burning Zone (W)
+        # Energy received from Transition Zone (W)
         # ======================================================
-
-        q_vol = Q_in / (self.V_total + self.eps)
+        m_dot_g = self.rho_g * self.u_g * self.A_cross
+        q_in_vol = Q_in_calciner / self.V_total
 
         # ======================================================
         # REACTION ENERGY SINK
         # ======================================================
-
-        sink_density = reaction_sink / (self.V_total + self.eps)
+        sink_density = reaction_sink / (m_dot_g * self.Cp_g * self.L + self.eps)
+        
+        q_vol = q_in_vol
         q_vol = q_vol - sink_density
 
         # ================= HEAT TRANSFER =================
@@ -141,22 +142,38 @@ class Calciner:
     # ======================================================
     def apply(self, state, dt):
 
+        state.Tg_calcination_old = state.Tg_calcination.copy()
+        state.Ts_calcination_old = state.Ts_calcination.copy()
+        state.Tw_calcination_old = state.Tw_calcination.copy()
+
         Tg, Ts, Tw = self.thermal_step(
             state.Tg_calcination,
             state.Ts_calcination,
             state.Tw_calcination,
-            Q_in=state.Hgas_burning_out,
+            Q_in_calciner=state.Hgas_transition_out,
             dt=dt,
             reaction_sink=getattr(state, "Calcination_Q_sink", 0.0),
         )
 
-        # ================= UPDATE TEMPERATURE FIELDS =================
+        # ================= ENERGY STORED =================
+        state.Calcination_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_calcination_old) / dt
+        )
+
+        # ================= UPDATE STATES =================
         state.Tg_calcination = Tg
         state.Ts_calcination = Ts
         state.Tw_calcination = Tw
 
-        # ================= ENERGY TO PREHEATER =================
+        # ================= OUTPUT ENTHALPY =================
         state.Hgas_calciner_out = self.gas_enthalpy_out(state.Tg_calcination)
+
+        # ================= ENERGY BALANCE =================
+        state.Calcination_energy_balance = (
+            state.Hgas_transition_out
+            - state.Hgas_calciner_out
+            - state.Calcination_stored_energy_change
+        )
 
         return state
     
@@ -166,12 +183,8 @@ class Calciner:
     def gas_enthalpy_out(self, Tg):
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
-
-        H_out = (
-            m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_amb)
-        )
+        
+        H_out = m_dot_g * self.Cp_g * Tg[-1]
 
         return H_out
     
