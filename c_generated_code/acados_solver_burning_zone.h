@@ -64,7 +64,7 @@
 #define BURNING_ZONE_NY0    0
 #define BURNING_ZONE_NY     0
 #define BURNING_ZONE_NYN    0
-#define BURNING_ZONE_N      800
+#define BURNING_ZONE_N      300
 #define BURNING_ZONE_NH     1
 #define BURNING_ZONE_NHN    0
 #define BURNING_ZONE_NH0    0
