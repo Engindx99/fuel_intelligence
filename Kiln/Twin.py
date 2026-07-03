@@ -1,5 +1,6 @@
 from kiln.globalstate import GlobalState
 from kiln.burning import Burning
+from kiln.calciner import Calciner
 from controls.mpc import MasterMPC
 
 import numpy as np
@@ -23,6 +24,14 @@ class Twin:
         self.burning = Burning(
             N=cfg["plant"]["N"],
             L=cfg["plant"]["length"],
+        )
+
+        # ======================================================
+        # CALCINER MODEL
+        # ======================================================
+        self.calciner = Calciner(
+            N=cfg["plant"]["N"],
+            L=cfg["calciner"]["length"],
         )
 
         # ======================================================
@@ -126,60 +135,79 @@ class Twin:
         inputs = self._last_inputs
 
         # ======================================================
-        # PHYSICS ONLY
+        # BURNING
         # ======================================================
-        Tg, Ts, Tw = self.burning.thermal_step(
-            self.state.Tg_burning,
-            self.state.Ts_burning,
-            self.state.Tw_burning,
+        self.state = self.burning.apply(
+            self.state,
             inputs,
             self.dt,
         )
 
-        self.state.Tg_burning = Tg
-        self.state.Ts_burning = Ts
-        self.state.Tw_burning = Tw
+        # ======================================================
+        # CALCINER
+        # ======================================================
+        self.state = self.calciner.apply(
+            self.state,
+            self.dt,
+        )
 
         # ======================================================
         # TIME
         # ======================================================
         self.time += self.dt
 
-        # ======================================================
-        # LOGGING
-        # ======================================================
-        if self.time >= self._next_log_time:
+    # ======================================================
+    # LOGGING
+    # ======================================================
+    if self.time >= self._next_log_time:
 
-            idx = len(self.state.Tg_burning) // 2
+        idx = len(self.state.Tg_burning) // 2
 
-            Tg = float(self.state.Tg_burning[idx])
-            Ts = float(self.state.Ts_burning[idx])
-            Tw = float(self.state.Tw_burning[idx])
+        # ================= BURNING =================
+        Tg_burn = float(self.state.Tg_burning[idx])
+        Ts_burn = float(self.state.Ts_burning[idx])
+        Tw_burn = float(self.state.Tw_burning[idx])
 
-            fuel_rate = inputs["Fuel_rate"]
+        # ================= CALCINER =================
+        Tg_calc = float(self.state.Tg_calcination[idx])
+        Ts_calc = float(self.state.Ts_calcination[idx])
+        Tw_calc = float(self.state.Tw_calcination[idx])
 
-            # --------------------------------------------------
-            # MPC reference tracking
-            # --------------------------------------------------
-            Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
-            Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
+        fuel_rate = inputs["Fuel_rate"]
 
-            eTg = Tg_ref - Tg
-            eTs = Ts_ref - Ts
+        # --------------------------------------------------
+        # MPC reference tracking (Burning)
+        # --------------------------------------------------
+        Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
+        Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
 
-            print(
-                f"[REPORT] "
-                f"t={self.time/60:.1f} min | "
-                f"Fuel={fuel_rate:.3f} t/h | "
-                f"Tg={Tg:.2f} K | eTg={eTg:+.2f} K | "
-                f"Ts={Ts:.2f} K | eTs={eTs:+.2f} K | "
-                f"Tw={Tw:.2f} K",
-                flush=True,
-            )
+        eTg = Tg_ref - Tg_burn
+        eTs = Ts_ref - Ts_burn
 
-            self._next_log_time += self.log_interval
+        print(
+            f"[REPORT] "
+            f"t={self.time/60:.1f} min | "
+            f"Fuel={fuel_rate:.3f} t/h\n"
 
-        return self.state
+            f"  Burning  | "
+            f"Tg={Tg_burn:.2f} K | "
+            f"Ts={Ts_burn:.2f} K | "
+            f"Tw={Tw_burn:.2f} K | "
+            f"eTg={eTg:+.2f} K | "
+            f"eTs={eTs:+.2f} K\n"
+
+            f"  Calciner | "
+            f"Tg={Tg_calc:.2f} K | "
+            f"Ts={Ts_calc:.2f} K | "
+            f"Tw={Tw_calc:.2f} K | "
+            f"H_in={self.state.Hgas_burning_out/1e6:.2f} MW | "
+            f"H_out={self.state.Hgas_calciner_out/1e6:.2f} MW",
+            flush=True,
+        )
+
+        self._next_log_time += self.log_interval
+
+    return self.state
 
     # --------------------------------------------------
     def run(self):

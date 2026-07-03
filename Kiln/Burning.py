@@ -164,6 +164,8 @@ class Burning:
         return Tg_n, Ts_n, Tw_n
 
     # ======================================================
+    # STATE UPDATE
+    # ======================================================
     def apply(self, state, inputs, dt):
 
         Tg, Ts, Tw = self.thermal_step(
@@ -175,14 +177,29 @@ class Burning:
             calcination_sink=getattr(state, "Calcination_Q_sink", 0.0),
         )
 
+        # ================= UPDATE TEMPERATURE FIELDS =================
         state.Tg_burning = Tg
         state.Ts_burning = Ts
         state.Tw_burning = Tw
 
+        # ================= ENERGY TO CALCINER =================
+        state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
+
         return state
     
     
-            
+    # ======================================================
+    def gas_enthalpy_out(self, Tg):
+
+        m_dot_g = self.rho_g * self.u_g * self.A_cross
+
+        H_out = (
+            m_dot_g
+            * self.Cp_g
+            * (Tg[-1] - self.T_amb)
+        )
+
+        return H_out
         
 
 

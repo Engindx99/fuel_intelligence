@@ -37,12 +37,22 @@ class GlobalState:
     Solid_flow: float = 0.0
 
     # ======================================================
-    # ENERGY
+    # DIAGNOSTIC ENERGY STATES (NOT IN PDE)
     # ======================================================
     E_preheater: float = 0.0
     E_calcination: float = 0.0
     E_burning: float = 0.0
     E_cooler: float = 0.0
+    
+    # ======================================================
+    # REACTION STATES
+    # ======================================================
+
+    alpha_calcination: float = 0.0
+
+    Calcination_Q_sink: float = 0.0
+
+    CO2_generation_rate: float = 0.0
 
     # ======================================================
     # CHEMISTRY
@@ -68,9 +78,28 @@ class GlobalState:
     Ts_preheater: np.ndarray = field(default_factory=lambda: np.ones(5) * 573.15)
 
     Tw_preheater: np.ndarray = field(default_factory=lambda: np.ones(5) * 523.15)
+    
+    # ======================================================
+    # TRANSITION STATES (5 CELL) (KELVIN)
+    # ======================================================
+    Tg_transition: np.ndarray = field(
+        default_factory=lambda: np.ones(5) * 1650.0
+    )
+
+    Ts_transition: np.ndarray = field(
+        default_factory=lambda: np.ones(5) * 1400.0
+    )
+
+    Tw_transition: np.ndarray = field(
+        default_factory=lambda: np.ones(5) * 800.0
+    )
+
+    Hgas_transition_out: float = 0.0
+
+    Transition_Q_sink: float = 0.0
 
     # ======================================================
-    # CALCINATION STATES (5 CELL) (KELVIN)
+    # CALCINER STATES (5 CELL) (KELVIN)
     # ======================================================
     Tg_calcination: np.ndarray = field(default_factory=lambda: np.ones(5) * (1473.15))
 

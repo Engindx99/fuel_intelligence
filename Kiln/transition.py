@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class Calciner:
+class Transition:
 
     def __init__(self, N=5, L=25.0):
 
@@ -81,13 +81,13 @@ class Calciner:
         # Energy received from Burning Zone (W)
         # ======================================================
 
-        q_vol = Q_in / (self.V_total + self.eps)
+        m_dot_g = self.rho_g * self.u_g * self.A_cross
+        q_vol = Q_in / (m_dot_g * self.Cp_g * self.L + self.eps)
 
         # ======================================================
         # REACTION ENERGY SINK
         # ======================================================
-
-        sink_density = reaction_sink / (self.V_total + self.eps)
+        sink_density = reaction_sink / (m_dot_g * self.Cp_g * self.L + self.eps)
         q_vol = q_vol - sink_density
 
         # ================= HEAT TRANSFER =================
@@ -142,21 +142,27 @@ class Calciner:
     def apply(self, state, dt):
 
         Tg, Ts, Tw = self.thermal_step(
-            state.Tg_calcination,
-            state.Ts_calcination,
-            state.Tw_calcination,
+            state.Tg_transition,
+            state.Ts_transition,
+            state.Tw_transition,
             Q_in=state.Hgas_burning_out,
             dt=dt,
-            reaction_sink=getattr(state, "Calcination_Q_sink", 0.0),
+            reaction_sink=getattr(state, "Transition_Q_sink", 0.0),
         )
 
-        # ================= UPDATE TEMPERATURE FIELDS =================
-        state.Tg_calcination = Tg
-        state.Ts_calcination = Ts
-        state.Tw_calcination = Tw
+        # ================= ENERGY BALANCE =================
+        state.Transition_energy_balance = (
+            state.Hgas_burning_out
+            - self.gas_enthalpy_out(state.Tg_transition)
+        )
 
-        # ================= ENERGY TO PREHEATER =================
-        state.Hgas_calciner_out = self.gas_enthalpy_out(state.Tg_calcination)
+        # ================= UPDATE STATES =================
+        state.Tg_transition = Tg
+        state.Ts_transition = Ts
+        state.Tw_transition = Tw
+
+        # ================= OUTPUT ENTHALPY =================
+        state.Hgas_transition_out = self.gas_enthalpy_out(state.Tg_transition)
 
         return state
     
@@ -166,12 +172,8 @@ class Calciner:
     def gas_enthalpy_out(self, Tg):
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
-
-        H_out = (
-            m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_amb)
-        )
+        
+        H_out = m_dot_g * self.Cp_g * Tg[-1]
 
         return H_out
     
