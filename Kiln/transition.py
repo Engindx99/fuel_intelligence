@@ -64,7 +64,7 @@ class Transition:
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
         
         # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, Q_in, dt, reaction_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, Q_in_transition, dt, reaction_sink=0.0):
 
         # ================= GRADIENTS (NO ALLOC) =================
         dTg_dz = self._dTg_dz
@@ -80,14 +80,15 @@ class Transition:
         # HEAT SOURCE
         # Energy received from Burning Zone (W)
         # ======================================================
-
         m_dot_g = self.rho_g * self.u_g * self.A_cross
-        q_vol = Q_in / (m_dot_g * self.Cp_g * self.L + self.eps)
+        q_in_vol = Q_in_transition / self.V_total
 
         # ======================================================
         # REACTION ENERGY SINK
         # ======================================================
         sink_density = reaction_sink / (m_dot_g * self.Cp_g * self.L + self.eps)
+        
+        q_vol = q_in_vol
         q_vol = q_vol - sink_density
 
         # ================= HEAT TRANSFER =================
@@ -145,15 +146,14 @@ class Transition:
             state.Tg_transition,
             state.Ts_transition,
             state.Tw_transition,
-            Q_in=state.Hgas_burning_out,
+            Q_in_transition=state.Hgas_burning_out,
             dt=dt,
             reaction_sink=getattr(state, "Transition_Q_sink", 0.0),
         )
 
-        # ================= ENERGY BALANCE =================
-        state.Transition_energy_balance = (
-            state.Hgas_burning_out
-            - self.gas_enthalpy_out(state.Tg_transition)
+        # ================= ENERGY STORED =================
+        state.Transition_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_transition_old) / dt
         )
 
         # ================= UPDATE STATES =================
@@ -163,6 +163,13 @@ class Transition:
 
         # ================= OUTPUT ENTHALPY =================
         state.Hgas_transition_out = self.gas_enthalpy_out(state.Tg_transition)
+
+        # ================= ENERGY BALANCE =================
+        state.Transition_energy_balance = (
+            state.Hgas_burning_out
+            - state.Hgas_transition_out
+            - state.Transition_stored_energy_change
+        )
 
         return state
     

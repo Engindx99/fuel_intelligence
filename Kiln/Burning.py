@@ -36,7 +36,6 @@ class Burning:
         self.A_wall = self.a_gw * self.L
         self.h_ext = 12.0
 
-        self.T_amb = 300.0
         self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
@@ -193,11 +192,7 @@ class Burning:
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
 
-        H_out = (
-            m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_amb)
-        )
+        H_out = m_dot_g * self.Cp_g * Tg[-1]
 
         return H_out
         
