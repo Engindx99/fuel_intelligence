@@ -1,5 +1,6 @@
 from kiln.globalstate import GlobalState
 from kiln.burning import Burning
+from kiln.transition import Transition
 from kiln.calciner import Calciner
 from controls.mpc import MasterMPC
 
@@ -24,6 +25,14 @@ class Twin:
         self.burning = Burning(
             N=cfg["plant"]["N"],
             L=cfg["plant"]["length"],
+        )
+        
+        # ======================================================
+        # TRANSITION MODEL
+        # ======================================================
+        self.transition = Transition(
+            N=cfg["plant"]["N"],
+            L=cfg["transition"]["length"],
         )
 
         # ======================================================
@@ -167,6 +176,11 @@ class Twin:
         Tg_burn = float(self.state.Tg_burning[idx])
         Ts_burn = float(self.state.Ts_burning[idx])
         Tw_burn = float(self.state.Tw_burning[idx])
+        
+        # ================= TRANSITION =================
+        Tg_trans = float(self.state.Tg_transition[idx])
+        Ts_trans = float(self.state.Ts_transition[idx])
+        Tw_trans = float(self.state.Tw_transition[idx])
 
         # ================= CALCINER =================
         Tg_calc = float(self.state.Tg_calcination[idx])

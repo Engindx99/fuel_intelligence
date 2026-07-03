@@ -37,20 +37,10 @@ class GlobalState:
     Solid_flow: float = 0.0
 
     # ======================================================
-    # DIAGNOSTIC ENERGY STATES (NOT IN PDE)
-    # ======================================================
-    E_preheater: float = 0.0
-    E_calcination: float = 0.0
-    E_burning: float = 0.0
-    E_cooler: float = 0.0
-    
-    # ======================================================
     # REACTION STATES
     # ======================================================
 
     alpha_calcination: float = 0.0
-
-    Calcination_Q_sink: float = 0.0
 
     CO2_generation_rate: float = 0.0
 
@@ -94,9 +84,44 @@ class GlobalState:
         default_factory=lambda: np.ones(5) * 800.0
     )
 
+
+    # ======================================================
+    # # ENTHALPY & ENERGY STATES (5 CELL) (KELVIN)
+    # ======================================================
+    
+    Hgas_burning_out: float = 0.0
+    
     Hgas_transition_out: float = 0.0
+    
+    Hgas_calciner_out: float = 0.0
+    
+    Transition_stored_energy_change: float = 0.0
+    
+    Transition_energy_balance: float = 0.0
+
+    Calcination_stored_energy_change: float = 0.0
+    
+    Calcination_energy_balance: float = 0.0
+    
+    # ======================================================
+    # OLD TEMPERATURE STATES (5 CELL) (KELVIN)
+    # ======================================================
+    
+    
+    Tg_transition_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 1650.0)
+    Ts_transition_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 1400.0)
+    Tw_transition_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 800.0)
+
+    Tg_calcination_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 1473.15)
+    Ts_calcination_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 1223.15)
+    Tw_calcination_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 773.15)
+    
+    # ======================================================
+    # REACTION ENERGY SINKS (W)
+    # ======================================================
 
     Transition_Q_sink: float = 0.0
+    Calcination_Q_sink: float = 0.0
 
     # ======================================================
     # CALCINER STATES (5 CELL) (KELVIN)
