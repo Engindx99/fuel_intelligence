@@ -18,10 +18,18 @@ class GlobalState:
     # ======================================================
     # OPERATION
     # ======================================================
-    Feed_rate: float = 40.0  # ton/h
-    Fuel_rate: float = 3.0  # ton/h
-    Kiln_speed: float = 3.5  # rpm
 
+    Feed_rate: float = 40.0          # ton/h
+    Fuel_rate_total: float = 3.0     # ton/h
+    Kiln_speed: float = 3.5          # rpm
+
+    # Fuel mix
+    Petcoke_ratio: float = 0.50
+    Coal_ratio: float = 0.30
+    RDF_ratio: float = 0.15
+    H2_ratio: float = 0.05
+    
+    
     # ======================================================
     # GAS PHASE
     # ======================================================
@@ -83,6 +91,15 @@ class GlobalState:
     Tw_transition: np.ndarray = field(
         default_factory=lambda: np.ones(5) * 800.0
     )
+    
+    # ================= FUEL ENERGY (W) =================
+
+    Q_petcoke: float = 0.0
+    Q_coal: float = 0.0
+    Q_RDF: float = 0.0
+    Q_H2: float = 0.0
+
+    Q_burning: float = 0.0
 
 
     # ======================================================
@@ -156,7 +173,6 @@ class GlobalState:
     Total_mass: float = 0.0
     Total_enthalpy: float = 0.0
 
-    Fuel_energy: float = 0.0
     Heat_loss: float = 0.0
 
     Mass_balance_error: float = 0.0

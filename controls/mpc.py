@@ -64,14 +64,14 @@ class BurningMPCModel:
 
         O2 = ca.SX.sym("O2")
         Petcoke = ca.SX.sym("Petcoke")
-        RDF_Fuel = ca.SX.sym("RDF_Fuel")
+        RDF = ca.SX.sym("RDF")
         Calcination_sink = ca.SX.sym("Calcination_sink")
         _Fuel_prev = ca.SX.sym("Fuel_prev")
 
         p = ca.vertcat(
             O2,
             Petcoke,
-            RDF_Fuel,
+            RDF,
             Calcination_sink,
             _Fuel_prev,
         )
@@ -80,7 +80,7 @@ class BurningMPCModel:
             p,
             O2,
             Petcoke,
-            RDF_Fuel,
+            RDF,
             Calcination_sink,
             _Fuel_prev,
         )
@@ -95,13 +95,13 @@ class BurningMPCModel:
     # ======================================================
     # HEAT SOURCE
     # ======================================================
-    def build_heat_source(self, Fuel_rate, O2, Petcoke, RDF_Fuel, Calcination_sink):
+    def build_heat_source(self, Fuel_rate, O2, Petcoke, RDF, Calcination_sink):
 
         # --------------------------------------------------
         # Fuel fractions
         # --------------------------------------------------
         p = Petcoke
-        a = RDF_Fuel
+        a = RDF
         l = ca.fmax(1.0 - p - a, 0.0)
 
         norm = p + a + l + self.m.eps
@@ -216,7 +216,7 @@ class BurningMPCModel:
             p,
             O2,
             Petcoke,
-            RDF_Fuel,
+            RDF,
             Calcination_sink,
             _Fuel_prev,
         ) = self.build_parameters()
@@ -233,7 +233,7 @@ class BurningMPCModel:
             Fuel_rate,
             O2,
             Petcoke,
-            RDF_Fuel,
+            RDF,
             Calcination_sink,
         )
 
@@ -563,7 +563,7 @@ class MasterMPC:
 
         p[MPCParameter.O2] = inputs["O2"]
         p[MPCParameter.PETCOKE] = inputs["Petcoke"]
-        p[MPCParameter.RDF] = inputs["RDF_Fuel"]
+        p[MPCParameter.RDF] = inputs["RDF"]
         p[MPCParameter.CALCINATION] = getattr(
             state,
             "Calcination_Q_sink",

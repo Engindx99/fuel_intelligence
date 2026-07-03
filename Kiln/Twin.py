@@ -2,6 +2,8 @@ from kiln.globalstate import GlobalState
 from kiln.burning import Burning
 from kiln.transition import Transition
 from kiln.calciner import Calciner
+from kiln.preheater import Preheater
+from kiln.cooler import Cooler
 from controls.mpc import MasterMPC
 
 import numpy as np
@@ -26,7 +28,7 @@ class Twin:
             N=cfg["plant"]["N"],
             L=cfg["plant"]["length"],
         )
-        
+
         # ======================================================
         # TRANSITION MODEL
         # ======================================================
@@ -41,6 +43,22 @@ class Twin:
         self.calciner = Calciner(
             N=cfg["plant"]["N"],
             L=cfg["calciner"]["length"],
+        )
+
+        # ======================================================
+        # PREHEATER MODEL
+        # ======================================================
+        self.preheater = Preheater(
+            N=cfg["plant"]["N"],
+            L=cfg["preheater"]["length"],
+        )
+
+        # ======================================================
+        # COOLER MODEL
+        # ======================================================
+        self.cooler = Cooler(
+            N=cfg["plant"]["N"],
+            L=cfg["cooler"]["length"],
         )
 
         # ======================================================
@@ -65,14 +83,12 @@ class Twin:
         self.log_interval = cfg["logging"]["interval_sec"]
         self._next_log_time = 0.0
 
-
-
         # ======================================================
         # LAST VALID INPUTS
         # ======================================================
         self._last_inputs = {
 
-            "Fuel_rate": cfg["fuel"]["fuel_rate"],
+            "Fuel_rate_total": cfg["fuel"]["Fuel_rate_total"],
 
             "Petcoke": cfg["fuel"]["petcoke_fraction"],
 
@@ -81,7 +97,7 @@ class Twin:
                 - cfg["fuel"]["petcoke_fraction"]
                 - cfg["fuel"]["rdf_fraction"],
 
-            "RDF_Fuel": cfg["fuel"]["rdf_fraction"],
+            "RDF": cfg["fuel"]["rdf_fraction"],
 
             "O2": cfg["fuel"]["oxygen"],
         }
@@ -91,10 +107,10 @@ class Twin:
 
         return {
 
-            "Fuel_rate":
+            "Fuel_rate_total":
                 raw.get(
-                    "Fuel_rate",
-                    self._last_inputs["Fuel_rate"],
+                    "Fuel_rate_total",
+                    self._last_inputs["Fuel_rate_total"],
                 ),
 
             "Petcoke":
@@ -106,13 +122,13 @@ class Twin:
             "Lignite":
                 raw.get(
                     "Lignite",
-                    self._last_inputs["Lignite"],
+                    self._last_inputs["coal"],
                 ),
 
-            "RDF_Fuel":
+            "RDF":
                 raw.get(
-                    "RDF_Fuel",
-                    self._last_inputs["RDF_Fuel"],
+                    "RDF",
+                    self._last_inputs["RDF"],
                 ),
 
             "O2":
@@ -165,63 +181,63 @@ class Twin:
         # ======================================================
         self.time += self.dt
 
-    # ======================================================
-    # LOGGING
-    # ======================================================
-    if self.time >= self._next_log_time:
+        # ======================================================
+        # LOGGING
+        # ======================================================
+        if self.time >= self._next_log_time:
 
-        idx = len(self.state.Tg_burning) // 2
+            idx = len(self.state.Tg_burning) // 2
 
-        # ================= BURNING =================
-        Tg_burn = float(self.state.Tg_burning[idx])
-        Ts_burn = float(self.state.Ts_burning[idx])
-        Tw_burn = float(self.state.Tw_burning[idx])
-        
-        # ================= TRANSITION =================
-        Tg_trans = float(self.state.Tg_transition[idx])
-        Ts_trans = float(self.state.Ts_transition[idx])
-        Tw_trans = float(self.state.Tw_transition[idx])
+            # ================= BURNING =================
+            Tg_burn = float(self.state.Tg_burning[idx])
+            Ts_burn = float(self.state.Ts_burning[idx])
+            Tw_burn = float(self.state.Tw_burning[idx])
+            
+            # ================= TRANSITION =================
+            Tg_trans = float(self.state.Tg_transition[idx])
+            Ts_trans = float(self.state.Ts_transition[idx])
+            Tw_trans = float(self.state.Tw_transition[idx])
 
-        # ================= CALCINER =================
-        Tg_calc = float(self.state.Tg_calcination[idx])
-        Ts_calc = float(self.state.Ts_calcination[idx])
-        Tw_calc = float(self.state.Tw_calcination[idx])
+            # ================= CALCINER =================
+            Tg_calc = float(self.state.Tg_calcination[idx])
+            Ts_calc = float(self.state.Ts_calcination[idx])
+            Tw_calc = float(self.state.Tw_calcination[idx])
 
-        fuel_rate = inputs["Fuel_rate"]
+            fuel_rate_total = inputs["Fuel_rate_total"]
 
-        # --------------------------------------------------
-        # MPC reference tracking (Burning)
-        # --------------------------------------------------
-        Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
-        Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
+            # --------------------------------------------------
+            # MPC reference tracking (Burning)
+            # --------------------------------------------------
+            Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
+            Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
 
-        eTg = Tg_ref - Tg_burn
-        eTs = Ts_ref - Ts_burn
+            eTg = Tg_ref - Tg_burn
+            eTs = Ts_ref - Ts_burn
 
-        print(
-            f"[REPORT] "
-            f"t={self.time/60:.1f} min | "
-            f"Fuel={fuel_rate:.3f} t/h\n"
+            print(
+                f"[REPORT] "
+                f"t={self.time/60:.1f} min | "
+                f"Fuel={Fuel_rate_total:.3f} t/h\n"
 
-            f"  Burning  | "
-            f"Tg={Tg_burn:.2f} K | "
-            f"Ts={Ts_burn:.2f} K | "
-            f"Tw={Tw_burn:.2f} K | "
-            f"eTg={eTg:+.2f} K | "
-            f"eTs={eTs:+.2f} K\n"
+                f"  Burning  | "
+                f"Tg={Tg_burn:.2f} K | "
+                f"Ts={Ts_burn:.2f} K | "
+                f"Tw={Tw_burn:.2f} K | "
+                f"eTg={eTg:+.2f} K | "
+                f"eTs={eTs:+.2f} K\n"
 
-            f"  Calciner | "
-            f"Tg={Tg_calc:.2f} K | "
-            f"Ts={Ts_calc:.2f} K | "
-            f"Tw={Tw_calc:.2f} K | "
-            f"H_in={self.state.Hgas_burning_out/1e6:.2f} MW | "
-            f"H_out={self.state.Hgas_calciner_out/1e6:.2f} MW",
-            flush=True,
-        )
+                f"  Calciner | "
+                f"Tg={Tg_calc:.2f} K | "
+                f"Ts={Ts_calc:.2f} K | "
+                f"Tw={Tw_calc:.2f} K | "
+                f"H_in={self.state.Hgas_burning_out/1e6:.2f} MW | "
+                f"H_out={self.state.Hgas_calciner_out/1e6:.2f} MW",
+                flush=True,
+            )
 
-        self._next_log_time += self.log_interval
+            self._next_log_time += self.log_interval
 
-    return self.state
+        return self.state
 
     # --------------------------------------------------
     def run(self):

@@ -55,11 +55,14 @@ class Burning:
         self.hv_gs = 1300.0
         self.hv_gw = 250.0
         self.hv_ws = 300.0
+        
+        self.T_amb = 300.0
 
         # ================= FUEL =================
         self.LHV_petcoke = 32e6
-        self.LHV_lignite = 18e6
+        self.LHV_coal = 18e6
         self.LHV_RDF = 20e6
+        self.LHV_H2 = 120e6
 
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
@@ -91,43 +94,45 @@ class Burning:
 
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
+        
+        #=============== INPUTS ==================
 
-        # ================= FUEL MIX =================
-        p = inputs.get("Petcoke", 0.6)
-        a = inputs.get("RDF_Fuel", 0.2)
-        l = 1.0 - p - a
-        if l < 0.0:
-            l = 0.0
-
-        norm = p + a + l + self.eps
-        p /= norm
-        a /= norm
-        l /= norm
-
-        # ======================================================
-        # FUEL
-        # ======================================================
-
-        fuel_rate = inputs.get("Fuel_rate", 1.0)  # ton/h
+        fuel_rate_total = inputs.get("Fuel_rate_total", 1.0)  # ton/h
         O2 = inputs.get("O2", 3.5)
+        
+        # ================= FUEL MIX =================
+
+        p = inputs.get("Petcoke", 0.50)
+        c = inputs.get("Coal", 0.30)
+        r = inputs.get("RDF", 0.15)
+        h = inputs.get("H2", 0.05)
+
+        norm = p + c + r + h + self.eps
+
+        p /= norm
+        c /= norm
+        r /= norm
+        h /= norm
+    
+        # ======= CONVERSION (Fuel_rate : ton/h to kg/s) =======
+
+        fuel_rate_kg_s = fuel_rate_total * 1000.0 / 3600.0
+        
+        # ================= COMBUSTION =================
 
         eta = self.combustion_efficiency(O2)
 
-        LHV_mix = p * self.LHV_petcoke + l * self.LHV_lignite + a * self.LHV_RDF
+        Q_petcoke = fuel_rate_kg_s * p * self.LHV_petcoke
+        Q_coal    = fuel_rate_kg_s * c * self.LHV_coal
+        Q_RDF     = fuel_rate_kg_s * r * self.LHV_RDF
+        Q_H2      = fuel_rate_kg_s * h * self.LHV_H2
 
-        # ======================================================
-        # FUEL CONVERSION
-        # Fuel_rate : ton/h  -->  kg/s
-        # ======================================================
-        fuel_rate_kg_s = fuel_rate * 1000.0 / 3600.0
-
-        # ======================================================
-        # HEAT SOURCE
-        # Q_in : W (= J/s)
-        # ======================================================
-        Q_in = fuel_rate_kg_s * LHV_mix * eta
-
-        q_vol = Q_in / (self.V_total + self.eps)
+        Q_burning = eta * (Q_petcoke + Q_coal + Q_RDF + Q_H2)
+        
+            
+        # ================= HEAT SOURCE: W (= J/s) =================
+        
+        q_vol = Q_burning / (self.V_total + self.eps)
 
         sink_density = calcination_sink / (self.V_total + self.eps)
         q_vol = q_vol - 0.05 * sink_density
@@ -160,14 +165,24 @@ class Burning:
         Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / effective_C_s)
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
-        return Tg_n, Ts_n, Tw_n
+        return (Tg_n,Ts_n,Tw_n,Q_petcoke,Q_coal,Q_RDF,Q_H2, Q_burning,)
+    
 
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, inputs, dt):
 
-        Tg, Ts, Tw = self.thermal_step(
+        (
+            Tg,
+            Ts,
+            Tw,
+            Q_petcoke,
+            Q_coal,
+            Q_RDF,
+            Q_H2,
+            Q_burning,
+        ) = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
             state.Tw_burning,
@@ -181,11 +196,19 @@ class Burning:
         state.Ts_burning = Ts
         state.Tw_burning = Tw
 
+        # ================= FUEL ENERGY =================
+        state.Q_petcoke = Q_petcoke
+        state.Q_coal = Q_coal
+        state.Q_RDF = Q_RDF
+        state.Q_H2 = Q_H2
+
+        # ================= TOTAL BURNING ENERGY =================
+        state.Q_burning = Q_burning
+
         # ================= ENERGY TO CALCINER =================
         state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
 
         return state
-    
     
     # ======================================================
     def gas_enthalpy_out(self, Tg):
@@ -217,9 +240,9 @@ if __name__ == "__main__":
     model = Burning(N=5)
 
     inputs = {
-        "Fuel_rate": 5.0,  # ton/h
+        "Fuel_rate_total": 5.0,  # ton/h
         "Petcoke": 0.6,
-        "RDF_Fuel": 0.2,
+        "RDF": 0.2,
         "O2": 3.5,
     }
 

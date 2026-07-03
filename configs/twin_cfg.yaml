@@ -2,6 +2,19 @@ plant:
   N: 5
   length: 60.0
 
+transition:
+  length: 25.0
+
+calciner:
+  length: 25.0
+
+preheater:
+  length: 25.0
+
+cooler:
+  length: 25.0
+  
+
 simulation:
   
   dt: 0.05 # Plant integration time [s]
