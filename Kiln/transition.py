@@ -152,11 +152,11 @@ class Transition:
             state.Tw_transition,
             Q_in_transition=state.Hgas_burning_out,
             dt=dt,
-            reaction_sink=getattr(state, "Calcination_Q_sink", 0.0),
+            reaction_sink=getattr(state, "Transition_Q_sink", 0.0),
         )
 
         # ================= ENERGY STORED =================
-        state.Calcination_stored_energy_change = np.sum(
+        state.Transition_stored_energy_change = np.sum(
             self._rho_g_Vcell_Cp_g * (Tg - state.Tg_transition_old) / dt
         )
 

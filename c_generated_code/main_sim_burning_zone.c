@@ -109,6 +109,8 @@ int main()
     p[2] = 0;
     p[3] = 0;
     p[4] = 0;
+    p[5] = 0;
+    p[6] = 0;
 
     burning_zone_acados_sim_update_params(capsule, p, NP);
   

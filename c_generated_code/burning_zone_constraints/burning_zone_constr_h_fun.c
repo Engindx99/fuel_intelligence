@@ -53,13 +53,13 @@ extern "C" {
 static const casadi_int casadi_s0[3] = {15, 1, 1};
 static const casadi_int casadi_s1[3] = {1, 1, 1};
 static const casadi_int casadi_s2[3] = {0, 1, 1};
-static const casadi_int casadi_s3[3] = {5, 1, 1};
+static const casadi_int casadi_s3[3] = {7, 1, 1};
 
-/* burning_zone_constr_h_fun:(i0[15],i1,i2[0],i3[5])->(o0) */
+/* burning_zone_constr_h_fun:(i0[15],i1,i2[0],i3[7])->(o0) */
 static int casadi_f0(const casadi_real** arg, casadi_real** res, casadi_int* iw, casadi_real* w, int mem) {
   casadi_real a0, a1;
   a0=arg[1]? arg[1][0] : 0;
-  a1=arg[3]? arg[3][4] : 0;
+  a1=arg[3]? arg[3][6] : 0;
   a0=(a0-a1);
   if (res[0]!=0) res[0][0]=a0;
   return 0;

@@ -32,10 +32,14 @@ checkpoint:
   enabled: true
   file: burning_ckpt.pkl
 
-fuel:
   
-  petcoke_fraction: 0.6 # Initial fuel composition
-  rdf_fraction: 0.2
+fuel:
+  Fuel_rate_total: 3.0
+  petcoke_fraction: 0.50
+  coal_fraction: 0.30
+  rdf_fraction: 0.15
+  h2_fraction: 0.05
+  oxygen: 3.5
 
   
   oxygen: 3.5 # Initial combustion conditions

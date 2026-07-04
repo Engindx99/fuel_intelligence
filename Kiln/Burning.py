@@ -102,10 +102,10 @@ class Burning:
         
         # ================= FUEL MIX =================
 
-        p = inputs.get("Petcoke", 0.50)
-        c = inputs.get("Coal", 0.30)
-        r = inputs.get("RDF", 0.15)
-        h = inputs.get("H2", 0.05)
+        p = inputs.get("Petcoke_ratio", 0.50)
+        c = inputs.get("Coal_ratio", 0.30)
+        r = inputs.get("RDF_ratio", 0.15)
+        h = inputs.get("H2_ratio", 0.05)
 
         norm = p + c + r + h + self.eps
 
@@ -241,8 +241,8 @@ if __name__ == "__main__":
 
     inputs = {
         "Fuel_rate_total": 5.0,  # ton/h
-        "Petcoke": 0.6,
-        "RDF": 0.2,
+        "Petcoke_ratio": 0.6,
+        "RDF_ratio": 0.2,
         "O2": 3.5,
     }
 

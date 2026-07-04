@@ -90,14 +90,17 @@ class Twin:
 
             "Fuel_rate_total": cfg["fuel"]["Fuel_rate_total"],
 
-            "Petcoke": cfg["fuel"]["petcoke_fraction"],
+            "Petcoke_ratio": cfg["fuel"]["petcoke_fraction"],
 
-            "Lignite":
+            "Coal_ratio":
                 1.0
                 - cfg["fuel"]["petcoke_fraction"]
-                - cfg["fuel"]["rdf_fraction"],
+                - cfg["fuel"]["rdf_fraction"]
+                - cfg["fuel"].get("h2_fraction", 0.0),
 
-            "RDF": cfg["fuel"]["rdf_fraction"],
+            "RDF_ratio": cfg["fuel"]["rdf_fraction"],
+
+            "H2_ratio": cfg["fuel"].get("h2_fraction", 0.0),
 
             "O2": cfg["fuel"]["oxygen"],
         }
@@ -107,35 +110,35 @@ class Twin:
 
         return {
 
-            "Fuel_rate_total":
-                raw.get(
-                    "Fuel_rate_total",
-                    self._last_inputs["Fuel_rate_total"],
-                ),
+            "Fuel_rate_total": raw.get(
+                "Fuel_rate_total",
+                self._last_inputs["Fuel_rate_total"],
+            ),
 
-            "Petcoke":
-                raw.get(
-                    "Petcoke",
-                    self._last_inputs["Petcoke"],
-                ),
+            "Petcoke_ratio": raw.get(
+                "Petcoke_ratio",
+                self._last_inputs["Petcoke_ratio"],
+            ),
 
-            "Lignite":
-                raw.get(
-                    "Lignite",
-                    self._last_inputs["coal"],
-                ),
+            "Coal_ratio": raw.get(
+                "Coal_ratio",
+                self._last_inputs["Coal_ratio"],
+            ),
 
-            "RDF":
-                raw.get(
-                    "RDF",
-                    self._last_inputs["RDF"],
-                ),
+            "RDF_ratio": raw.get(
+                "RDF_ratio",
+                self._last_inputs["RDF_ratio"],
+            ),
 
-            "O2":
-                raw.get(
-                    "O2",
-                    self._last_inputs["O2"],
-                ),
+            "H2_ratio": raw.get(
+                "H2_ratio",
+                self._last_inputs["H2_ratio"],
+            ),
+
+            "O2": raw.get(
+                "O2",
+                self._last_inputs["O2"],
+            ),
         }
 
     # --------------------------------------------------
@@ -199,9 +202,9 @@ class Twin:
             Tw_trans = float(self.state.Tw_transition[idx])
 
             # ================= CALCINER =================
-            Tg_calc = float(self.state.Tg_calcination[idx])
-            Ts_calc = float(self.state.Ts_calcination[idx])
-            Tw_calc = float(self.state.Tw_calcination[idx])
+            Tg_calc = float(self.state.Tg_calciner[idx])
+            Ts_calc = float(self.state.Ts_calciner[idx])
+            Tw_calc = float(self.state.Tw_calciner[idx])
 
             fuel_rate_total = inputs["Fuel_rate_total"]
 
@@ -217,7 +220,7 @@ class Twin:
             print(
                 f"[REPORT] "
                 f"t={self.time/60:.1f} min | "
-                f"Fuel={Fuel_rate_total:.3f} t/h\n"
+                f"Fuel={fuel_rate_total:.3f} t/h\n"
 
                 f"  Burning  | "
                 f"Tg={Tg_burn:.2f} K | "

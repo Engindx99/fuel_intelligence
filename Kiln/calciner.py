@@ -62,8 +62,8 @@ class Calciner:
         self._rho_s_Cp_s = self.rho_s * self.Cp_s
         self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
-        
-        # ======================================================
+
+    # ======================================================
     def thermal_step(self, Tg, Ts, Tw, Q_in_calciner, dt, reaction_sink=0.0):
 
         # ================= GRADIENTS (NO ALLOC) =================
@@ -87,7 +87,7 @@ class Calciner:
         # REACTION ENERGY SINK
         # ======================================================
         sink_density = reaction_sink / (m_dot_g * self.Cp_g * self.L + self.eps)
-        
+
         q_vol = q_in_vol
         q_vol = q_vol - sink_density
 
@@ -97,21 +97,17 @@ class Calciner:
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
         # ================= SOLID CAPACITY =================
-
         effective = 0.01
         C_s = self._rho_s_Cp_s
         effective_C_s = effective * C_s
 
         # ================= GAS CAPACITY =================
-
         C_g = self._rho_g_Vcell_Cp_g
 
         # ================= WALL CAPACITY =================
-
         C_w = self._rho_wall_Vwall_Cp
 
         # ================= HEAT LOSS =================
-
         q_loss = (
             self.h_ext
             * self.A_wall
@@ -119,7 +115,6 @@ class Calciner:
         ) / (self.V_cell + self.eps)
 
         # ================= DYNAMICS =================
-
         Tg_n = Tg + dt * (
             -self.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
@@ -135,73 +130,54 @@ class Calciner:
         )
 
         return Tg_n, Ts_n, Tw_n
-    
-    
+
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
 
-        state.Tg_calcination_old = state.Tg_calcination.copy()
-        state.Ts_calcination_old = state.Ts_calcination.copy()
-        state.Tw_calcination_old = state.Tw_calcination.copy()
+        state.Tg_calciner_old = state.Tg_calciner.copy()
+        state.Ts_calciner_old = state.Ts_calciner.copy()
+        state.Tw_calciner_old = state.Tw_calciner.copy()
 
         Tg, Ts, Tw = self.thermal_step(
-            state.Tg_calcination,
-            state.Ts_calcination,
-            state.Tw_calcination,
+            state.Tg_calciner,
+            state.Ts_calciner,
+            state.Tw_calciner,
             Q_in_calciner=state.Hgas_transition_out,
             dt=dt,
-            reaction_sink=getattr(state, "Calcination_Q_sink", 0.0),
+            reaction_sink=getattr(state, "Calciner_Q_sink", 0.0),
         )
 
         # ================= ENERGY STORED =================
-        state.Calcination_stored_energy_change = np.sum(
-            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_calcination_old) / dt
+        state.Calciner_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_calciner_old) / dt
         )
 
         # ================= UPDATE STATES =================
-        state.Tg_calcination = Tg
-        state.Ts_calcination = Ts
-        state.Tw_calcination = Tw
+        state.Tg_calciner = Tg
+        state.Ts_calciner = Ts
+        state.Tw_calciner = Tw
 
         # ================= OUTPUT ENTHALPY =================
-        state.Hgas_calciner_out = self.gas_enthalpy_out(state.Tg_calcination)
+        state.Hgas_calciner_out = self.gas_enthalpy_out(state.Tg_calciner)
 
         # ================= ENERGY BALANCE =================
-        state.Calcination_energy_balance = (
+        state.Calciner_energy_balance = (
             state.Hgas_transition_out
             - state.Hgas_calciner_out
-            - state.Calcination_stored_energy_change
+            - state.Calciner_stored_energy_change
         )
 
         return state
-    
+
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE
     # ======================================================
     def gas_enthalpy_out(self, Tg):
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
-        
+
         H_out = m_dot_g * self.Cp_g * Tg[-1]
 
         return H_out
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    

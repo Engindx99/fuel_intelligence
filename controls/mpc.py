@@ -11,7 +11,7 @@ from controls.mpc_parameters import MPCParameter
 class BurningMPCModel:
 
     def __init__(self, burning_model):
-        
+
         self.np = len(MPCParameter)
 
         # ======================================================
@@ -32,7 +32,7 @@ class BurningMPCModel:
         self.n_Tw = self.N
 
         self.nx = self.n_Tg + self.n_Ts + self.n_Tw
-        self.nu = 1      # Fuel_rate
+        self.nu = 1  # Fuel_rate
 
     # ======================================================
     # STATE VECTOR
@@ -63,26 +63,35 @@ class BurningMPCModel:
     def build_parameters(self):
 
         O2 = ca.SX.sym("O2")
-        Petcoke = ca.SX.sym("Petcoke")
-        RDF = ca.SX.sym("RDF")
-        Calcination_sink = ca.SX.sym("Calcination_sink")
-        _Fuel_prev = ca.SX.sym("Fuel_prev")
+
+        Petcoke_ratio = ca.SX.sym("Petcoke_ratio")
+        Coal_ratio = ca.SX.sym("Coal_ratio")
+        RDF_ratio = ca.SX.sym("RDF_ratio")
+        H2_ratio = ca.SX.sym("H2_ratio")
+
+        Transition_Q_sink = ca.SX.sym("Transition_Q_sink")
+
+        Fuel_prev = ca.SX.sym("Fuel_prev")
 
         p = ca.vertcat(
             O2,
-            Petcoke,
-            RDF,
-            Calcination_sink,
-            _Fuel_prev,
+            Petcoke_ratio,
+            Coal_ratio,
+            RDF_ratio,
+            H2_ratio,
+            Transition_Q_sink,
+            Fuel_prev,
         )
 
         return (
             p,
             O2,
-            Petcoke,
-            RDF,
-            Calcination_sink,
-            _Fuel_prev,
+            Petcoke_ratio,
+            Coal_ratio,
+            RDF_ratio,
+            H2_ratio,
+            Transition_Q_sink,
+            Fuel_prev,
         )
 
     # ======================================================
@@ -95,19 +104,31 @@ class BurningMPCModel:
     # ======================================================
     # HEAT SOURCE
     # ======================================================
-    def build_heat_source(self, Fuel_rate, O2, Petcoke, RDF, Calcination_sink):
+    def build_heat_source(
+        self,
+        Fuel_rate,
+        O2,
+        Petcoke_ratio,
+        Coal_ratio,
+        RDF_ratio,
+        H2_ratio,
+        Transition_Q_sink,
+    ):
 
         # --------------------------------------------------
         # Fuel fractions
         # --------------------------------------------------
-        p = Petcoke
-        a = RDF
-        l = ca.fmax(1.0 - p - a, 0.0)
+        p = Petcoke_ratio
+        c = Coal_ratio
+        r = RDF_ratio
+        h = H2_ratio
 
-        norm = p + a + l + self.m.eps
+        norm = p + c + r + h + self.m.eps
+
         p /= norm
-        a /= norm
-        l /= norm
+        c /= norm
+        r /= norm
+        h /= norm
 
         # --------------------------------------------------
         # Combustion efficiency
@@ -117,7 +138,12 @@ class BurningMPCModel:
         # --------------------------------------------------
         # Mixed fuel heating value
         # --------------------------------------------------
-        LHV_mix = p * self.m.LHV_petcoke + l * self.m.LHV_lignite + a * self.m.LHV_RDF
+        LHV_mix = (
+            p * self.m.LHV_petcoke
+            + c * self.m.LHV_coal
+            + r * self.m.LHV_RDF
+            + h * self.m.LHV_H2
+        )
 
         # --------------------------------------------------
         # Fuel conversion
@@ -131,9 +157,9 @@ class BurningMPCModel:
         q_vol = Q_in / (self.m.V_total + self.m.eps)
 
         # --------------------------------------------------
-        # Calcination sink
+        # Transition sink
         # --------------------------------------------------
-        sink_density = Calcination_sink / (self.m.V_total + self.m.eps)
+        sink_density = Transition_Q_sink / (self.m.V_total + self.m.eps)
         q_vol -= 0.05 * sink_density
 
         return q_vol
@@ -161,7 +187,7 @@ class BurningMPCModel:
         dTs_dz = ca.vertcat(dTs[0], dTs)
 
         return dTg_dz, dTs_dz
-    
+
     # ======================================================
     # THERMAL CAPACITIES
     # ======================================================
@@ -176,7 +202,7 @@ class BurningMPCModel:
         C_w = self.m.rho_wall * self.m.V_wall * self.m.Cp_wall
 
         return C_g, effective_C_s, C_w
-    
+
     # ======================================================
     # WALL HEAT LOSSES
     # ======================================================
@@ -189,72 +215,44 @@ class BurningMPCModel:
         ) / (self.m.V_cell + self.m.eps)
 
         return q_loss
-    
+
     # ======================================================
     # DYNAMICS
     # ======================================================
     def build_dynamics(self):
 
-        """
-        Build symbolic nonlinear kiln dynamics.
-
-        Returns
-        -------
-        x : CasADi state vector
-        u : CasADi control vector
-        p : CasADi parameter vector
-        xdot : Continuous-time state derivatives
-        """
-
-        # --------------------------------------------------
-        # States / Controls / Parameters
-        # --------------------------------------------------
         x, Tg, Ts, Tw = self.build_state()
         u, Fuel_rate = self.build_control()
 
         (
             p,
             O2,
-            Petcoke,
-            RDF,
-            Calcination_sink,
-            _Fuel_prev,
+            Petcoke_ratio,
+            Coal_ratio,
+            RDF_ratio,
+            H2_ratio,
+            Transition_Q_sink,
+            Fuel_prev,
         ) = self.build_parameters()
 
-        # --------------------------------------------------
-        # Spatial gradients
-        # --------------------------------------------------
         dTg_dz, dTs_dz = self.build_gradients(Tg, Ts)
 
-        # --------------------------------------------------
-        # Heat generation
-        # --------------------------------------------------
         q_vol = self.build_heat_source(
             Fuel_rate,
             O2,
-            Petcoke,
-            RDF,
-            Calcination_sink,
+            Petcoke_ratio,
+            Coal_ratio,
+            RDF_ratio,
+            H2_ratio,
+            Transition_Q_sink,
         )
 
-        # --------------------------------------------------
-        # Heat transfer
-        # --------------------------------------------------
         q_gs, q_gw, q_ws = self.build_heat_transfer(Tg, Ts, Tw)
 
-        # --------------------------------------------------
-        # Thermal capacities
-        # --------------------------------------------------
         C_g, C_s, C_w = self.build_capacities()
 
-        # --------------------------------------------------
-        # Wall losses
-        # --------------------------------------------------
         q_loss = self.build_wall_losses(Tw)
 
-        # --------------------------------------------------
-        # Differential equations
-        # --------------------------------------------------
         Tg_dot = -self.m.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g
         Ts_dot = -self.m.u_s * dTs_dz + (q_gs - q_ws) / C_s
         Tw_dot = (q_gw + q_ws - q_loss) / C_w
@@ -437,7 +435,7 @@ class ACADOSMPC:
 
         ocp.model.con_h_expr = ca.vertcat(fuel_delta)
         ocp.constraints.lh = np.array([-delta_max])
-        ocp.constraints.uh = np.array([ delta_max])
+        ocp.constraints.uh = np.array([delta_max])
 
         # --------------------------------------------------
         # Initial state
@@ -531,8 +529,8 @@ class MasterMPC:
         # ======================================================
         # TIMING
         # ======================================================
-        self.dt_mpc = cfg["mpc"]["mpc_update_sec"]          # 5s
-        self.dt_act = cfg["mpc"]["actuator_update_sec"]     # 60s
+        self.dt_mpc = cfg["mpc"]["mpc_update_sec"]          # 5 s
+        self.dt_act = cfg["mpc"]["actuator_update_sec"]     # 60 s
 
         self.last_mpc_time = -1e30
         self.last_act_time = -1e30
@@ -541,13 +539,15 @@ class MasterMPC:
         # CONTROL MEMORY
         # ======================================================
         self.last_control = cfg["mpc"]["fuel_min"]
+
         self._current_plan = None
-        self._plan_index = 0   #  actuator tracking fix
+        self._plan_index = 0
 
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def update_state(self, state):
+
         self.mpc.set_initial_state(
             state.Tg_burning,
             state.Ts_burning,
@@ -562,19 +562,23 @@ class MasterMPC:
         p = np.zeros(len(MPCParameter))
 
         p[MPCParameter.O2] = inputs["O2"]
-        p[MPCParameter.PETCOKE] = inputs["Petcoke"]
-        p[MPCParameter.RDF] = inputs["RDF"]
+
+        p[MPCParameter.PETCOKE_RATIO] = inputs["Petcoke_ratio"]
+        p[MPCParameter.COAL_RATIO]    = inputs["Coal_ratio"]
+        p[MPCParameter.RDF_RATIO]     = inputs["RDF_ratio"]
+        p[MPCParameter.H2_RATIO]      = inputs["H2_ratio"]
+
         p[MPCParameter.CALCINATION] = getattr(
             state,
             "Calcination_Q_sink",
             0.0,
         )
 
-        #  improved consistency: use current plan if exists
-        if self._current_plan is not None:
-            p[MPCParameter.FUEL_PREV] = self._current_plan[0]
-        else:
-            p[MPCParameter.FUEL_PREV] = self.last_control
+        p[MPCParameter.FUEL_PREV] = (
+            self._current_plan[0]
+            if self._current_plan
+            else self.last_control
+        )
 
         self.mpc.set_parameters(p)
 
@@ -584,17 +588,19 @@ class MasterMPC:
     def solve(self):
 
         status = self.mpc.solver.solve()
+
         if status != 0:
             raise RuntimeError(f"ACADOS failed: {status}")
 
         N = self.mpc.cfg["mpc"]["prediction_horizon"]
 
         U = []
+
         for k in range(N):
             U.append(float(self.mpc.solver.get(k, "u")[0]))
 
         self._current_plan = U
-        self._plan_index = 0   # reset index each solve
+        self._plan_index = 0
 
         return U
 
@@ -603,9 +609,9 @@ class MasterMPC:
     # ======================================================
     def compute_control(self, state, inputs, t):
 
-        # =========================
-        # MPC UPDATE (5s)
-        # =========================
+        # ======================================================
+        # MPC UPDATE
+        # ======================================================
         if t - self.last_mpc_time >= self.dt_mpc:
 
             self.update_state(state)
@@ -615,25 +621,25 @@ class MasterMPC:
 
             self.last_mpc_time = t
 
-        # =========================
-        # ACTUATOR UPDATE (60s)
-        # =========================
+        # ======================================================
+        # ACTUATOR UPDATE
+        # ======================================================
         if t - self.last_act_time >= self.dt_act:
 
             if self._current_plan is not None:
 
-                # FIX: shift-based execution (not always [0])
                 if self._plan_index < len(self._current_plan):
                     self.last_control = self._current_plan[self._plan_index]
                     self._plan_index += 1
                 else:
-                    # fallback safety
                     self.last_control = self._current_plan[-1]
 
             self.last_act_time = t
 
-        # =========================
-        # OUTPUT (ZOH)
-        # =========================
-        return {"Fuel_rate": self.last_control}
+        # ======================================================
+        # ZERO-ORDER HOLD OUTPUT
+        # ======================================================
+        return {
+            "Fuel_rate_total": self.last_control,
+        }
            

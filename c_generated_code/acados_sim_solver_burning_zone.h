@@ -37,7 +37,7 @@
 #define BURNING_ZONE_NX     15
 #define BURNING_ZONE_NZ     0
 #define BURNING_ZONE_NU     1
-#define BURNING_ZONE_NP     5
+#define BURNING_ZONE_NP     7
 
 #ifdef __cplusplus
 extern "C" {

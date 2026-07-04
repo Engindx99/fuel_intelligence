@@ -1320,7 +1320,7 @@ int burning_zone_acados_update_params(burning_zone_solver_capsule* capsule, int 
 {
     int solver_status = 0;
 
-    int casadi_np = 5;
+    int casadi_np = 7;
     if (casadi_np != np) {
         printf("acados_update_params: trying to set %i parameters for external functions."
             " External function has %i parameters. Exiting.\n", np, casadi_np);
