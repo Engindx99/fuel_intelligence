@@ -77,19 +77,17 @@ class Calciner:
         dTs_dz[0] = dTs_dz[1]
 
         # ======================================================
-        # HEAT SOURCE
-        # Energy received from Transition Zone (W)
+        # NO INTERNAL HEAT GENERATION
+        # Calciner receives hot gas by advection only.
         # ======================================================
-        m_dot_g = self.rho_g * self.u_g * self.A_cross
-        q_in_vol = Q_in_calciner / self.V_total
+        q_vol = 0.0
 
         # ======================================================
         # REACTION ENERGY SINK
         # ======================================================
-        sink_density = reaction_sink / (m_dot_g * self.Cp_g * self.L + self.eps)
+        sink_density = reaction_sink / (self.V_total + self.eps)
 
-        q_vol = q_in_vol
-        q_vol = q_vol - sink_density
+        q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell

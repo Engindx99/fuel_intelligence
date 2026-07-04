@@ -77,19 +77,17 @@ class Transition:
         dTs_dz[0] = dTs_dz[1]
 
         # ======================================================
-        # HEAT SOURCE
-        # Energy received from Burning Zone (W)
+        # NO INTERNAL HEAT GENERATION
+        # Transition only transports incoming hot gas.
         # ======================================================
-        m_dot_g = self.rho_g * self.u_g * self.A_cross
-        q_in_vol = Q_in_transition / self.V_total
+        q_vol = 0.0
 
         # ======================================================
         # REACTION ENERGY SINK
         # ======================================================
-        sink_density = reaction_sink / (m_dot_g * self.Cp_g * self.L + self.eps)
-        
-        q_vol = q_in_vol
-        q_vol = q_vol - sink_density
+        sink_density = reaction_sink / (self.V_total + self.eps)
+
+        q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
@@ -183,7 +181,7 @@ class Transition:
     def gas_enthalpy_out(self, Tg):
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
-        
+
         H_out = m_dot_g * self.Cp_g * Tg[-1]
 
         return H_out

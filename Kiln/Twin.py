@@ -171,6 +171,14 @@ class Twin:
             inputs,
             self.dt,
         )
+        
+        # ======================================================
+        # TRANSITION
+        # ======================================================
+        self.state = self.transition.apply(
+            self.state,
+            self.dt,
+        )
 
         # ======================================================
         # CALCINER
@@ -179,6 +187,24 @@ class Twin:
             self.state,
             self.dt,
         )
+        
+        # ======================================================
+        # PREHEATER
+        # ======================================================
+        self.state = self.preheater.apply(
+            self.state,
+            self.dt,
+        )
+        
+        # ======================================================
+        # COOLER
+        # ======================================================
+        self.state = self.cooler.apply(
+            self.state,
+            self.dt,
+        )
+        
+        
 
         # ======================================================
         # TIME
@@ -186,50 +212,78 @@ class Twin:
         self.time += self.dt
 
         # ======================================================
-        # LOGGING (UNCHANGED)
+        # LOGGING
         # ======================================================
         if self.time >= self._next_log_time:
 
             idx = len(self.state.Tg_burning) // 2
 
+            # ================= BURNING =================
             Tg_burn = float(self.state.Tg_burning[idx])
             Ts_burn = float(self.state.Ts_burning[idx])
             Tw_burn = float(self.state.Tw_burning[idx])
 
+            # ================= TRANSITION =================
             Tg_trans = float(self.state.Tg_transition[idx])
             Ts_trans = float(self.state.Ts_transition[idx])
             Tw_trans = float(self.state.Tw_transition[idx])
 
+            # ================= CALCINER =================
             Tg_calc = float(self.state.Tg_calciner[idx])
             Ts_calc = float(self.state.Ts_calciner[idx])
             Tw_calc = float(self.state.Tw_calciner[idx])
 
+            # ================= PREHEATER =================
+            Tg_pre = float(self.state.Tg_preheater[idx])
+            Ts_pre = float(self.state.Ts_preheater[idx])
+            Tw_pre = float(self.state.Tw_preheater[idx])
+
+            # ================= COOLER =================
+            Tg_cool = float(self.state.Tg_cooler[idx])
+            Ts_cool = float(self.state.Ts_cooler[idx])
+            Tw_cool = float(self.state.Tw_cooler[idx])
+
             fuel_rate_total = inputs["Fuel_rate_total"]
 
-            Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
-            Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
-
-            eTg = Tg_ref - Tg_burn
-            eTs = Ts_ref - Ts_burn
-
             print(
-                f"[REPORT] "
-                f"t={self.time/60:.1f} min | "
-                f"Fuel={fuel_rate_total:.3f} t/h\n"
+                f"\n========== DIGITAL TWIN REPORT ==========\n"
 
-                f"  Burning  | "
-                f"Tg={Tg_burn:.2f} K | "
-                f"Ts={Ts_burn:.2f} K | "
-                f"Tw={Tw_burn:.2f} K | "
-                f"eTg={eTg:+.2f} K | "
-                f"eTs={eTs:+.2f} K\n"
+                f"Time            : {self.time/60:.1f} min\n"
+                f"Fuel Rate       : {fuel_rate_total:.2f} t/h\n"
 
-                f"  Calciner | "
-                f"Tg={Tg_calc:.2f} K | "
-                f"Ts={Ts_calc:.2f} K | "
-                f"Tw={Tw_calc:.2f} K | "
-                f"H_in={self.state.Hgas_burning_out/1e6:.2f} MW | "
-                f"H_out={self.state.Hgas_calciner_out/1e6:.2f} MW",
+                f"\n--- Burning ------------------------\n"
+                f"Tg              : {Tg_burn:.2f} K\n"
+                f"Ts              : {Ts_burn:.2f} K\n"
+                f"Tw              : {Tw_burn:.2f} K\n"
+                f"Q_burning       : {self.state.Q_burning/1e6:.2f} MW\n"
+                f"Hgas_out        : {self.state.Hgas_burning_out/1e6:.2f} MW\n"
+
+                f"\n--- Transition ---------------------\n"
+                f"Tg              : {Tg_trans:.2f} K\n"
+                f"Ts              : {Ts_trans:.2f} K\n"
+                f"Tw              : {Tw_trans:.2f} K\n"
+                f"Hgas_out        : {self.state.Hgas_transition_out/1e6:.2f} MW\n"
+
+                f"\n--- Calciner ----------------------------\n"
+                f"Tg              : {Tg_calc:.2f} K\n"
+                f"Ts              : {Ts_calc:.2f} K\n"
+                f"Tw              : {Tw_calc:.2f} K\n"
+                f"Hgas_in         : {self.state.Hgas_transition_out/1e6:.2f} MW\n"
+                f"Hgas_out        : {self.state.Hgas_calciner_out/1e6:.2f} MW\n"
+                f"Calcination     : {getattr(self.state, 'Calcination_Q_sink', 0.0)/1e6:.2f} MW\n"
+
+                f"\n--- Preheater ---------------------------\n"
+                f"Tg              : {Tg_pre:.2f} K\n"
+                f"Ts              : {Ts_pre:.2f} K\n"
+                f"Tw              : {Tw_pre:.2f} K\n"
+                f"Hgas_out        : {self.state.Hgas_preheater_out/1e6:.2f} MW\n"
+
+                f"\n--- Cooler ------------------------------\n"
+                f"Tg              : {Tg_cool:.2f} K\n"
+                f"Ts              : {Ts_cool:.2f} K\n"
+                f"Tw              : {Tw_cool:.2f} K\n"
+                f"Hgas_out        : {self.state.Hgas_cooler_out/1e6:.2f} MW\n",
+
                 flush=True,
             )
 
