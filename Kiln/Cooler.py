@@ -64,7 +64,7 @@ class Cooler:
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, Q_in_cooler, dt, reaction_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, Q_in_cooler, dt):
 
         # ================= GRADIENTS (NO ALLOC) =================
         dTg_dz = self._dTg_dz
@@ -82,11 +82,6 @@ class Cooler:
         # ======================================================
         q_vol = 0.0
 
-        # ======================================================
-        # REACTION ENERGY SINK
-        # ======================================================
-        sink_density = reaction_sink / (self.V_total + self.eps)
-        q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
@@ -112,6 +107,14 @@ class Cooler:
         ) / (self.V_cell + self.eps)
 
         wall_loss = np.sum(q_loss * self.V_cell)
+        
+        wall_debug = {
+        "q_loss_mean": float(np.mean(q_loss)),
+        "q_loss_total": float(wall_loss),
+        "A_wall": float(self.A_wall),
+        "V_cell": float(self.V_cell),
+        "N": len(Tw),
+    }
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
@@ -133,6 +136,7 @@ class Cooler:
             Ts_n,
             Tw_n,
             wall_loss,
+            wall_debug,
         )
 
 
@@ -141,23 +145,37 @@ class Cooler:
     # ======================================================
     def apply(self, state, dt):
 
+        # ======================================================
+        # STATE INTEGRITY CHECK
+        # ======================================================
+        if not isinstance(state.Tg_cooler, np.ndarray):
+            raise TypeError("Tg_cooler must be np.ndarray")
+
+        if state.Tg_cooler.shape != (5,):
+            raise ValueError(
+                f"Cooler state corrupted: {state.Tg_cooler.shape}"
+            )
+
         # ================= STORE OLD STATES =================
         state.Tg_cooler_old = state.Tg_cooler.copy()
         state.Ts_cooler_old = state.Ts_cooler.copy()
         state.Tw_cooler_old = state.Tw_cooler.copy()
 
+        # ======================================================
+        # THERMAL STEP
+        # ======================================================
         (
             Tg,
             Ts,
             Tw,
             wall_loss,
+            wall_debug,
         ) = self.thermal_step(
             state.Tg_cooler,
             state.Ts_cooler,
             state.Tw_cooler,
             Q_in_cooler=state.Hgas_preheater_out,
             dt=dt,
-
         )
 
         # ================= UPDATE STATES =================
@@ -166,10 +184,26 @@ class Cooler:
         state.Tw_cooler = Tw
 
         # ================= WALL LOSS =================
-        state.Wall_loss_cooler = wall_loss
+        state.Wall_loss_cooler = float(wall_loss)
+
+        # ================= DEBUG STRUCT (SAFE) =================
+        state.wall_debug_cooler = wall_debug or {
+            "q_loss_mean": 0.0,
+            "q_loss_total": 0.0,
+            "A_wall": 0.0,
+            "V_cell": 0.0,
+            "N": 0,
+        }
+        
+        state.q_loss_mean_cooler = state.wall_debug_cooler["q_loss_mean"]
+        state.A_wall_cooler      = state.wall_debug_cooler["A_wall"]
+        state.V_cell_cooler      = state.wall_debug_cooler["V_cell"]
+        state.N_cooler           = state.wall_debug_cooler["N"]
 
         # ================= OUTPUT ENTHALPY =================
-        state.Hgas_cooler_out = self.gas_enthalpy_out(state.Tg_cooler)
+        state.Hgas_cooler_out = self.gas_enthalpy_out(
+            state.Tg_cooler
+        )
 
         # ================= STORED ENERGY =================
         state.Cooler_stored_energy_change = np.sum(
@@ -184,7 +218,6 @@ class Cooler:
             - state.Hgas_cooler_out
             - state.Cooler_stored_energy_change
             - state.Wall_loss_cooler
-
         )
 
         return state

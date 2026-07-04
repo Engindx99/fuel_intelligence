@@ -153,58 +153,22 @@ class Twin:
             #     self._last_inputs,
             #     self.time,
             # )
-
             # self._last_inputs = self._safe_inputs(raw_inputs)
             pass
 
         except Exception as e:
             print("MPC FAILED:", repr(e))
-            # fallback: keep last valid control
 
         inputs = self._last_inputs
 
         # ======================================================
-        # BURNING
+        # ZONES
         # ======================================================
-        self.state = self.burning.apply(
-            self.state,
-            inputs,
-            self.dt,
-        )
-        
-        # ======================================================
-        # TRANSITION
-        # ======================================================
-        self.state = self.transition.apply(
-            self.state,
-            self.dt,
-        )
-
-        # ======================================================
-        # CALCINER
-        # ======================================================
-        self.state = self.calciner.apply(
-            self.state,
-            self.dt,
-        )
-        
-        # ======================================================
-        # PREHEATER
-        # ======================================================
-        self.state = self.preheater.apply(
-            self.state,
-            self.dt,
-        )
-        
-        # ======================================================
-        # COOLER
-        # ======================================================
-        self.state = self.cooler.apply(
-            self.state,
-            self.dt,
-        )
-        
-        
+        self.state = self.burning.apply(self.state, inputs, self.dt)
+        self.state = self.transition.apply(self.state, self.dt)
+        self.state = self.calciner.apply(self.state, self.dt)
+        self.state = self.preheater.apply(self.state, self.dt)
+        self.state = self.cooler.apply(self.state, self.dt)
 
         # ======================================================
         # TIME
@@ -262,8 +226,7 @@ class Twin:
             )
 
             print(
-                f"\n========== DIGITAL TWIN REPORT ==========\n"
-
+                "\n========== DIGITAL TWIN REPORT ==========\n"
                 f"Time            : {self.time/60:.1f} min\n"
                 f"Fuel Rate       : {fuel_rate_total:.2f} t/h\n"
 
@@ -324,8 +287,13 @@ class Twin:
                 f"Wall losses     : {total_wall_loss/1e6:.2f} MW\n"
                 f"Stored energy   : {total_stored/1e6:.2f} MW\n"
                 f"Calcination     : {self.state.Calciner_Q_sink/1e6:.2f} MW\n"
-                f"==========================================\n",
+                f"==========================================\n"
 
+                f"\n--- Wall Loss Debug ---------------------\n"
+                f"q_loss_mean    : {self.state.q_loss_mean_burning:.2f} W/m³\n"
+                f"A_wall         : {self.state.A_wall_burning:.2f} m²\n"
+                f"V_cell         : {self.state.V_cell_burning:.4f} m³\n"
+                f"N              : {self.state.N_burning}\n",
                 flush=True,
             )
 

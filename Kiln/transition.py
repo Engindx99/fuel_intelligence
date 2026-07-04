@@ -64,7 +64,7 @@ class Transition:
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
         
         # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, Q_in_transition, dt, reaction_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, Q_in_transition, dt):
 
         # ================= GRADIENTS (NO ALLOC) =================
         dTg_dz = self._dTg_dz
@@ -80,12 +80,6 @@ class Transition:
         # NO INTERNAL HEAT GENERATION
         # ======================================================
         q_vol = 0.0
-
-        # ======================================================
-        # REACTION ENERGY SINK
-        # ======================================================
-        sink_density = reaction_sink / (self.V_total + self.eps)
-        q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
@@ -112,6 +106,15 @@ class Transition:
 
         wall_loss = np.sum(q_loss * self.V_cell)
 
+        # ================= WALL DEBUG =================
+        wall_debug = {
+            "q_loss_mean": float(np.mean(q_loss)),
+            "q_loss_total": float(wall_loss),
+            "A_wall": float(self.A_wall),
+            "V_cell": float(self.V_cell),
+            "N": len(Tw),
+        }
+
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
             -self.u_g * dTg_dz
@@ -132,6 +135,7 @@ class Transition:
             Ts_n,
             Tw_n,
             wall_loss,
+            wall_debug,
         )
 
 
@@ -140,16 +144,31 @@ class Transition:
     # ======================================================
     def apply(self, state, dt):
 
+        # ======================================================
+        # STATE INTEGRITY CHECK
+        # ======================================================
+        if not isinstance(state.Tg_transition, np.ndarray):
+            raise TypeError("Tg_transition must be np.ndarray")
+
+        if state.Tg_transition.shape != (5,):
+            raise ValueError(
+                f"Transition state corrupted: {state.Tg_transition.shape}"
+            )
+
         # ================= STORE OLD STATES =================
         state.Tg_transition_old = state.Tg_transition.copy()
         state.Ts_transition_old = state.Ts_transition.copy()
         state.Tw_transition_old = state.Tw_transition.copy()
 
+        # ======================================================
+        # THERMAL STEP
+        # ======================================================
         (
             Tg,
             Ts,
             Tw,
             wall_loss,
+            wall_debug,
         ) = self.thermal_step(
             state.Tg_transition,
             state.Ts_transition,
@@ -164,10 +183,20 @@ class Transition:
         state.Tw_transition = Tw
 
         # ================= WALL LOSS =================
-        state.Wall_loss_transition = wall_loss
+        state.Wall_loss_transition = float(wall_loss)
+
+        # ================= DEBUG STRUCT =================
+        state.wall_debug_transition = wall_debug
+        
+        state.q_loss_mean_transition = state.wall_debug_transition["q_loss_mean"]
+        state.A_wall_transition      = state.wall_debug_transition["A_wall"]
+        state.V_cell_transition      = state.wall_debug_transition["V_cell"]
+        state.N_transition           = state.wall_debug_transition["N"]
 
         # ================= ENERGY TO NEXT ZONE =================
-        state.Hgas_transition_out = self.gas_enthalpy_out(state.Tg_transition)
+        state.Hgas_transition_out = self.gas_enthalpy_out(
+            state.Tg_transition
+        )
 
         # ================= STORED ENERGY =================
         state.Transition_stored_energy_change = np.sum(

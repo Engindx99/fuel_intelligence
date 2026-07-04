@@ -113,6 +113,14 @@ class Calciner:
         ) / (self.V_cell + self.eps)
 
         wall_loss = np.sum(q_loss * self.V_cell)
+        
+        wall_debug = {
+        "q_loss_mean": float(np.mean(q_loss)),
+        "q_loss_total": float(wall_loss),
+        "A_wall": float(self.A_wall),
+        "V_cell": float(self.V_cell),
+        "N": len(Tw),
+}
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
@@ -134,6 +142,7 @@ class Calciner:
             Ts_n,
             Tw_n,
             wall_loss,
+            wall_debug,
         )
 
 
@@ -142,16 +151,31 @@ class Calciner:
     # ======================================================
     def apply(self, state, dt):
 
+        # ======================================================
+        # STATE INTEGRITY CHECK
+        # ======================================================
+        if not isinstance(state.Tg_calciner, np.ndarray):
+            raise TypeError("Tg_calciner must be np.ndarray")
+
+        if state.Tg_calciner.shape != (5,):
+            raise ValueError(
+                f"Calciner state corrupted: {state.Tg_calciner.shape}"
+            )
+
         # ================= STORE OLD STATES =================
         state.Tg_calciner_old = state.Tg_calciner.copy()
         state.Ts_calciner_old = state.Ts_calciner.copy()
         state.Tw_calciner_old = state.Tw_calciner.copy()
 
+        # ======================================================
+        # THERMAL STEP
+        # ======================================================
         (
             Tg,
             Ts,
             Tw,
             wall_loss,
+            wall_debug,
         ) = self.thermal_step(
             state.Tg_calciner,
             state.Ts_calciner,
@@ -167,10 +191,26 @@ class Calciner:
         state.Tw_calciner = Tw
 
         # ================= WALL LOSS =================
-        state.Wall_loss_calciner = wall_loss
+        state.Wall_loss_calciner = float(wall_loss)
+
+        # ================= DEBUG STRUCT (SAFE) =================
+        state.wall_debug_calciner = wall_debug or {
+            "q_loss_mean": 0.0,
+            "q_loss_total": 0.0,
+            "A_wall": 0.0,
+            "V_cell": 0.0,
+            "N": 0,
+        }
+        
+        state.q_loss_mean_calciner = state.wall_debug_calciner["q_loss_mean"]
+        state.A_wall_calciner      = state.wall_debug_calciner["A_wall"]
+        state.V_cell_calciner      = state.wall_debug_calciner["V_cell"]
+        state.N_calciner           = state.wall_debug_calciner["N"]
 
         # ================= OUTPUT ENTHALPY =================
-        state.Hgas_calciner_out = self.gas_enthalpy_out(state.Tg_calciner)
+        state.Hgas_calciner_out = self.gas_enthalpy_out(
+            state.Tg_calciner
+        )
 
         # ================= STORED ENERGY =================
         state.Calciner_stored_energy_change = np.sum(

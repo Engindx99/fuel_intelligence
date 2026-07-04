@@ -64,7 +64,7 @@ class Preheater:
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, Q_in_preheater, dt, reaction_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, Q_in_preheater, dt):
 
         # ================= GRADIENTS (NO ALLOC) =================
         dTg_dz = self._dTg_dz
@@ -82,12 +82,7 @@ class Preheater:
         # ======================================================
         q_vol = 0.0
 
-        # ======================================================
-        # REACTION ENERGY SINK
-        # ======================================================
-        sink_density = reaction_sink / (self.V_total + self.eps)
 
-        q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
@@ -113,6 +108,14 @@ class Preheater:
         ) / (self.V_cell + self.eps)
 
         wall_loss = np.sum(q_loss * self.V_cell)
+        
+        wall_debug = {
+        "q_loss_mean": float(np.mean(q_loss)),
+        "q_loss_total": float(wall_loss),
+        "A_wall": float(self.A_wall),
+        "V_cell": float(self.V_cell),
+        "N": len(Tw),
+}
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
@@ -134,6 +137,7 @@ class Preheater:
             Ts_n,
             Tw_n,
             wall_loss,
+            wall_debug,
         )
 
 
@@ -142,16 +146,31 @@ class Preheater:
     # ======================================================
     def apply(self, state, dt):
 
+        # ======================================================
+        # STATE INTEGRITY CHECK
+        # ======================================================
+        if not isinstance(state.Tg_preheater, np.ndarray):
+            raise TypeError("Tg_preheater must be np.ndarray")
+
+        if state.Tg_preheater.shape != (5,):
+            raise ValueError(
+                f"Preheater state corrupted: {state.Tg_preheater.shape}"
+            )
+
         # ================= STORE OLD STATES =================
         state.Tg_preheater_old = state.Tg_preheater.copy()
         state.Ts_preheater_old = state.Ts_preheater.copy()
         state.Tw_preheater_old = state.Tw_preheater.copy()
 
+        # ======================================================
+        # THERMAL STEP
+        # ======================================================
         (
             Tg,
             Ts,
             Tw,
             wall_loss,
+            wall_debug,
         ) = self.thermal_step(
             state.Tg_preheater,
             state.Ts_preheater,
@@ -166,10 +185,26 @@ class Preheater:
         state.Tw_preheater = Tw
 
         # ================= WALL LOSS =================
-        state.Wall_loss_preheater = wall_loss
+        state.Wall_loss_preheater = float(wall_loss)
+
+        # ================= DEBUG STRUCT (SAFE) =================
+        state.wall_debug_preheater = wall_debug or {
+            "q_loss_mean": 0.0,
+            "q_loss_total": 0.0,
+            "A_wall": 0.0,
+            "V_cell": 0.0,
+            "N": 0,
+        }
+        
+        state.q_loss_mean_preheater = state.wall_debug_preheater["q_loss_mean"]
+        state.A_wall_preheater      = state.wall_debug_preheater["A_wall"]
+        state.V_cell_preheater      = state.wall_debug_preheater["V_cell"]
+        state.N_preheater           = state.wall_debug_preheater["N"]
 
         # ================= OUTPUT ENTHALPY =================
-        state.Hgas_preheater_out = self.gas_enthalpy_out(state.Tg_preheater)
+        state.Hgas_preheater_out = self.gas_enthalpy_out(
+            state.Tg_preheater
+        )
 
         # ================= STORED ENERGY =================
         state.Preheater_stored_energy_change = np.sum(

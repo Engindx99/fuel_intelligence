@@ -72,7 +72,6 @@ class GlobalState:
     Preheater_energy_balance: float = 0.0
     Cooler_energy_balance: float = 0.0
 
-
     # ======================================================
     # WALL HEAT LOSSES (W)
     # ======================================================
@@ -84,6 +83,17 @@ class GlobalState:
     Wall_loss_cooler: float = 0.0
 
     Total_wall_loss: float = 0.0
+    
+    # ================= WALL LOSS DEBUG =================
+    q_loss_mean_burning: float = 0.0
+    A_wall_burning: float = 0.0
+    V_cell_burning: float = 0.0
+    N_burning: int = 0
+
+    q_loss_mean_transition: float = 0.0
+    A_wall_transition: float = 0.0
+    V_cell_transition: float = 0.0
+    N_transition: int = 0
     
     # ======================================================
     # REACTION ENERGY SINKS (W)

@@ -81,6 +81,10 @@ class Burning:
         self._rho_s_Cp_s = self.rho_s * self.Cp_s
         self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
+        
+        # ================= WALL ENERGY DEBUG =================
+        
+        self.wall_debug = {}
 
     # ======================================================
     def combustion_efficiency(self, O2):
@@ -98,14 +102,16 @@ class Burning:
 
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
-        
-        #=============== INPUTS ==================
 
-        fuel_rate_total = inputs.get("Fuel_rate_total", 1.0)  # ton/h
+        # ======================================================
+        # INPUTS
+        # ======================================================
+        fuel_rate_total = inputs.get("Fuel_rate_total", 1.0)
         O2 = inputs.get("O2", 3.5)
-        
-        # ================= FUEL MIX =================
 
+        # ======================================================
+        # FUEL MIX
+        # ======================================================
         p = inputs.get("Petcoke_ratio", 0.50)
         c = inputs.get("Coal_ratio", 0.30)
         r = inputs.get("RDF_ratio", 0.15)
@@ -117,13 +123,15 @@ class Burning:
         c /= norm
         r /= norm
         h /= norm
-    
-        # ======= CONVERSION (Fuel_rate : ton/h to kg/s) =======
 
+        # ======================================================
+        # FUEL FLOW (kg/s)
+        # ======================================================
         fuel_rate_kg_s = fuel_rate_total * 1000.0 / 3600.0
-        
-        # ================= COMBUSTION =================
 
+        # ======================================================
+        # COMBUSTION
+        # ======================================================
         eta = self.combustion_efficiency(O2)
 
         Q_petcoke = fuel_rate_kg_s * p * self.LHV_petcoke
@@ -131,32 +139,39 @@ class Burning:
         Q_RDF     = fuel_rate_kg_s * r * self.LHV_RDF
         Q_H2      = fuel_rate_kg_s * h * self.LHV_H2
 
-        Q_burning = eta * (Q_petcoke + Q_coal + Q_RDF + Q_H2)
-   
-            
-        # ================= HEAT SOURCE: W (= J/s) =================
-        
+        Q_burning = eta * (
+            Q_petcoke +
+            Q_coal +
+            Q_RDF +
+            Q_H2
+        )
+
+        # ======================================================
+        # HEAT SOURCE
+        # ======================================================
         q_vol = Q_burning / (self.V_total + self.eps)
 
-        # ================= HEAT TRANSFER =================
+        # ======================================================
+        # HEAT TRANSFER
+        # ======================================================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
-        # ================= SOLID CAPACITY =================
-
+        # ======================================================
+        # CAPACITIES
+        # ======================================================
         effective = 0.01
+
         C_s = self._rho_s_Cp_s
         effective_C_s = effective * C_s
 
-        # ================= GAS CAPACITY =================
-
         C_g = self._rho_g_Vcell_Cp_g
-
-        # ================= WALL CAPACITY (CACHED) =================
-
         C_w = self._rho_wall_Vwall_Cp
 
+        # ======================================================
+        # WALL HEAT LOSS
+        # ======================================================
         q_loss = (
             self.h_ext
             * self.A_wall
@@ -165,27 +180,61 @@ class Burning:
 
         wall_loss = np.sum(q_loss * self.V_cell)
 
-        # ================= DYNAMICS =================
-        Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
-        Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / effective_C_s)
-        Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
+        # ======================================================
+        # DEBUG INFORMATION
+        # ======================================================
+        wall_debug = {
+            "q_loss_mean": float(np.mean(q_loss)),
+            "q_loss_max": float(np.max(q_loss)),
+            "q_loss_total": float(wall_loss),
+            "A_wall": float(self.A_wall),
+            "V_cell": float(self.V_cell),
+            "N": int(self.N),
+        }
+
+        # ======================================================
+        # DYNAMICS
+        # ======================================================
+        Tg_n = Tg + dt * (
+            -self.u_g * dTg_dz
+            + (q_vol - q_gs - q_gw) / C_g
+        )
+
+        Ts_n = Ts + dt * (
+            -self.u_s * dTs_dz
+            + (q_gs - q_ws) / effective_C_s
+        )
+
+        Tw_n = Tw + dt * (
+            (q_gw + q_ws - q_loss) / C_w
+        )
 
         return (
-    Tg_n,
-    Ts_n,
-    Tw_n,
-    Q_petcoke,
-    Q_coal,
-    Q_RDF,
-    Q_H2,
-    Q_burning,
-    wall_loss,
-)
+            Tg_n,
+            Ts_n,
+            Tw_n,
+            Q_petcoke,
+            Q_coal,
+            Q_RDF,
+            Q_H2,
+            Q_burning,
+            wall_loss,
+            wall_debug,
+        )
     
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, inputs, dt):
+
+        # ======================================================
+        # STATE INTEGRITY CHECK
+        # ======================================================
+        if not isinstance(state.Tg_burning, np.ndarray):
+            raise TypeError("Tg_burning must be np.ndarray")
+
+        if state.Tg_burning.shape != (5,):
+            raise ValueError(f"Burning shape corrupted: {state.Tg_burning.shape}")
 
         # ================= STORE OLD STATES =================
         state.Tg_burning_old = state.Tg_burning.copy()
@@ -202,6 +251,7 @@ class Burning:
             Q_H2,
             Q_burning,
             wall_loss,
+            wall_debug
         ) = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
@@ -226,6 +276,21 @@ class Burning:
 
         # ================= WALL LOSS =================
         state.Wall_loss_burning = wall_loss
+
+        # ================= DEBUG STRUCT (SAFE) =================
+        state.wall_debug_burning = wall_debug or {
+            "q_loss_mean": 0.0,
+            "q_loss_total": 0.0,
+            "A_wall": 0.0,
+            "V_cell": 0.0,
+            "N": 0,
+        }
+        
+                # ================= DEBUG VALUES =================
+        state.q_loss_mean_burning = state.wall_debug_burning["q_loss_mean"]
+        state.A_wall_burning      = state.wall_debug_burning["A_wall"]
+        state.V_cell_burning      = state.wall_debug_burning["V_cell"]
+        state.N_burning           = state.wall_debug_burning["N"]
 
         # ================= ENERGY TO NEXT ZONE =================
         state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
