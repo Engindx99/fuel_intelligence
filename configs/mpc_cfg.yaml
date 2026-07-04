@@ -19,7 +19,7 @@ mpc:
   # PHYSICAL CONSTRAINTS
   # ======================================================
   fuel_min: 2.0
-  fuel_max: 6.0
+  fuel_max: 5.0
 
   max_fuel_delta: 0.03  # ton/h per 5s MPC step
 

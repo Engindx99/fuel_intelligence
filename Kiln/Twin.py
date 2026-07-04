@@ -90,19 +90,19 @@ class Twin:
 
             "Fuel_rate_total": cfg["fuel"]["Fuel_rate_total"],
 
-            "Petcoke_ratio": cfg["fuel"]["petcoke_fraction"],
+            "Petcoke_ratio": cfg["fuel"]["Petcoke_ratio"],
 
             "Coal_ratio":
                 1.0
-                - cfg["fuel"]["petcoke_fraction"]
-                - cfg["fuel"]["rdf_fraction"]
-                - cfg["fuel"].get("h2_fraction", 0.0),
+                - cfg["fuel"]["Petcoke_ratio"]
+                - cfg["fuel"]["RDF_ratio"]
+                - cfg["fuel"].get("H2_ratio", 0.0),
 
-            "RDF_ratio": cfg["fuel"]["rdf_fraction"],
+            "RDF_ratio": cfg["fuel"]["RDF_ratio"],
 
-            "H2_ratio": cfg["fuel"].get("h2_fraction", 0.0),
+            "H2_ratio": cfg["fuel"].get("H2_ratio", 0.0),
 
-            "O2": cfg["fuel"]["oxygen"],
+            "O2": cfg["fuel"]["O2"],
         }
 
     # --------------------------------------------------
@@ -145,16 +145,17 @@ class Twin:
     def step(self):
 
         # ======================================================
-        # MPC (scheduled inside MPC)
+        # MPC (DISABLED TEMPORARILY)
         # ======================================================
         try:
-            raw_inputs = self.mpc.compute_control(
-                self.state,
-                self._last_inputs,
-                self.time,
-            )
+            # raw_inputs = self.mpc.compute_control(
+            #     self.state,
+            #     self._last_inputs,
+            #     self.time,
+            # )
 
-            self._last_inputs = self._safe_inputs(raw_inputs)
+            # self._last_inputs = self._safe_inputs(raw_inputs)
+            pass
 
         except Exception as e:
             print("MPC FAILED:", repr(e))
@@ -185,32 +186,26 @@ class Twin:
         self.time += self.dt
 
         # ======================================================
-        # LOGGING
+        # LOGGING (UNCHANGED)
         # ======================================================
         if self.time >= self._next_log_time:
 
             idx = len(self.state.Tg_burning) // 2
 
-            # ================= BURNING =================
             Tg_burn = float(self.state.Tg_burning[idx])
             Ts_burn = float(self.state.Ts_burning[idx])
             Tw_burn = float(self.state.Tw_burning[idx])
-            
-            # ================= TRANSITION =================
+
             Tg_trans = float(self.state.Tg_transition[idx])
             Ts_trans = float(self.state.Ts_transition[idx])
             Tw_trans = float(self.state.Tw_transition[idx])
 
-            # ================= CALCINER =================
             Tg_calc = float(self.state.Tg_calciner[idx])
             Ts_calc = float(self.state.Ts_calciner[idx])
             Tw_calc = float(self.state.Tw_calciner[idx])
 
             fuel_rate_total = inputs["Fuel_rate_total"]
 
-            # --------------------------------------------------
-            # MPC reference tracking (Burning)
-            # --------------------------------------------------
             Tg_ref = self.mpc.cfg["mpc"]["Tg_setpoint"]
             Ts_ref = self.mpc.cfg["mpc"]["Ts_setpoint"]
 

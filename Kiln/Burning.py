@@ -3,8 +3,12 @@ import json
 import pickle
 import os
 import numpy as np
+import yaml
 
-
+def load_cfg(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+    
 class Burning:
 
     def __init__(self, N=5, L=60.0):
@@ -58,7 +62,7 @@ class Burning:
         
         self.T_amb = 300.0
 
-        # ================= FUEL =================
+        # ================= FUEL MJ/kg =================
         self.LHV_petcoke = 32e6
         self.LHV_coal = 18e6
         self.LHV_RDF = 20e6
@@ -128,7 +132,7 @@ class Burning:
         Q_H2      = fuel_rate_kg_s * h * self.LHV_H2
 
         Q_burning = eta * (Q_petcoke + Q_coal + Q_RDF + Q_H2)
-        
+   
             
         # ================= HEAT SOURCE: W (= J/s) =================
         
@@ -237,13 +241,16 @@ if __name__ == "__main__":
     # ======================================================
     # MODEL
     # ======================================================
+    cfg = load_cfg("configs/twin_cfg.yaml")
     model = Burning(N=5)
 
     inputs = {
-        "Fuel_rate_total": 5.0,  # ton/h
-        "Petcoke_ratio": 0.6,
-        "RDF_ratio": 0.2,
-        "O2": 3.5,
+        "Fuel_rate_total": cfg["fuel"]["Fuel_rate_total"],
+        "Petcoke_ratio": cfg["fuel"]["Petcoke_ratio"],
+        "Coal_ratio": cfg["fuel"]["Coal_ratio"],
+        "RDF_ratio": cfg["fuel"]["RDF_ratio"],
+        "H2_ratio": cfg["fuel"]["H2_ratio"],
+        "O2": cfg["fuel"]["O2"],
     }
 
     dt = 0.05
@@ -287,7 +294,7 @@ if __name__ == "__main__":
 
         for i in range(n_steps_chunk):
 
-            Tg, Ts, Tw = model.thermal_step(Tg, Ts, Tw, inputs, dt)
+            Tg, Ts, Tw, *_ = model.thermal_step(Tg, Ts, Tw, inputs, dt)
             t_local += dt
 
             # ==================================================

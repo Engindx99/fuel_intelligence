@@ -866,7 +866,7 @@ void burning_zone_acados_create_setup_nlp_in_numerical_values(burning_zone_solve
     double* lbu = lubu;
     double* ubu = lubu + NBU;
     lbu[0] = 2;
-    ubu[0] = 6;
+    ubu[0] = 5;
 
     for (int i = 0; i < N; i++)
     {

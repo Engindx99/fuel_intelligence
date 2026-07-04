@@ -34,15 +34,9 @@ checkpoint:
 
   
 fuel:
-  Fuel_rate_total: 3.0
-  petcoke_fraction: 0.50
-  coal_fraction: 0.30
-  rdf_fraction: 0.15
-  h2_fraction: 0.05
-  oxygen: 3.5
-
-  
-  oxygen: 3.5 # Initial combustion conditions
-
-  
-  fuel_rate: 5.5 # Initial MPC fuel rate [t/h]
+  Fuel_rate_total: 4.9
+  Petcoke_ratio: 0.54
+  Coal_ratio: 0.30
+  RDF_ratio: 0.15
+  H2_ratio: 0.01
+  O2: 3.5
