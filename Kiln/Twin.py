@@ -64,10 +64,10 @@ class Twin:
         # ======================================================
         # MPC
         # ======================================================
-        self.mpc = MasterMPC(
-            mpc_cfg,
-            self.burning,
-        )
+        #self.mpc = MasterMPC(
+            #mpc_cfg,
+            #self.burning,
+        #)
 
         # ======================================================
         # TIME
@@ -245,24 +245,47 @@ class Twin:
 
             fuel_rate_total = inputs["Fuel_rate_total"]
 
+            total_wall_loss = (
+                self.state.Wall_loss_burning
+                + self.state.Wall_loss_transition
+                + self.state.Wall_loss_calciner
+                + self.state.Wall_loss_preheater
+                + self.state.Wall_loss_cooler
+            )
+
+            total_stored = (
+                self.state.Burning_stored_energy_change
+                + self.state.Transition_stored_energy_change
+                + self.state.Calciner_stored_energy_change
+                + self.state.Preheater_stored_energy_change
+                + self.state.Cooler_stored_energy_change
+            )
+
             print(
                 f"\n========== DIGITAL TWIN REPORT ==========\n"
 
                 f"Time            : {self.time/60:.1f} min\n"
                 f"Fuel Rate       : {fuel_rate_total:.2f} t/h\n"
 
-                f"\n--- Burning ------------------------\n"
+                f"\n--- Burning -----------------------------\n"
                 f"Tg              : {Tg_burn:.2f} K\n"
                 f"Ts              : {Ts_burn:.2f} K\n"
                 f"Tw              : {Tw_burn:.2f} K\n"
                 f"Q_burning       : {self.state.Q_burning/1e6:.2f} MW\n"
                 f"Hgas_out        : {self.state.Hgas_burning_out/1e6:.2f} MW\n"
+                f"Wall loss       : {self.state.Wall_loss_burning/1e6:.2f} MW\n"
+                f"Stored          : {self.state.Burning_stored_energy_change/1e6:.2f} MW\n"
+                f"Residual        : {self.state.Burning_energy_balance/1e6:.2f} MW\n"
 
-                f"\n--- Transition ---------------------\n"
+                f"\n--- Transition --------------------------\n"
                 f"Tg              : {Tg_trans:.2f} K\n"
                 f"Ts              : {Ts_trans:.2f} K\n"
                 f"Tw              : {Tw_trans:.2f} K\n"
+                f"Hgas_in         : {self.state.Hgas_burning_out/1e6:.2f} MW\n"
                 f"Hgas_out        : {self.state.Hgas_transition_out/1e6:.2f} MW\n"
+                f"Wall loss       : {self.state.Wall_loss_transition/1e6:.2f} MW\n"
+                f"Stored          : {self.state.Transition_stored_energy_change/1e6:.2f} MW\n"
+                f"Residual        : {self.state.Transition_energy_balance/1e6:.2f} MW\n"
 
                 f"\n--- Calciner ----------------------------\n"
                 f"Tg              : {Tg_calc:.2f} K\n"
@@ -270,19 +293,38 @@ class Twin:
                 f"Tw              : {Tw_calc:.2f} K\n"
                 f"Hgas_in         : {self.state.Hgas_transition_out/1e6:.2f} MW\n"
                 f"Hgas_out        : {self.state.Hgas_calciner_out/1e6:.2f} MW\n"
-                f"Calcination     : {getattr(self.state, 'Calcination_Q_sink', 0.0)/1e6:.2f} MW\n"
+                f"Calcination     : {self.state.Calciner_Q_sink/1e6:.2f} MW\n"
+                f"Wall loss       : {self.state.Wall_loss_calciner/1e6:.2f} MW\n"
+                f"Stored          : {self.state.Calciner_stored_energy_change/1e6:.2f} MW\n"
+                f"Residual        : {self.state.Calciner_energy_balance/1e6:.2f} MW\n"
 
                 f"\n--- Preheater ---------------------------\n"
                 f"Tg              : {Tg_pre:.2f} K\n"
                 f"Ts              : {Ts_pre:.2f} K\n"
                 f"Tw              : {Tw_pre:.2f} K\n"
+                f"Hgas_in         : {self.state.Hgas_calciner_out/1e6:.2f} MW\n"
                 f"Hgas_out        : {self.state.Hgas_preheater_out/1e6:.2f} MW\n"
+                f"Wall loss       : {self.state.Wall_loss_preheater/1e6:.2f} MW\n"
+                f"Stored          : {self.state.Preheater_stored_energy_change/1e6:.2f} MW\n"
+                f"Residual        : {self.state.Preheater_energy_balance/1e6:.2f} MW\n"
 
                 f"\n--- Cooler ------------------------------\n"
                 f"Tg              : {Tg_cool:.2f} K\n"
                 f"Ts              : {Ts_cool:.2f} K\n"
                 f"Tw              : {Tw_cool:.2f} K\n"
-                f"Hgas_out        : {self.state.Hgas_cooler_out/1e6:.2f} MW\n",
+                f"Hgas_in         : {self.state.Hgas_preheater_out/1e6:.2f} MW\n"
+                f"Hgas_out        : {self.state.Hgas_cooler_out/1e6:.2f} MW\n"
+                f"Wall loss       : {self.state.Wall_loss_cooler/1e6:.2f} MW\n"
+                f"Stored          : {self.state.Cooler_stored_energy_change/1e6:.2f} MW\n"
+                f"Residual        : {self.state.Cooler_energy_balance/1e6:.2f} MW\n"
+
+                f"\n========== GLOBAL ENERGY SUMMARY ==========\n"
+                f"Fuel input      : {self.state.Q_burning/1e6:.2f} MW\n"
+                f"Final exhaust   : {self.state.Hgas_cooler_out/1e6:.2f} MW\n"
+                f"Wall losses     : {total_wall_loss/1e6:.2f} MW\n"
+                f"Stored energy   : {total_stored/1e6:.2f} MW\n"
+                f"Calcination     : {self.state.Calciner_Q_sink/1e6:.2f} MW\n"
+                f"==========================================\n",
 
                 flush=True,
             )

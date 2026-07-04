@@ -105,12 +105,14 @@ class Calciner:
         # ================= WALL CAPACITY =================
         C_w = self._rho_wall_Vwall_Cp
 
-        # ================= HEAT LOSS =================
+        # ================= WALL HEAT LOSS =================
         q_loss = (
             self.h_ext
             * self.A_wall
             * (Tw - self.T_amb)
         ) / (self.V_cell + self.eps)
+
+        wall_loss = np.sum(q_loss * self.V_cell)
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
@@ -127,18 +129,30 @@ class Calciner:
             (q_gw + q_ws - q_loss) / C_w
         )
 
-        return Tg_n, Ts_n, Tw_n
+        return (
+            Tg_n,
+            Ts_n,
+            Tw_n,
+            wall_loss,
+        )
+
 
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
 
+        # ================= STORE OLD STATES =================
         state.Tg_calciner_old = state.Tg_calciner.copy()
         state.Ts_calciner_old = state.Ts_calciner.copy()
         state.Tw_calciner_old = state.Tw_calciner.copy()
 
-        Tg, Ts, Tw = self.thermal_step(
+        (
+            Tg,
+            Ts,
+            Tw,
+            wall_loss,
+        ) = self.thermal_step(
             state.Tg_calciner,
             state.Ts_calciner,
             state.Tw_calciner,
@@ -147,27 +161,35 @@ class Calciner:
             reaction_sink=getattr(state, "Calciner_Q_sink", 0.0),
         )
 
-        # ================= ENERGY STORED =================
-        state.Calciner_stored_energy_change = np.sum(
-            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_calciner_old) / dt
-        )
-
         # ================= UPDATE STATES =================
         state.Tg_calciner = Tg
         state.Ts_calciner = Ts
         state.Tw_calciner = Tw
 
+        # ================= WALL LOSS =================
+        state.Wall_loss_calciner = wall_loss
+
         # ================= OUTPUT ENTHALPY =================
         state.Hgas_calciner_out = self.gas_enthalpy_out(state.Tg_calciner)
+
+        # ================= STORED ENERGY =================
+        state.Calciner_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g
+            * (state.Tg_calciner - state.Tg_calciner_old)
+            / dt
+        )
 
         # ================= ENERGY BALANCE =================
         state.Calciner_energy_balance = (
             state.Hgas_transition_out
             - state.Hgas_calciner_out
             - state.Calciner_stored_energy_change
+            - state.Wall_loss_calciner
+            - state.Calciner_Q_sink
         )
 
         return state
+
 
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE

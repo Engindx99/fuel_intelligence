@@ -78,7 +78,6 @@ class Transition:
 
         # ======================================================
         # NO INTERNAL HEAT GENERATION
-        # Transition only transports incoming hot gas.
         # ======================================================
         q_vol = 0.0
 
@@ -86,7 +85,6 @@ class Transition:
         # REACTION ENERGY SINK
         # ======================================================
         sink_density = reaction_sink / (self.V_total + self.eps)
-
         q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
@@ -95,29 +93,26 @@ class Transition:
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
         # ================= SOLID CAPACITY =================
-
         effective = 0.01
         C_s = self._rho_s_Cp_s
         effective_C_s = effective * C_s
 
         # ================= GAS CAPACITY =================
-
         C_g = self._rho_g_Vcell_Cp_g
 
         # ================= WALL CAPACITY =================
-
         C_w = self._rho_wall_Vwall_Cp
 
-        # ================= HEAT LOSS =================
-
+        # ================= WALL HEAT LOSS =================
         q_loss = (
             self.h_ext
             * self.A_wall
             * (Tw - self.T_amb)
         ) / (self.V_cell + self.eps)
 
-        # ================= DYNAMICS =================
+        wall_loss = np.sum(q_loss * self.V_cell)
 
+        # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
             -self.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
@@ -132,30 +127,35 @@ class Transition:
             (q_gw + q_ws - q_loss) / C_w
         )
 
-        return Tg_n, Ts_n, Tw_n
-    
-    
+        return (
+            Tg_n,
+            Ts_n,
+            Tw_n,
+            wall_loss,
+        )
+
+
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
-        
+
+        # ================= STORE OLD STATES =================
         state.Tg_transition_old = state.Tg_transition.copy()
         state.Ts_transition_old = state.Ts_transition.copy()
         state.Tw_transition_old = state.Tw_transition.copy()
 
-        Tg, Ts, Tw = self.thermal_step(
+        (
+            Tg,
+            Ts,
+            Tw,
+            wall_loss,
+        ) = self.thermal_step(
             state.Tg_transition,
             state.Ts_transition,
             state.Tw_transition,
             Q_in_transition=state.Hgas_burning_out,
             dt=dt,
-            reaction_sink=getattr(state, "Transition_Q_sink", 0.0),
-        )
-
-        # ================= ENERGY STORED =================
-        state.Transition_stored_energy_change = np.sum(
-            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_transition_old) / dt
         )
 
         # ================= UPDATE STATES =================
@@ -163,18 +163,30 @@ class Transition:
         state.Ts_transition = Ts
         state.Tw_transition = Tw
 
-        # ================= OUTPUT ENTHALPY =================
+        # ================= WALL LOSS =================
+        state.Wall_loss_transition = wall_loss
+
+        # ================= ENERGY TO NEXT ZONE =================
         state.Hgas_transition_out = self.gas_enthalpy_out(state.Tg_transition)
+
+        # ================= STORED ENERGY =================
+        state.Transition_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g
+            * (state.Tg_transition - state.Tg_transition_old)
+            / dt
+        )
 
         # ================= ENERGY BALANCE =================
         state.Transition_energy_balance = (
             state.Hgas_burning_out
             - state.Hgas_transition_out
             - state.Transition_stored_energy_change
+            - state.Wall_loss_transition
         )
 
         return state
-    
+
+
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE
     # ======================================================

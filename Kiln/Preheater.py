@@ -95,29 +95,26 @@ class Preheater:
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
         # ================= SOLID CAPACITY =================
-
         effective = 0.01
         C_s = self._rho_s_Cp_s
         effective_C_s = effective * C_s
 
         # ================= GAS CAPACITY =================
-
         C_g = self._rho_g_Vcell_Cp_g
 
         # ================= WALL CAPACITY =================
-
         C_w = self._rho_wall_Vwall_Cp
 
-        # ================= HEAT LOSS =================
-
+        # ================= WALL HEAT LOSS =================
         q_loss = (
             self.h_ext
             * self.A_wall
             * (Tw - self.T_amb)
         ) / (self.V_cell + self.eps)
 
-        # ================= DYNAMICS =================
+        wall_loss = np.sum(q_loss * self.V_cell)
 
+        # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
             -self.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
@@ -132,29 +129,35 @@ class Preheater:
             (q_gw + q_ws - q_loss) / C_w
         )
 
-        return Tg_n, Ts_n, Tw_n
+        return (
+            Tg_n,
+            Ts_n,
+            Tw_n,
+            wall_loss,
+        )
+
 
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
 
+        # ================= STORE OLD STATES =================
         state.Tg_preheater_old = state.Tg_preheater.copy()
         state.Ts_preheater_old = state.Ts_preheater.copy()
         state.Tw_preheater_old = state.Tw_preheater.copy()
 
-        Tg, Ts, Tw = self.thermal_step(
+        (
+            Tg,
+            Ts,
+            Tw,
+            wall_loss,
+        ) = self.thermal_step(
             state.Tg_preheater,
             state.Ts_preheater,
             state.Tw_preheater,
             Q_in_preheater=state.Hgas_calciner_out,
             dt=dt,
-            reaction_sink=getattr(state, "Preheater_Q_sink", 0.0),
-        )
-
-        # ================= ENERGY STORED =================
-        state.Preheater_stored_energy_change = np.sum(
-            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_preheater_old) / dt
         )
 
         # ================= UPDATE STATES =================
@@ -162,17 +165,29 @@ class Preheater:
         state.Ts_preheater = Ts
         state.Tw_preheater = Tw
 
+        # ================= WALL LOSS =================
+        state.Wall_loss_preheater = wall_loss
+
         # ================= OUTPUT ENTHALPY =================
         state.Hgas_preheater_out = self.gas_enthalpy_out(state.Tg_preheater)
+
+        # ================= STORED ENERGY =================
+        state.Preheater_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g
+            * (state.Tg_preheater - state.Tg_preheater_old)
+            / dt
+        )
 
         # ================= ENERGY BALANCE =================
         state.Preheater_energy_balance = (
             state.Hgas_calciner_out
             - state.Hgas_preheater_out
             - state.Preheater_stored_energy_change
+            - state.Wall_loss_preheater
         )
 
         return state
+
 
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE

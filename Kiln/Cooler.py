@@ -78,7 +78,7 @@ class Cooler:
 
         # ======================================================
         # NO INTERNAL HEAT GENERATION
-        # Preheater only transports incoming hot gas.
+        # Cooler only transports incoming hot gas.
         # ======================================================
         q_vol = 0.0
 
@@ -86,7 +86,6 @@ class Cooler:
         # REACTION ENERGY SINK
         # ======================================================
         sink_density = reaction_sink / (self.V_total + self.eps)
-
         q_vol -= sink_density
 
         # ================= HEAT TRANSFER =================
@@ -95,29 +94,26 @@ class Cooler:
         q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
 
         # ================= SOLID CAPACITY =================
-
         effective = 0.01
         C_s = self._rho_s_Cp_s
         effective_C_s = effective * C_s
 
         # ================= GAS CAPACITY =================
-
         C_g = self._rho_g_Vcell_Cp_g
 
         # ================= WALL CAPACITY =================
-
         C_w = self._rho_wall_Vwall_Cp
 
-        # ================= HEAT LOSS =================
-
+        # ================= WALL HEAT LOSS =================
         q_loss = (
             self.h_ext
             * self.A_wall
             * (Tw - self.T_amb)
         ) / (self.V_cell + self.eps)
 
-        # ================= DYNAMICS =================
+        wall_loss = np.sum(q_loss * self.V_cell)
 
+        # ================= DYNAMICS =================
         Tg_n = Tg + dt * (
             -self.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
@@ -132,29 +128,36 @@ class Cooler:
             (q_gw + q_ws - q_loss) / C_w
         )
 
-        return Tg_n, Ts_n, Tw_n
+        return (
+            Tg_n,
+            Ts_n,
+            Tw_n,
+            wall_loss,
+        )
+
 
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
 
+        # ================= STORE OLD STATES =================
         state.Tg_cooler_old = state.Tg_cooler.copy()
         state.Ts_cooler_old = state.Ts_cooler.copy()
         state.Tw_cooler_old = state.Tw_cooler.copy()
 
-        Tg, Ts, Tw = self.thermal_step(
+        (
+            Tg,
+            Ts,
+            Tw,
+            wall_loss,
+        ) = self.thermal_step(
             state.Tg_cooler,
             state.Ts_cooler,
             state.Tw_cooler,
             Q_in_cooler=state.Hgas_preheater_out,
             dt=dt,
-            reaction_sink=getattr(state, "Cooler_Q_sink", 0.0),
-        )
 
-        # ================= ENERGY STORED =================
-        state.Cooler_stored_energy_change = np.sum(
-            self._rho_g_Vcell_Cp_g * (Tg - state.Tg_cooler_old) / dt
         )
 
         # ================= UPDATE STATES =================
@@ -162,17 +165,30 @@ class Cooler:
         state.Ts_cooler = Ts
         state.Tw_cooler = Tw
 
+        # ================= WALL LOSS =================
+        state.Wall_loss_cooler = wall_loss
+
         # ================= OUTPUT ENTHALPY =================
         state.Hgas_cooler_out = self.gas_enthalpy_out(state.Tg_cooler)
+
+        # ================= STORED ENERGY =================
+        state.Cooler_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g
+            * (state.Tg_cooler - state.Tg_cooler_old)
+            / dt
+        )
 
         # ================= ENERGY BALANCE =================
         state.Cooler_energy_balance = (
             state.Hgas_preheater_out
             - state.Hgas_cooler_out
             - state.Cooler_stored_energy_change
+            - state.Wall_loss_cooler
+
         )
 
         return state
+
 
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE

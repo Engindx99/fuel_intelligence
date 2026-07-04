@@ -69,7 +69,7 @@ class BurningMPCModel:
         RDF_ratio = ca.SX.sym("RDF_ratio")
         H2_ratio = ca.SX.sym("H2_ratio")
 
-        Transition_Q_sink = ca.SX.sym("Transition_Q_sink")
+
 
         Fuel_prev = ca.SX.sym("Fuel_prev")
 
@@ -79,7 +79,6 @@ class BurningMPCModel:
             Coal_ratio,
             RDF_ratio,
             H2_ratio,
-            Transition_Q_sink,
             Fuel_prev,
         )
 
@@ -90,7 +89,6 @@ class BurningMPCModel:
             Coal_ratio,
             RDF_ratio,
             H2_ratio,
-            Transition_Q_sink,
             Fuel_prev,
         )
 
@@ -112,7 +110,6 @@ class BurningMPCModel:
         Coal_ratio,
         RDF_ratio,
         H2_ratio,
-        Transition_Q_sink,
     ):
 
         # --------------------------------------------------
@@ -209,10 +206,12 @@ class BurningMPCModel:
     def build_wall_losses(self, Tw):
 
         q_loss = (
-            self.m.h_ext
-            * self.m.A_wall
-            * (Tw - self.m.T_amb)
-        ) / (self.m.V_cell + self.m.eps)
+            self.h_ext
+            * self.A_wall
+            * (Tw - self.T_amb)
+        ) / (self.V_cell + self.eps)
+
+        state.Wall_loss_transition = np.sum(q_loss * self.V_cell)
 
         return q_loss
 
@@ -231,7 +230,6 @@ class BurningMPCModel:
             Coal_ratio,
             RDF_ratio,
             H2_ratio,
-            Transition_Q_sink,
             Fuel_prev,
         ) = self.build_parameters()
 
@@ -244,7 +242,6 @@ class BurningMPCModel:
             Coal_ratio,
             RDF_ratio,
             H2_ratio,
-            Transition_Q_sink,
         )
 
         q_gs, q_gw, q_ws = self.build_heat_transfer(Tg, Ts, Tw)

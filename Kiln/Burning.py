@@ -87,7 +87,7 @@ class Burning:
         return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, inputs, dt, calcination_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
 
         # ================= GRADIENTS (NO ALLOC) =================
         dTg_dz = self._dTg_dz
@@ -138,9 +138,6 @@ class Burning:
         
         q_vol = Q_burning / (self.V_total + self.eps)
 
-        sink_density = calcination_sink / (self.V_total + self.eps)
-        q_vol = q_vol - 0.05 * sink_density
-
         # ================= HEAT TRANSFER =================
         q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
         q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
@@ -160,22 +157,40 @@ class Burning:
 
         C_w = self._rho_wall_Vwall_Cp
 
-        q_loss = (self.h_ext * self.A_wall * (Tw - self.T_amb)) / (
-            self.V_cell + self.eps
-        )
+        q_loss = (
+            self.h_ext
+            * self.A_wall
+            * (Tw - self.T_amb)
+        ) / (self.V_cell + self.eps)
+
+        wall_loss = np.sum(q_loss * self.V_cell)
 
         # ================= DYNAMICS =================
         Tg_n = Tg + dt * (-self.u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
         Ts_n = Ts + dt * (-self.u_s * dTs_dz + (q_gs - q_ws) / effective_C_s)
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
-        return (Tg_n,Ts_n,Tw_n,Q_petcoke,Q_coal,Q_RDF,Q_H2, Q_burning,)
+        return (
+    Tg_n,
+    Ts_n,
+    Tw_n,
+    Q_petcoke,
+    Q_coal,
+    Q_RDF,
+    Q_H2,
+    Q_burning,
+    wall_loss,
+)
     
-
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, inputs, dt):
+
+        # ================= STORE OLD STATES =================
+        state.Tg_burning_old = state.Tg_burning.copy()
+        state.Ts_burning_old = state.Ts_burning.copy()
+        state.Tw_burning_old = state.Tw_burning.copy()
 
         (
             Tg,
@@ -186,13 +201,13 @@ class Burning:
             Q_RDF,
             Q_H2,
             Q_burning,
+            wall_loss,
         ) = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
             state.Tw_burning,
             inputs,
             dt,
-            calcination_sink=getattr(state, "Calcination_Q_sink", 0.0),
         )
 
         # ================= UPDATE TEMPERATURE FIELDS =================
@@ -209,8 +224,26 @@ class Burning:
         # ================= TOTAL BURNING ENERGY =================
         state.Q_burning = Q_burning
 
-        # ================= ENERGY TO CALCINER =================
+        # ================= WALL LOSS =================
+        state.Wall_loss_burning = wall_loss
+
+        # ================= ENERGY TO NEXT ZONE =================
         state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
+
+        # ================= STORED ENERGY =================
+        state.Burning_stored_energy_change = np.sum(
+            self._rho_g_Vcell_Cp_g
+            * (state.Tg_burning - state.Tg_burning_old)
+            / dt
+        )
+
+        # ================= ENERGY BALANCE =================
+        state.Burning_energy_balance = (
+            state.Q_burning
+            - state.Hgas_burning_out
+            - state.Burning_stored_energy_change
+            - state.Wall_loss_burning
+        )
 
         return state
     
@@ -223,7 +256,6 @@ class Burning:
 
         return H_out
         
-
 
 if __name__ == "__main__":
 
