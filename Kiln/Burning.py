@@ -26,24 +26,37 @@ class Burning:
         # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
 
-        # fiziksel taban
+        # Gas-solid interfacial area density (m²/m³)
         a_gs_base = 6.0 * (1.0 - self.epsilon_bed) / self.D
 
-        # tuning factor (çok kritik: 1.0 fiziksel referans, >1 hızlandırır)
+        # tuning factor
         self.k_interfacial = 1.0
 
         self.a_gs = self.k_interfacial * a_gs_base
-        self.a_gw = 2.0 * np.pi * self.D
         self.a_ws = 0.6 * self.a_gs
 
-        # ================= WALL =================
-        self.A_wall = self.a_gw * self.L
+        # ================= WALL GEOMETRY =================
+
+        # Kiln inner perimeter (m)
+        self.wall_perimeter = np.pi * self.D
+
+        # Total wall area (m²)
+        self.A_wall_total = self.wall_perimeter * self.L
+
+        # Wall area per computational cell (m²)
+        self.A_wall_cell = self.A_wall_total / self.N
+
+        # Gas-wall interfacial area density (m²/m³)
+        self.a_gw = self.A_wall_cell / self.V_cell
+
+        # External convection
         self.h_ext = 12.0
 
-        self.V_wall = self.A_wall * 0.05
+        # Wall volume (5 cm refractory thickness)
+        self.V_wall = self.A_wall_total * 0.05
 
         # ================= PROPERTIES =================
-        self.rho_g = 4.1
+        self.rho_g = 0.30 # 1500–1800 K civarı
         self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
@@ -77,14 +90,12 @@ class Burning:
         self._dTg_dz = np.zeros(N)
         self._dTs_dz = np.zeros(N)
 
+
         # ================= CACHE CONSTANTS =================
         self._rho_s_Cp_s = self.rho_s * self.Cp_s
         self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
         self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
         
-        # ================= WALL ENERGY DEBUG =================
-        
-        self.wall_debug = {}
 
     # ======================================================
     def combustion_efficiency(self, O2):
@@ -154,9 +165,9 @@ class Burning:
         # ======================================================
         # HEAT TRANSFER
         # ======================================================
-        q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
-        q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
-        q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
+        q_gs = self.hv_gs * self.a_gs * (Tg - Ts)
+        q_gw = self.hv_gw * self.a_gw * (Tg - Tw)
+        q_ws = self.hv_ws * self.a_ws * (Ts - Tw)
 
         # ======================================================
         # CAPACITIES
@@ -168,17 +179,18 @@ class Burning:
 
         C_g = self._rho_g_Vcell_Cp_g
         C_w = self._rho_wall_Vwall_Cp
-
-        # ======================================================
-        # WALL HEAT LOSS
-        # ======================================================
-        q_loss = (
+        
+        # ================= WALL HEAT LOSS =================
+        wall_loss_cells = (
             self.h_ext
-            * self.A_wall
+            * self.A_wall_cell
             * (Tw - self.T_amb)
-        ) / (self.V_cell + self.eps)
+        )
 
-        wall_loss = np.sum(q_loss * self.V_cell)
+        wall_loss = np.sum(wall_loss_cells)
+
+        # Hacimsel kayıp (enerji denklemi için)
+        q_loss = wall_loss_cells / (self.V_cell + self.eps)
 
         # ======================================================
         # DEBUG INFORMATION
@@ -186,8 +198,10 @@ class Burning:
         wall_debug = {
             "q_loss_mean": float(np.mean(q_loss)),
             "q_loss_max": float(np.max(q_loss)),
-            "q_loss_total": float(wall_loss),
-            "A_wall": float(self.A_wall),
+            "wall_loss_mean": float(np.mean(wall_loss_cells)),
+            "wall_loss_total": float(wall_loss),
+            "A_wall": float(self.A_wall_total),
+            "A_wall_cell": float(self.A_wall_cell),
             "V_cell": float(self.V_cell),
             "N": int(self.N),
         }

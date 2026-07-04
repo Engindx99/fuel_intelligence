@@ -294,8 +294,46 @@ class Twin:
                 f"A_wall         : {self.state.A_wall_burning:.2f} m²\n"
                 f"V_cell         : {self.state.V_cell_burning:.4f} m³\n"
                 f"N              : {self.state.N_burning}\n",
+                
+                f"\n--- Burning -----------------------------\n",
+                f"Tg(avg)         : {Tg_burn:.2f} K\n",
+                f"Tg(min/max)     : {np.min(self.state.Tg_burning):.2f} / {np.max(self.state.Tg_burning):.2f} K\n",
+                f"Ts(avg)         : {Ts_burn:.2f} K\n",
+                f"Tw(avg)         : {Tw_burn:.2f} K\n",
+                f"Tw(min/max)     : {np.min(self.state.Tw_burning):.2f} / {np.max(self.state.Tw_burning):.2f} K\n",
+                f"Q_burning       : {self.state.Q_burning/1e6:.2f} MW\n",
+                f"Hgas_out        : {self.state.Hgas_burning_out/1e6:.2f} MW\n",
+                f"Wall loss       : {self.state.Wall_loss_burning/1e6:.2f} MW\n",
+                f"Stored          : {self.state.Burning_stored_energy_change/1e6:.2f} MW\n",
+                f"Residual        : {self.state.Burning_energy_balance/1e6:.2f} MW\n",
+                
+                f"\n--- Transition -----------------------------\n",
+                f"Tg(avg)         : {Tg_trans:.2f} K\n",
+                f"Tg(min/max)     : {np.min(self.state.Tg_transition):.2f} / {np.max(self.state.Tg_transition):.2f} K\n",
+                f"Tw(avg)         : {Tw_trans:.2f} K\n",
+                f"Tw(min/max)     : {np.min(self.state.Tw_transition):.2f} / {np.max(self.state.Tw_transition):.2f} K\n",
+                
+                f"\n--- Calciner -----------------------------\n",
+                f"Tg(avg)         : {Tg_calc:.2f} K\n",
+                f"Tg(min/max)     : {np.min(self.state.Tg_calciner):.2f} / {np.max(self.state.Tg_calciner):.2f} K\n",
+                f"Tw(avg)         : {Tw_calc:.2f} K\n",
+                f"Tw(min/max)     : {np.min(self.state.Tw_calciner):.2f} / {np.max(self.state.Tw_calciner):.2f} K\n",
+                
+                f"\n--- Preheater -----------------------------\n",
+                f"Tg(avg)         : {Tg_pre:.2f} K\n",
+                f"Tg(min/max)     : {np.min(self.state.Tg_preheater):.2f} / {np.max(self.state.Tg_preheater):.2f} K\n",
+                f"Tw(avg)         : {Tw_pre:.2f} K\n",
+                f"Tw(min/max)     : {np.min(self.state.Tw_preheater):.2f} / {np.max(self.state.Tw_preheater):.2f} K\n",
+                
+                f"\n--- Cooler -----------------------------\n",
+                f"Tg(avg)         : {Tg_cool:.2f} K\n",
+                f"Tg(min/max)     : {np.min(self.state.Tg_cooler):.2f} / {np.max(self.state.Tg_cooler):.2f} K\n",
+                f"Tw(avg)         : {Tw_cool:.2f} K\n",
+                f"Tw(min/max)     : {np.min(self.state.Tw_cooler):.2f} / {np.max(self.state.Tw_cooler):.2f} K\n",
+                
                 flush=True,
             )
+            
 
             self._next_log_time += self.log_interval
 

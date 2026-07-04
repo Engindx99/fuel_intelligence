@@ -18,23 +18,38 @@ class Preheater:
         # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
 
+        # Gas-solid interfacial area density (m²/m³)
         a_gs_base = 6.0 * (1.0 - self.epsilon_bed) / self.D
 
         self.k_interfacial = 1.0
 
         self.a_gs = self.k_interfacial * a_gs_base
-        self.a_gw = 2.0 * np.pi * self.D
         self.a_ws = 0.6 * self.a_gs
 
-        # ================= WALL =================
-        self.A_wall = self.a_gw * self.L
+        # ================= WALL GEOMETRY =================
+
+        # Kiln inner perimeter (m)
+        self.wall_perimeter = np.pi * self.D
+
+        # Total wall area (m²)
+        self.A_wall = self.wall_perimeter * self.L
+
+        # Wall area per computational cell (m²)
+        self.A_wall_cell = self.A_wall / self.N
+
+        # Gas-wall interfacial area density (m²/m³)
+        self.a_gw = self.A_wall_cell / self.V_cell
+
+        # External convection
         self.h_ext = 12.0
 
         self.T_amb = 300.0
+
+        # Wall volume (5 cm refractory thickness)
         self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
-        self.rho_g = 4.1
+        self.rho_g = 0.30
         self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
@@ -82,12 +97,10 @@ class Preheater:
         # ======================================================
         q_vol = 0.0
 
-
-
         # ================= HEAT TRANSFER =================
-        q_gs = (self.hv_gs * self.a_gs * (Tg - Ts)) / self.V_cell
-        q_gw = (self.hv_gw * self.a_gw * (Tg - Tw)) / self.V_cell
-        q_ws = (self.hv_ws * self.a_ws * (Ts - Tw)) / self.V_cell
+        q_gs = (self.hv_gs * self.a_gs * (Tg - Ts))
+        q_gw = (self.hv_gw * self.a_gw * (Tg - Tw))
+        q_ws = (self.hv_ws * self.a_ws * (Ts - Tw))
 
         # ================= SOLID CAPACITY =================
         effective = 0.01

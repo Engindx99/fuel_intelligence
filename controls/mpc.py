@@ -166,9 +166,9 @@ class BurningMPCModel:
     # ======================================================
     def build_heat_transfer(self, Tg, Ts, Tw):
 
-        q_gs = self.m.hv_gs * self.m.a_gs * (Tg - Ts) / self.m.V_cell
-        q_gw = self.m.hv_gw * self.m.a_gw * (Tg - Tw) / self.m.V_cell
-        q_ws = self.m.hv_ws * self.m.a_ws * (Ts - Tw) / self.m.V_cell
+        q_gs = self.m.hv_gs * self.m.a_gs * (Tg - Ts)
+        q_gw = self.m.hv_gw * self.m.a_gw * (Tg - Tw)
+        q_ws = self.m.hv_ws * self.m.a_ws * (Ts - Tw)
 
         return q_gs, q_gw, q_ws
 
