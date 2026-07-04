@@ -320,8 +320,19 @@ class Burning:
         state.V_cell_burning = state.wall_debug_burning["V_cell"]
         state.N_burning = state.wall_debug_burning["N"]
 
-        # ================= ENERGY TO NEXT ZONE =================
-        state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
+        # ======================================================
+        # ENERGY TO NEXT ZONE
+        # ======================================================
+
+        # Gas
+        state.Hgas_burning_out = self.gas_enthalpy_out(
+            state.Tg_burning
+        )
+
+        # Solid
+        state.Hsolid_burning_out = self.solid_enthalpy_out(
+            state.Ts_burning
+        )
 
         # ======================================================
         # STORED ENERGY
@@ -360,7 +371,10 @@ class Burning:
         # ======================================================
         state.Burning_energy_balance = (
             state.Q_burning
+
             - state.Hgas_burning_out
+            - state.Hsolid_burning_out
+
             - state.Burning_stored_energy_change
             - state.Wall_loss_burning
         )
@@ -372,10 +386,20 @@ class Burning:
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
 
-        H_out = m_dot_g * self.Cp_g * Tg[-1]
+        H_gas_out = m_dot_g * self.Cp_g * Tg[-1]
 
-        return H_out
+        return H_gas_out
+    
+    # ======================================================
+    def solid_enthalpy_out(self, Ts):
+
+        m_dot_s = self.rho_s * self.u_s * self.A_cross
+
+        H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
+
+        return H_solid_out
         
+
 
 if __name__ == "__main__":
 

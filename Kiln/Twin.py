@@ -164,11 +164,49 @@ class Twin:
         # ======================================================
         # ZONES
         # ======================================================
-        self.state = self.burning.apply(self.state, inputs, self.dt)
-        self.state = self.transition.apply(self.state, self.dt)
-        self.state = self.calciner.apply(self.state, self.dt)
-        self.state = self.preheater.apply(self.state, self.dt)
-        self.state = self.cooler.apply(self.state, self.dt)
+
+        # ================= BURNING =================
+        self.state = self.burning.apply(
+            self.state,
+            inputs,
+            self.dt,
+        )
+
+        self.state.Hgas_transition_in = self.state.Hgas_burning_out
+        self.state.Hsolid_transition_in = self.state.Hsolid_burning_out
+
+        # ================= TRANSITION =================
+        self.state = self.transition.apply(
+            self.state,
+            self.dt,
+        )
+
+        self.state.Hgas_calciner_in = self.state.Hgas_transition_out
+        self.state.Hsolid_calciner_in = self.state.Hsolid_transition_out
+
+        # ================= CALCINER =================
+        self.state = self.calciner.apply(
+            self.state,
+            self.dt,
+        )
+
+        self.state.Hgas_preheater_in = self.state.Hgas_calciner_out
+        self.state.Hsolid_preheater_in = self.state.Hsolid_calciner_out
+
+        # ================= PREHEATER =================
+        self.state = self.preheater.apply(
+            self.state,
+            self.dt,
+        )
+
+        self.state.Hgas_cooler_in = self.state.Hgas_preheater_out
+        self.state.Hsolid_cooler_in = self.state.Hsolid_preheater_out
+
+        # ================= COOLER =================
+        self.state = self.cooler.apply(
+            self.state,
+            self.dt,
+        )
 
         # ======================================================
         # TIME
@@ -224,6 +262,25 @@ class Twin:
                 + self.state.Preheater_stored_energy_change
                 + self.state.Cooler_stored_energy_change
             )
+            
+            # ======================================================
+            # TOTAL GAS ENTHALPY
+            # ======================================================
+            total_Hgas = self.state.Hgas_cooler_out
+
+            # ======================================================
+            # TOTAL SOLID ENTHALPY
+            # ======================================================
+            total_Hsolid = self.state.Hsolid_cooler_out
+            
+            # ======================================================
+            # TOTAL EXHAUST
+            # ======================================================
+            
+            total_exhaust = (
+            self.state.Hgas_cooler_out
+            + self.state.Hsolid_cooler_out
+        )
 
             print(
                 "\n========== DIGITAL TWIN REPORT ==========\n"
@@ -281,13 +338,15 @@ class Twin:
                 f"Stored          : {self.state.Cooler_stored_energy_change/1e6:.2f} MW\n"
                 f"Residual        : {self.state.Cooler_energy_balance/1e6:.2f} MW\n"
 
-                f"\n========== GLOBAL ENERGY SUMMARY ==========\n"
-                f"Fuel input      : {self.state.Q_burning/1e6:.2f} MW\n"
-                f"Final exhaust   : {self.state.Hgas_cooler_out/1e6:.2f} MW\n"
-                f"Wall losses     : {total_wall_loss/1e6:.2f} MW\n"
-                f"Stored energy   : {total_stored/1e6:.2f} MW\n"
-                f"Calcination     : {self.state.Calciner_Q_sink/1e6:.2f} MW\n"
-                f"==========================================\n"
+                f"\n========== GLOBAL ENERGY SUMMARY ==========\n",
+                f"Fuel input      : {self.state.Q_burning/1e6:.2f} MW\n",
+                f"Gas exhaust     : {self.state.Hgas_cooler_out/1e6:.2f} MW\n",
+                f"Solid exhaust   : {self.state.Hsolid_cooler_out/1e6:.2f} MW\n",
+                f"Total exhaust   : {total_exhaust/1e6:.2f} MW\n",
+                f"Wall losses     : {total_wall_loss/1e6:.2f} MW\n",
+                f"Stored energy   : {total_stored/1e6:.2f} MW\n",
+                f"Calcination     : {self.state.Calciner_Q_sink/1e6:.2f} MW\n",
+                f"==========================================\n",
 
                 f"\n--- Wall Loss Debug ---------------------\n"
                 f"q_loss_mean    : {self.state.q_loss_mean_burning:.2f} W/m³\n"

@@ -227,10 +227,17 @@ class Preheater:
         state.A_wall_preheater      = state.wall_debug_preheater["A_wall"]
         state.V_cell_preheater      = state.wall_debug_preheater["V_cell"]
         state.N_preheater           = state.wall_debug_preheater["N"]
+        
+        # ======================================================
+        # ENERGY TO NEXT ZONE
+        # ======================================================
 
-        # ================= OUTPUT ENTHALPY =================
         state.Hgas_preheater_out = self.gas_enthalpy_out(
             state.Tg_preheater
+        )
+
+        state.Hsolid_preheater_out = self.solid_enthalpy_out(
+            state.Ts_preheater
         )
 
         # ======================================================
@@ -269,8 +276,12 @@ class Preheater:
         # ENERGY BALANCE
         # ======================================================
         state.Preheater_energy_balance = (
-            state.Hgas_calciner_out
+            state.Hgas_preheater_in
+            + state.Hsolid_preheater_in
+
             - state.Hgas_preheater_out
+            - state.Hsolid_preheater_out
+
             - state.Preheater_stored_energy_change
             - state.Wall_loss_preheater
         )
@@ -285,6 +296,14 @@ class Preheater:
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
 
-        H_out = m_dot_g * self.Cp_g * Tg[-1]
+        H_gas_out = m_dot_g * self.Cp_g * Tg[-1]
 
-        return H_out
+        return H_gas_out
+    
+    def solid_enthalpy_out(self, Ts):
+
+        m_dot_s = self.rho_s * self.u_s * self.A_cross
+
+        H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
+
+        return H_solid_out

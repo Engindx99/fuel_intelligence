@@ -222,11 +222,21 @@ class Transition:
         state.V_cell_transition      = state.wall_debug_transition["V_cell"]
         state.N_transition           = state.wall_debug_transition["N"]
 
-        # ================= ENERGY TO NEXT ZONE =================
+        # ======================================================
+        # ENERGY TO NEXT ZONE
+        # ======================================================
+
+        # Gas
         state.Hgas_transition_out = self.gas_enthalpy_out(
             state.Tg_transition
         )
 
+        # Solid
+        state.Hsolid_transition_out = self.solid_enthalpy_out(
+            state.Ts_transition
+        )
+        
+        
         # ======================================================
         # STORED ENERGY
         # ======================================================
@@ -263,8 +273,12 @@ class Transition:
         # ENERGY BALANCE
         # ======================================================
         state.Transition_energy_balance = (
-            state.Hgas_burning_out
+            state.Hgas_transition_in
+            + state.Hsolid_transition_in
+
             - state.Hgas_transition_out
+            - state.Hsolid_transition_out
+
             - state.Transition_stored_energy_change
             - state.Wall_loss_transition
         )
@@ -279,9 +293,21 @@ class Transition:
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
 
-        H_out = m_dot_g * self.Cp_g * Tg[-1]
+        H_gas_out = m_dot_g * self.Cp_g * Tg[-1]
 
-        return H_out
+        return H_gas_out
+    
+    
+    def solid_enthalpy_out(self, Ts):
+
+        m_dot_s = self.rho_s * self.u_s * self.A_cross
+
+        H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
+
+        return H_solid_out
+    
+    
+    
     
     
     

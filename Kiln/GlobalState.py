@@ -35,7 +35,7 @@ class GlobalState:
     
     
     # ======================================================
-    # ENERGY FLOW (W)
+    # GAS ENERGY FLOW (W)
     # ======================================================
 
     Hgas_burning_out: float = 0.0
@@ -51,6 +51,24 @@ class GlobalState:
 
     Hgas_cooler_in: float = 0.0
     Hgas_cooler_out: float = 0.0
+    
+    # ======================================================
+    # SOLID ENERGY FLOW (W)
+    # ======================================================
+
+    Hsolid_burning_out: float = 0.0
+
+    Hsolid_transition_in: float = 0.0
+    Hsolid_transition_out: float = 0.0
+
+    Hsolid_calciner_in: float = 0.0
+    Hsolid_calciner_out: float = 0.0
+
+    Hsolid_preheater_in: float = 0.0
+    Hsolid_preheater_out: float = 0.0
+
+    Hsolid_cooler_in: float = 0.0
+    Hsolid_cooler_out: float = 0.0
 
     
     # ================= BURNING STORED ENERGY =================

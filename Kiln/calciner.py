@@ -235,10 +235,17 @@ class Calciner:
         state.A_wall_calciner      = state.wall_debug_calciner["A_wall"]
         state.V_cell_calciner      = state.wall_debug_calciner["V_cell"]
         state.N_calciner           = state.wall_debug_calciner["N"]
+        
+        # ======================================================
+        # ENERGY TO NEXT ZONE
+        # ======================================================
 
-        # ================= OUTPUT ENTHALPY =================
         state.Hgas_calciner_out = self.gas_enthalpy_out(
             state.Tg_calciner
+        )
+
+        state.Hsolid_calciner_out = self.solid_enthalpy_out(
+            state.Ts_calciner
         )
 
         # ======================================================
@@ -277,11 +284,15 @@ class Calciner:
         # ENERGY BALANCE
         # ======================================================
         state.Calciner_energy_balance = (
-            state.Hgas_transition_out
+            state.Hgas_calciner_in
+            + state.Hsolid_calciner_in
+
             - state.Hgas_calciner_out
+            - state.Hsolid_calciner_out
+
+            - state.Calciner_Q_sink
             - state.Calciner_stored_energy_change
             - state.Wall_loss_calciner
-            - state.Calciner_Q_sink
         )
 
         return state
@@ -294,6 +305,14 @@ class Calciner:
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
 
-        H_out = m_dot_g * self.Cp_g * Tg[-1]
+        H_gas_out = m_dot_g * self.Cp_g * Tg[-1]
 
-        return H_out
+        return H_gas_out
+    
+    def solid_enthalpy_out(self, Ts):
+
+        m_dot_s = self.rho_s * self.u_s * self.A_cross
+
+        H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
+
+        return H_solid_out

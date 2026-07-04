@@ -228,10 +228,17 @@ class Cooler:
         state.A_wall_cooler      = state.wall_debug_cooler["A_wall"]
         state.V_cell_cooler      = state.wall_debug_cooler["V_cell"]
         state.N_cooler           = state.wall_debug_cooler["N"]
+        
+        # ======================================================
+        # ENERGY TO NEXT ZONE
+        # ======================================================
 
-        # ================= OUTPUT ENTHALPY =================
         state.Hgas_cooler_out = self.gas_enthalpy_out(
             state.Tg_cooler
+        )
+
+        state.Hsolid_cooler_out = self.solid_enthalpy_out(
+            state.Ts_cooler
         )
 
         # ======================================================
@@ -270,14 +277,17 @@ class Cooler:
         # ENERGY BALANCE
         # ======================================================
         state.Cooler_energy_balance = (
-            state.Hgas_preheater_out
+            state.Hgas_cooler_in
+            + state.Hsolid_cooler_in
+
             - state.Hgas_cooler_out
+            - state.Hsolid_cooler_out
+
             - state.Cooler_stored_energy_change
             - state.Wall_loss_cooler
         )
 
         return state
-
 
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE
@@ -286,6 +296,14 @@ class Cooler:
 
         m_dot_g = self.rho_g * self.u_g * self.A_cross
 
-        H_out = m_dot_g * self.Cp_g * Tg[-1]
+        H_gas_out = m_dot_g * self.Cp_g * Tg[-1]
 
-        return H_out
+        return H_gas_out
+    
+    def solid_enthalpy_out(self, Ts):
+
+        m_dot_s = self.rho_s * self.u_s * self.A_cross
+
+        H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
+
+        return H_solid_out
