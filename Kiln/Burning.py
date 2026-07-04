@@ -92,9 +92,23 @@ class Burning:
 
 
         # ================= CACHE CONSTANTS =================
-        self._rho_s_Cp_s = self.rho_s * self.Cp_s
-        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
-        self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
+
+        # Gas
+        self._rho_g_Vcell_Cp_g = (
+            self.rho_g * self.V_cell * self.Cp_g
+        )
+
+        # Solid
+        self._rho_s_Vcell_Cp_s = (
+            self.rho_s * self.V_cell * self.Cp_s
+        )
+
+        # Wall (per computational cell)
+        self.V_wall_cell = self.V_wall / self.N
+
+        self._rho_wall_Vwall_cell_Cp = (
+            self.rho_wall * self.V_wall_cell * self.Cp_wall
+        )
         
 
     # ======================================================
@@ -174,11 +188,11 @@ class Burning:
         # ======================================================
         effective = 0.01
 
-        C_s = self._rho_s_Cp_s
+        C_s = self._rho_s_Vcell_Cp_s
         effective_C_s = effective * C_s
 
         C_g = self._rho_g_Vcell_Cp_g
-        C_w = self._rho_wall_Vwall_Cp
+        C_w = self._rho_wall_Vwall_cell_Cp
         
         # ================= WALL HEAT LOSS =================
         wall_loss_cells = (
@@ -255,6 +269,9 @@ class Burning:
         state.Ts_burning_old = state.Ts_burning.copy()
         state.Tw_burning_old = state.Tw_burning.copy()
 
+        # ======================================================
+        # THERMAL STEP
+        # ======================================================
         (
             Tg,
             Ts,
@@ -265,7 +282,7 @@ class Burning:
             Q_H2,
             Q_burning,
             wall_loss,
-            wall_debug
+            wall_debug,
         ) = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
@@ -284,14 +301,12 @@ class Burning:
         state.Q_coal = Q_coal
         state.Q_RDF = Q_RDF
         state.Q_H2 = Q_H2
-
-        # ================= TOTAL BURNING ENERGY =================
         state.Q_burning = Q_burning
 
         # ================= WALL LOSS =================
-        state.Wall_loss_burning = wall_loss
+        state.Wall_loss_burning = float(wall_loss)
 
-        # ================= DEBUG STRUCT (SAFE) =================
+        # ================= WALL DEBUG =================
         state.wall_debug_burning = wall_debug or {
             "q_loss_mean": 0.0,
             "q_loss_total": 0.0,
@@ -299,24 +314,50 @@ class Burning:
             "V_cell": 0.0,
             "N": 0,
         }
-        
-                # ================= DEBUG VALUES =================
+
         state.q_loss_mean_burning = state.wall_debug_burning["q_loss_mean"]
-        state.A_wall_burning      = state.wall_debug_burning["A_wall"]
-        state.V_cell_burning      = state.wall_debug_burning["V_cell"]
-        state.N_burning           = state.wall_debug_burning["N"]
+        state.A_wall_burning = state.wall_debug_burning["A_wall"]
+        state.V_cell_burning = state.wall_debug_burning["V_cell"]
+        state.N_burning = state.wall_debug_burning["N"]
 
         # ================= ENERGY TO NEXT ZONE =================
         state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
 
-        # ================= STORED ENERGY =================
-        state.Burning_stored_energy_change = np.sum(
+        # ======================================================
+        # STORED ENERGY
+        # ======================================================
+
+        # Gas
+        state.Burning_gas_stored = np.sum(
             self._rho_g_Vcell_Cp_g
             * (state.Tg_burning - state.Tg_burning_old)
             / dt
         )
 
-        # ================= ENERGY BALANCE =================
+        # Solid
+        state.Burning_solid_stored = np.sum(
+            self._rho_s_Vcell_Cp_s
+            * (state.Ts_burning - state.Ts_burning_old)
+            / dt
+        )
+
+        # Wall
+        state.Burning_wall_stored = np.sum(
+            self._rho_wall_Vwall_cell_Cp
+            * (state.Tw_burning - state.Tw_burning_old)
+            / dt
+        )
+
+        # Total
+        state.Burning_stored_energy_change = (
+            state.Burning_gas_stored
+            + state.Burning_solid_stored
+            + state.Burning_wall_stored
+        )
+
+        # ======================================================
+        # ENERGY BALANCE
+        # ======================================================
         state.Burning_energy_balance = (
             state.Q_burning
             - state.Hgas_burning_out

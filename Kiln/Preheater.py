@@ -74,9 +74,23 @@ class Preheater:
         self._dTs_dz = np.zeros(N)
 
         # ================= CACHE CONSTANTS =================
-        self._rho_s_Cp_s = self.rho_s * self.Cp_s
-        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
-        self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
+
+        # Gas
+        self._rho_g_Vcell_Cp_g = (
+            self.rho_g * self.V_cell * self.Cp_g
+        )
+
+        # Solid
+        self._rho_s_Vcell_Cp_s = (
+            self.rho_s * self.V_cell * self.Cp_s
+        )
+
+        # Wall (per computational cell)
+        self.V_wall_cell = self.V_wall / self.N
+
+        self._rho_wall_Vwall_cell_Cp = (
+            self.rho_wall * self.V_wall_cell * self.Cp_wall
+        )
 
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, Q_in_preheater, dt):
@@ -104,14 +118,14 @@ class Preheater:
 
         # ================= SOLID CAPACITY =================
         effective = 0.01
-        C_s = self._rho_s_Cp_s
+        C_s = self._rho_s_Vcell_Cp_s
         effective_C_s = effective * C_s
 
         # ================= GAS CAPACITY =================
         C_g = self._rho_g_Vcell_Cp_g
 
         # ================= WALL CAPACITY =================
-        C_w = self._rho_wall_Vwall_Cp
+        C_w = self._rho_wall_Vwall_cell_Cp
 
         # ================= WALL HEAT LOSS =================
         q_loss = (
@@ -219,14 +233,41 @@ class Preheater:
             state.Tg_preheater
         )
 
-        # ================= STORED ENERGY =================
-        state.Preheater_stored_energy_change = np.sum(
+        # ======================================================
+        # STORED ENERGY
+        # ======================================================
+
+        # Gas
+        state.Preheater_gas_stored = np.sum(
             self._rho_g_Vcell_Cp_g
             * (state.Tg_preheater - state.Tg_preheater_old)
             / dt
         )
 
-        # ================= ENERGY BALANCE =================
+        # Solid
+        state.Preheater_solid_stored = np.sum(
+            self._rho_s_Vcell_Cp_s
+            * (state.Ts_preheater - state.Ts_preheater_old)
+            / dt
+        )
+
+        # Wall
+        state.Preheater_wall_stored = np.sum(
+            self._rho_wall_Vwall_cell_Cp
+            * (state.Tw_preheater - state.Tw_preheater_old)
+            / dt
+        )
+
+        # Total
+        state.Preheater_stored_energy_change = (
+            state.Preheater_gas_stored
+            + state.Preheater_solid_stored
+            + state.Preheater_wall_stored
+        )
+
+        # ======================================================
+        # ENERGY BALANCE
+        # ======================================================
         state.Preheater_energy_balance = (
             state.Hgas_calciner_out
             - state.Hgas_preheater_out

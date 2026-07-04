@@ -52,16 +52,37 @@ class GlobalState:
     Hgas_cooler_in: float = 0.0
     Hgas_cooler_out: float = 0.0
 
-
-    # ======================================================
-    # ENERGY STORAGE (W)
-    # ======================================================
+    
+    # ================= BURNING STORED ENERGY =================
+    Burning_gas_stored: float = 0.0
+    Burning_solid_stored: float = 0.0
+    Burning_wall_stored: float = 0.0
     Burning_stored_energy_change: float = 0.0
-    Transition_stored_energy_change: float = 0.0
-    Calciner_stored_energy_change: float = 0.0
-    Preheater_stored_energy_change: float = 0.0
-    Cooler_stored_energy_change: float = 0.0
 
+    # ================= TRANSITION STORED ENERGY =================
+    Transition_gas_stored: float = 0.0
+    Transition_solid_stored: float = 0.0
+    Transition_wall_stored: float = 0.0
+    Transition_stored_energy_change: float = 0.0
+
+    # ================= CALCINER STORED ENERGY =================
+    Calciner_gas_stored: float = 0.0
+    Calciner_solid_stored: float = 0.0
+    Calciner_wall_stored: float = 0.0
+    Calciner_stored_energy_change: float = 0.0
+
+    # ================= PREHEATER STORED ENERGY =================
+    Preheater_gas_stored: float = 0.0
+    Preheater_solid_stored: float = 0.0
+    Preheater_wall_stored: float = 0.0
+    Preheater_stored_energy_change: float = 0.0
+
+    # ================= COOLER STORED ENERGY =================
+    Cooler_gas_stored: float = 0.0
+    Cooler_solid_stored: float = 0.0
+    Cooler_wall_stored: float = 0.0
+    Cooler_stored_energy_change: float = 0.0
+    
 
     # ======================================================
     # ZONE ENERGY BALANCE (W)

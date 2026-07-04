@@ -74,9 +74,23 @@ class Transition:
         self._dTs_dz = np.zeros(N)
 
         # ================= CACHE CONSTANTS =================
-        self._rho_s_Cp_s = self.rho_s * self.Cp_s
-        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
-        self._rho_wall_Vwall_Cp = self.rho_wall * self.V_wall * self.Cp_wall
+
+        # Gas
+        self._rho_g_Vcell_Cp_g = (
+            self.rho_g * self.V_cell * self.Cp_g
+        )
+
+        # Solid
+        self._rho_s_Vcell_Cp_s = (
+            self.rho_s * self.V_cell * self.Cp_s
+        )
+
+        # Wall (per computational cell)
+        self.V_wall_cell = self.V_wall / self.N
+
+        self._rho_wall_Vwall_cell_Cp = (
+            self.rho_wall * self.V_wall_cell * self.Cp_wall
+        )
         
         # ======================================================
     def thermal_step(self, Tg, Ts, Tw, Q_in_transition, dt):
@@ -103,14 +117,14 @@ class Transition:
 
         # ================= SOLID CAPACITY =================
         effective = 0.01
-        C_s = self._rho_s_Cp_s
+        C_s = self._rho_s_Vcell_Cp_s
         effective_C_s = effective * C_s
 
         # ================= GAS CAPACITY =================
         C_g = self._rho_g_Vcell_Cp_g
 
         # ================= WALL CAPACITY =================
-        C_w = self._rho_wall_Vwall_Cp
+        C_w = self._rho_wall_Vwall_cell_Cp
 
         # ================= WALL HEAT LOSS =================
         q_loss = (
@@ -213,14 +227,41 @@ class Transition:
             state.Tg_transition
         )
 
-        # ================= STORED ENERGY =================
-        state.Transition_stored_energy_change = np.sum(
+        # ======================================================
+        # STORED ENERGY
+        # ======================================================
+
+        # Gas
+        state.Transition_gas_stored = np.sum(
             self._rho_g_Vcell_Cp_g
             * (state.Tg_transition - state.Tg_transition_old)
             / dt
         )
 
-        # ================= ENERGY BALANCE =================
+        # Solid
+        state.Transition_solid_stored = np.sum(
+            self._rho_s_Vcell_Cp_s
+            * (state.Ts_transition - state.Ts_transition_old)
+            / dt
+        )
+
+        # Wall
+        state.Transition_wall_stored = np.sum(
+            self._rho_wall_Vwall_cell_Cp
+            * (state.Tw_transition - state.Tw_transition_old)
+            / dt
+        )
+
+        # Total
+        state.Transition_stored_energy_change = (
+            state.Transition_gas_stored
+            + state.Transition_solid_stored
+            + state.Transition_wall_stored
+        )
+
+        # ======================================================
+        # ENERGY BALANCE
+        # ======================================================
         state.Transition_energy_balance = (
             state.Hgas_burning_out
             - state.Hgas_transition_out
