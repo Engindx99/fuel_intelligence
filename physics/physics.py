@@ -36,8 +36,12 @@ def solid_axial_velocity(L, D, slope_deg, fill_fraction, rpm, eps):
     return L / (tau + eps)
 
 def gas_axial_velocity(m_dot_g, rho_g, A_cross, eps):
+    u_g = m_dot_g / (rho_g * A_cross + eps)
+    return u_g
 
-    return m_dot_g / (rho_g * A_cross + eps)
+def gas_mass_balance(fuel_rate_total, O2, eps):
+    # combustion stoichiometry simplified
+    return fuel_rate_total * (1.0 + 0.8 * O2)
 
 # ======================================================
 # COMBUSTION
@@ -136,38 +140,68 @@ def wall_losses(
     T_amb,
     A_wall_total,
     N,
+    refractory_thickness,
+    refractory_conductivity,
     eps,
+    insulation_factor=0.27,   # default calibration
 ):
 
-    # Heat loss from each computational cell (W)
-    wall_loss_cells = (
-        h_ext
-        * A_wall_cell
-        * (Tw - T_amb)
+    # ======================================================
+    # THERMAL RESISTANCE NETWORK
+    # ======================================================
+    R_ref, R_conv, R_total = wall_thermal_resistance(
+        refractory_thickness=refractory_thickness,
+        refractory_conductivity=refractory_conductivity,
+        h_ext=h_ext,
+        A_wall_cell=A_wall_cell,
     )
 
-    # Total kiln wall heat loss (W)
-    wall_loss = np.sum(wall_loss_cells)
+    # ======================================================
+    # HEAT LOSS (cell-wise)
+    # ======================================================
+    wall_loss_cells = (Tw - T_amb) / (R_total + eps)
 
-    # Volumetric heat loss (W/m³)
-    q_loss = wall_loss_cells / (V_cell + eps)
+    # ======================================================
+    # TOTAL HEAT LOSS
+    # ======================================================
+    wall_loss_raw = np.sum(wall_loss_cells)
 
+    # ======================================================
+    # APPLY INSULATION FACTOR
+    # ======================================================
+    insulation_factor = np.clip(insulation_factor, 0.1, 1.0)
+
+    wall_loss = insulation_factor * wall_loss_raw
+
+    # ======================================================
+    # VOLUMETRIC LOSS
+    # ======================================================
+    q_loss = insulation_factor * wall_loss_cells / (V_cell + eps)
+
+    # ======================================================
+    # DEBUG
+    # ======================================================
     wall_debug = {
+        "R_ref": float(R_ref),
+        "R_conv": float(R_conv),
+        "R_total": float(R_total),
+
+        "insulation_factor": float(insulation_factor),
+
         "q_loss_mean": float(np.mean(q_loss)),
         "q_loss_max": float(np.max(q_loss)),
+
         "wall_loss_mean": float(np.mean(wall_loss_cells)),
+        "wall_loss_total_raw": float(wall_loss_raw),
         "wall_loss_total": float(wall_loss),
+
         "A_wall": float(A_wall_total),
         "A_wall_cell": float(A_wall_cell),
         "V_cell": float(V_cell),
         "N": int(N),
     }
 
-    return (
-        q_loss,
-        wall_loss,
-        wall_debug,
-    )
+    return q_loss, wall_loss, wall_debug
     
 # ======================================================
 # THERMAL CAPACITIES
@@ -269,5 +303,41 @@ def interfacial_areas(
         a_gs,
         a_ws,
     )
-    
+
+# ======================================================
+# WALL THERMAL RESISTANCE
+# ======================================================
+def wall_thermal_resistance(
+    refractory_thickness,
+    refractory_conductivity,
+    h_ext,
+    A_wall_cell,
+):
+
+    # Refractory conduction resistance (K/W)
+    R_ref = (
+        refractory_thickness
+        / (
+            refractory_conductivity
+            * A_wall_cell
+        )
+    )
+
+    # External convection resistance (K/W)
+    R_conv = (
+        1.0
+        / (
+            h_ext
+            * A_wall_cell
+        )
+    )
+
+    # Total thermal resistance (K/W)
+    R_total = R_ref + R_conv
+
+    return (
+        R_ref,
+        R_conv,
+        R_total,
+    )
     

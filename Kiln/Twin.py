@@ -160,10 +160,14 @@ class Twin:
             print("MPC FAILED:", repr(e))
 
         inputs = self._last_inputs
+        
+        # ================= GAS MASS FLOW INJECTION =================
+        inputs = dict(inputs)  # güvenli copy
 
-        # ======================================================
-        # ZONES
-        # ======================================================
+        inputs["m_dot_g"] = self.state.m_dot_g
+        inputs["rho_g"]   = getattr(self.state, "rho_g", 1.2)
+
+
 
         # ================= BURNING =================
         self.state = self.burning.apply(
@@ -394,6 +398,17 @@ class Twin:
                 f"\nRPM             : {self.state.rpm:.2f}",
                 f"\nResidence time  : {self.state.residence_time/60:.2f} min",
                 f"\nSolid velocity  : {self.state.solid_velocity:.5f} m/s",
+                
+                
+                f"\n--- DEBUG ------------------------------\n",
+                f"u_g            : {state.u_g:.5f} m/s\n",
+                f"Q_burning      : {state.Q_burning/1e6:.2f} MW\n",
+            
+   
+                f"\n--- FLOW DEBUG -------------------------\n",
+                f"m_dot_g         : {inputs['m_dot_g']:.5f} kg/s\n",
+                f"rho_g           : {inputs['rho_g']:.5f} kg/m3\n",
+                f"A_cross         : {self.burning.A_cross:.5f} m2\n",
 
                 
                 flush=True,

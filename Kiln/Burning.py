@@ -1,20 +1,22 @@
-from physics.physics import (
-    kiln_geometry,
-    wall_geometry,
-    interfacial_areas,
-    solid_axial_velocity,
-    gas_axial_velocity,
-    fuel_heat_release,
-    heat_transfer,
-    wall_losses,
-    thermal_capacities,)
-
-from bdb import effective
 import json
-import pickle
 import os
+import pickle
+
 import numpy as np
 import yaml
+
+from physics.physics import fuel_heat_release
+from physics.physics import residence_time
+from physics.physics import gas_axial_velocity
+from physics.physics import heat_transfer
+from physics.physics import interfacial_areas
+from physics.physics import kiln_geometry
+from physics.physics import solid_axial_velocity
+from physics.physics import thermal_capacities
+from physics.physics import wall_geometry
+from physics.physics import wall_losses
+from physics.physics import gas_mass_balance
+
 
 def load_cfg(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -72,6 +74,11 @@ class Burning:
             N=self.N,
             V_cell=self.V_cell,
         )
+        
+        # ================= REFRACTORY =================
+        self.refractory_thickness = 0.20      # m
+        self.refractory_conductivity = 1.8    # W/mK
+
 
         # ================= MATERIAL PROPERTIES =================
         self.rho_g = 0.30
@@ -99,18 +106,14 @@ class Burning:
             eps=self.eps,
         )
         self.u_g = 0.0
-
-        self.u_g = gas_axial_velocity(
-            m_dot_g=inputs["Gas_mass_flow"],
-            rho_g=self.rho_g,
-            A_cross=self.A_cross,
-            eps=self.eps,
-        )
+        self.u_s = 0.0
 
         # ================= HEAT TRANSFER =================
         self.hv_gs = 1300.0
         self.hv_gw = 250.0
         self.hv_ws = 300.0
+        
+        self.h_ext = 12.0
 
         self.T_amb = 300.0
 
@@ -147,10 +150,12 @@ class Burning:
             * self.Cp_wall
         )
 
-    # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, inputs, dt):
+    # ========================================================
+    def thermal_step(self, Tg, Ts, Tw, state, inputs, dt, u_g, u_s):
 
-        # ================= GRADIENTS (NO ALLOC) =================
+        # ======================================================
+        # GRADIENTS (NO ALLOC)
+        # ======================================================
         dTg_dz = self._dTg_dz
         dTs_dz = self._dTs_dz
 
@@ -159,6 +164,7 @@ class Burning:
 
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
+        
 
         # ======================================================
         # INPUTS
@@ -216,13 +222,15 @@ class Burning:
             T_amb=self.T_amb,
             A_wall_total=self.A_wall_total,
             N=self.N,
+            refractory_thickness=self.refractory_thickness,
+            refractory_conductivity=self.refractory_conductivity,
             eps=self.eps,
         )
 
         # ======================================================
         # THERMAL CAPACITIES
         # ======================================================
-        C_g, effective_C_s, C_w = heat_capacities(
+        C_g, effective_C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
@@ -233,12 +241,12 @@ class Burning:
         # DYNAMICS
         # ======================================================
         Tg_n = Tg + dt * (
-            -self.u_g * dTg_dz
+            -u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
         )
 
         Ts_n = Ts + dt * (
-            -self.u_s * dTs_dz
+            -u_s * dTs_dz
             + (q_gs - q_ws) / effective_C_s
         )
 
@@ -271,31 +279,72 @@ class Burning:
             raise TypeError("Tg_burning must be np.ndarray")
 
         if state.Tg_burning.shape != (5,):
-            raise ValueError(f"Burning shape corrupted: {state.Tg_burning.shape}")
+            raise ValueError(
+                f"Burning shape corrupted: {state.Tg_burning.shape}"
+            )
 
-        # ================= STORE OLD STATES =================
+        # ======================================================
+        # STORE OLD STATES
+        # ======================================================
         state.Tg_burning_old = state.Tg_burning.copy()
         state.Ts_burning_old = state.Ts_burning.copy()
         state.Tw_burning_old = state.Tw_burning.copy()
 
         # ======================================================
-        # SOLID MOTION UPDATE
+        # SOLID MOTION
         # ======================================================
-
         rpm = np.clip(
             inputs.get("rpm", self.rpm_default),
             self.rpm_min,
             self.rpm_max,
         )
 
-        tau = self.residence_time(rpm)
+        tau = residence_time(
+            L=self.L,
+            D=self.D,
+            slope_deg=self.slope_deg,
+            fill_fraction=self.fill_fraction,
+            rpm=rpm,
+            eps=self.eps,
+        )
 
-        self.u_s = self.solid_velocity(rpm)
+        u_s = solid_axial_velocity(
+            L=self.L,
+            D=self.D,
+            slope_deg=self.slope_deg,
+            fill_fraction=self.fill_fraction,
+            rpm=rpm,
+            eps=self.eps,
+        )
 
-        # Save to global state
         state.rpm = rpm
         state.residence_time = tau
-        state.solid_velocity = self.u_s
+        state.u_s = u_s
+        state.solid_velocity = u_s
+
+        # ======================================================
+        # GAS MASS FLOW + VELOCITY
+        # ======================================================
+        m_dot_g = gas_mass_balance(
+            fuel_rate_total=inputs.get("Fuel_rate_total", 1.0),
+            O2=inputs.get("O2", 3.5),
+            eps=self.eps,
+        )
+
+        state.m_dot_g = float(m_dot_g)
+
+        rho_g = getattr(self, "rho_g_avg", None)
+        if rho_g is None:
+            rho_g = self.rho_g
+
+        u_g = gas_axial_velocity(
+            m_dot_g=state.m_dot_g,
+            rho_g=rho_g,
+            A_cross=self.A_cross,
+            eps=self.eps,
+        )
+
+        state.u_g = u_g
 
         # ======================================================
         # THERMAL STEP
@@ -315,32 +364,40 @@ class Burning:
             state.Tg_burning,
             state.Ts_burning,
             state.Tw_burning,
+            state,
             inputs,
             dt,
+            u_g,
+            u_s,
         )
 
-        # ================= UPDATE TEMPERATURE FIELDS =================
+        # ======================================================
+        # UPDATE STATES
+        # ======================================================
         state.Tg_burning = Tg
         state.Ts_burning = Ts
         state.Tw_burning = Tw
 
-        # ================= FUEL ENERGY =================
         state.Q_petcoke = Q_petcoke
         state.Q_coal = Q_coal
         state.Q_RDF = Q_RDF
         state.Q_H2 = Q_H2
         state.Q_burning = Q_burning
 
-        # ================= WALL LOSS =================
         state.Wall_loss_burning = float(wall_loss)
 
-        # ================= WALL DEBUG =================
-        state.wall_debug_burning = wall_debug or {
-            "q_loss_mean": 0.0,
-            "q_loss_total": 0.0,
-            "A_wall": 0.0,
-            "V_cell": 0.0,
-            "N": 0,
+        # ======================================================
+        # WALL DEBUG
+        # ======================================================
+        if wall_debug is None:
+            wall_debug = {}
+
+        state.wall_debug_burning = {
+            "q_loss_mean": wall_debug.get("q_loss_mean", 0.0),
+            "q_loss_total": wall_debug.get("wall_loss_total", 0.0),
+            "A_wall": wall_debug.get("A_wall", 0.0),
+            "V_cell": wall_debug.get("V_cell", 0.0),
+            "N": wall_debug.get("N", 0),
         }
 
         state.q_loss_mean_burning = state.wall_debug_burning["q_loss_mean"]
@@ -349,45 +406,26 @@ class Burning:
         state.N_burning = state.wall_debug_burning["N"]
 
         # ======================================================
-        # ENERGY TO NEXT ZONE
+        # ENERGY OUT
         # ======================================================
-
-        # Gas
-        state.Hgas_burning_out = self.gas_enthalpy_out(
-            state.Tg_burning
-        )
-
-        # Solid
-        state.Hsolid_burning_out = self.solid_enthalpy_out(
-            state.Ts_burning
-        )
+        state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
+        state.Hsolid_burning_out = self.solid_enthalpy_out(state.Ts_burning)
 
         # ======================================================
         # STORED ENERGY
         # ======================================================
-
-        # Gas
         state.Burning_gas_stored = np.sum(
-            self._rho_g_Vcell_Cp_g
-            * (state.Tg_burning - state.Tg_burning_old)
-            / dt
+            self._rho_g_Vcell_Cp_g * (state.Tg_burning - state.Tg_burning_old) / dt
         )
 
-        # Solid
         state.Burning_solid_stored = np.sum(
-            self._rho_s_Vcell_Cp_s
-            * (state.Ts_burning - state.Ts_burning_old)
-            / dt
+            self._rho_s_Vcell_Cp_s * (state.Ts_burning - state.Ts_burning_old) / dt
         )
 
-        # Wall
         state.Burning_wall_stored = np.sum(
-            self._rho_wall_Vwall_cell_Cp
-            * (state.Tw_burning - state.Tw_burning_old)
-            / dt
+            self._rho_wall_Vwall_cell_Cp * (state.Tw_burning - state.Tw_burning_old) / dt
         )
 
-        # Total
         state.Burning_stored_energy_change = (
             state.Burning_gas_stored
             + state.Burning_solid_stored
@@ -399,10 +437,8 @@ class Burning:
         # ======================================================
         state.Burning_energy_balance = (
             state.Q_burning
-
             - state.Hgas_burning_out
             - state.Hsolid_burning_out
-
             - state.Burning_stored_energy_change
             - state.Wall_loss_burning
         )

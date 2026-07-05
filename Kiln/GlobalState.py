@@ -1,11 +1,8 @@
 from dataclasses import dataclass, field
-from typing import Dict
 import numpy as np
+from typing import Dict
 
 
-# ==========================================================
-# GLOBAL STATE (CONSISTENT 5-CELL SYSTEM)
-# ==========================================================
 @dataclass
 class GlobalState:
 
@@ -18,27 +15,26 @@ class GlobalState:
     # ======================================================
     # OPERATION
     # ======================================================
-
-    Feed_rate: float = 40.0          # ton/h
-    Fuel_rate_total: float = 3.0     # ton/h
+    Feed_rate: float = 40.0
+    Fuel_rate_total: float = 3.0
     rpm: float = 0.0
-    residence_time: float = 0.0      # s
-    solid_velocity: float = 0.0      # m/s# rpm
-    
-    
-    # ================= FUEL ENERGY (W) =================
+    residence_time: float = 0.0
+    solid_velocity: float = 0.0
 
+    # ======================================================
+    # FUEL ENERGY (W)
+    # ======================================================
     Q_petcoke: float = 0.0
     Q_coal: float = 0.0
     Q_RDF: float = 0.0
     Q_H2: float = 0.0
-
     Q_burning: float = 0.0
-    
-    
+
     # ======================================================
-    # GAS ENERGY FLOW (W)
+    # GAS / MASS FLOW STATE
     # ======================================================
+    m_dot_g: float = 0.0
+    rho_g: float = 1.2
 
     Hgas_burning_out: float = 0.0
 
