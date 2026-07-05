@@ -21,7 +21,9 @@ class GlobalState:
 
     Feed_rate: float = 40.0          # ton/h
     Fuel_rate_total: float = 3.0     # ton/h
-    Kiln_speed: float = 3.5          # rpm
+    rpm: float = 0.0
+    residence_time: float = 0.0      # s
+    solid_velocity: float = 0.0      # m/s# rpm
     
     
     # ================= FUEL ENERGY (W) =================

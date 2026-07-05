@@ -13,6 +13,8 @@ class Burning:
 
     def __init__(self, N=5, L=60.0):
 
+        cfg = load_cfg("configs/twin_cfg.yaml")
+
         self.N = N
         self.L = L
         self.dz = L / N
@@ -22,6 +24,10 @@ class Burning:
         self.A_cross = np.pi * self.D**2 / 4.0
         self.V_total = self.A_cross * self.L
         self.V_cell = self.V_total / self.N
+        
+        # ================= NUMERICAL =================
+        
+        self.eps = 1e-9
 
         # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
@@ -34,6 +40,8 @@ class Burning:
 
         self.a_gs = self.k_interfacial * a_gs_base
         self.a_ws = 0.6 * self.a_gs
+        
+        self.u_g = 5.0  # m/s (örnek kiln gas axial velocity)
 
         # ================= WALL GEOMETRY =================
 
@@ -64,9 +72,20 @@ class Burning:
         self.Cp_s = 850.0
         self.Cp_wall = 1000.0
 
-        # ================= VELOCITIES =================
-        self.u_g = 1.4
-        self.u_s = 0.005
+        # ======================================================
+        # SOLID MOTION PARAMETERS
+        # ======================================================
+
+        self.rpm_default = cfg["motion"]["rpm_default"]
+        self.rpm_min = cfg["motion"]["rpm_min"]
+        self.rpm_max = cfg["motion"]["rpm_max"]
+
+        self.slope_deg = cfg["motion"]["inclination_deg"]
+
+        self.fill_fraction = 0.10
+
+        self.u_s = self.solid_velocity(self.rpm_default)
+
 
         # ================= HEAT TRANSFER =================
         self.hv_gs = 1300.0
@@ -84,7 +103,7 @@ class Burning:
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
 
-        self.eps = 1e-9
+        
 
         # ================= PERFORMANCE BUFFERS =================
         self._dTg_dz = np.zeros(N)
@@ -109,6 +128,36 @@ class Burning:
         self._rho_wall_Vwall_cell_Cp = (
             self.rho_wall * self.V_wall_cell * self.Cp_wall
         )
+        
+        
+    # ======================================================
+    # SOLID RESIDENCE TIME (SULLIVAN)
+    # ======================================================
+    def residence_time(self, rpm):
+
+        theta = np.deg2rad(self.slope_deg)
+
+        tau = (
+            1.77
+            * self.L
+            / (
+                self.D
+                * rpm
+                * np.tan(theta)
+                * (self.fill_fraction + self.eps)
+            )
+        )
+
+        return tau
+
+    # ======================================================
+    # SOLID AXIAL VELOCITY
+    # ======================================================
+    def solid_velocity(self, rpm):
+
+        tau = self.residence_time(rpm)
+
+        return self.L / (tau + self.eps)
         
 
     # ======================================================
@@ -236,6 +285,7 @@ class Burning:
         Tw_n = Tw + dt * (
             (q_gw + q_ws - q_loss) / C_w
         )
+        
 
         return (
             Tg_n,
@@ -268,6 +318,25 @@ class Burning:
         state.Tg_burning_old = state.Tg_burning.copy()
         state.Ts_burning_old = state.Ts_burning.copy()
         state.Tw_burning_old = state.Tw_burning.copy()
+
+        # ======================================================
+        # SOLID MOTION UPDATE
+        # ======================================================
+
+        rpm = np.clip(
+            inputs.get("rpm", self.rpm_default),
+            self.rpm_min,
+            self.rpm_max,
+        )
+
+        tau = self.residence_time(rpm)
+
+        self.u_s = self.solid_velocity(rpm)
+
+        # Save to global state
+        state.rpm = rpm
+        state.residence_time = tau
+        state.solid_velocity = self.u_s
 
         # ======================================================
         # THERMAL STEP

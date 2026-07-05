@@ -24,14 +24,6 @@ simulation:
   # Optional chunk size for long simulations/checkpoints [hours]
   chunk_hours: 1.0
 
-logging:
-  
-  interval_sec: 60      # Temperature & control report interval [s]
-
-checkpoint:
-  enabled: true
-  file: burning_ckpt.pkl
-
   
 fuel:
   Fuel_rate_total: 4.9
@@ -40,3 +32,19 @@ fuel:
   RDF_ratio: 0.15
   H2_ratio: 0.01
   O2: 3.5
+
+motion:
+  rpm_default: 1.5
+  rpm_min: 1.0
+  rpm_max: 3.0
+
+  inclination_deg: 3.0
+
+
+logging:
+  
+  interval_sec: 60      # Temperature & control report interval [s]
+
+checkpoint:
+  enabled: true
+  file: burning_ckpt.pkl

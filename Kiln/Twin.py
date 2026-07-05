@@ -390,6 +390,12 @@ class Twin:
                 f"Tw(avg)         : {Tw_cool:.2f} K\n",
                 f"Tw(min/max)     : {np.min(self.state.Tw_cooler):.2f} / {np.max(self.state.Tw_cooler):.2f} K\n",
                 
+                f"\n--- SOLID MOTION -----------------------",
+                f"\nRPM             : {self.state.rpm:.2f}",
+                f"\nResidence time  : {self.state.residence_time/60:.2f} min",
+                f"\nSolid velocity  : {self.state.solid_velocity:.5f} m/s",
+
+                
                 flush=True,
             )
             
