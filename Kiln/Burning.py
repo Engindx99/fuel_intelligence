@@ -105,8 +105,7 @@ class Burning:
             rpm=self.rpm_default,
             eps=self.eps,
         )
-        self.u_g = 0.0
-        self.u_s = 0.0
+
 
         # ================= HEAT TRANSFER =================
         self.hv_gs = 1300.0
@@ -408,8 +407,15 @@ class Burning:
         # ======================================================
         # ENERGY OUT
         # ======================================================
-        state.Hgas_burning_out = self.gas_enthalpy_out(state.Tg_burning)
-        state.Hsolid_burning_out = self.solid_enthalpy_out(state.Ts_burning)
+        state.Hgas_burning_out = self.gas_enthalpy_out(
+            state.Tg_burning,
+            state,
+        )
+
+        state.Hsolid_burning_out = self.solid_enthalpy_out(
+            state.Ts_burning,
+            state,
+        )
 
         # ======================================================
         # STORED ENERGY
@@ -446,19 +452,33 @@ class Burning:
         return state
     
     # ======================================================
-    def gas_enthalpy_out(self, Tg):
+    def gas_enthalpy_out(self, Tg, state):
 
-        m_dot_g = self.rho_g * self.u_g * self.A_cross
-
-        H_gas_out = m_dot_g * self.Cp_g * Tg[-1]
+        H_gas_out = (
+            state.m_dot_g
+            * self.Cp_g
+            * Tg[-1]
+        )
 
         return H_gas_out
     
     # ======================================================
-    def solid_enthalpy_out(self, Ts):
+    
+    
+    def solid_enthalpy_out(self, Ts, state):
+        
+        fill_fraction = 0.10
 
-        m_dot_s = self.rho_s * self.u_s * self.A_cross
+        m_dot_s = (
+            self.rho_s
+            * state.u_s
+            * self.A_cross * fill_fraction
+        )
 
-        H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
+        H_solid_out = (
+            m_dot_s
+            * self.Cp_s
+            * Ts[-1]
+        )
 
         return H_solid_out

@@ -409,6 +409,16 @@ class Twin:
                 f"m_dot_g         : {inputs['m_dot_g']:.5f} kg/s\n",
                 f"rho_g           : {inputs['rho_g']:.5f} kg/m3\n",
                 f"A_cross         : {self.burning.A_cross:.5f} m2\n",
+                
+                f"\n--- Transition --------------------------\n"
+                f"Tg (avg/min/max) : {np.mean(state.Tg_transition):.2f} / {np.min(state.Tg_transition):.2f} / {np.max(state.Tg_transition):.2f} K\n",
+                f"Ts (avg)         : {np.mean(state.Ts_transition):.2f} K\n",
+                f"Tw (avg/min/max) : {np.mean(state.Tw_transition):.2f} / {np.min(state.Tw_transition):.2f} / {np.max(state.Tw_transition):.2f} K\n",
+                f"Hgas (in/out)    : {state.Hgas_transition_in/1e6:.2f} / {state.Hgas_transition_out/1e6:.2f} MW\n",
+                f"Hsolid (in/out)  : {state.Hsolid_transition_in/1e6:.2f} / {state.Hsolid_transition_out/1e6:.2f} MW\n",
+                f"Wall loss        : {state.Wall_loss_transition/1e6:.2f} MW\n",
+                f"Stored energy    : {state.Transition_stored_energy_change/1e6:.2f} MW\n",
+                f"Residual         : {state.Transition_energy_balance/1e6:.2f} MW",
 
                 
                 flush=True,

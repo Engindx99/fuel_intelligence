@@ -19,7 +19,7 @@ simulation:
   
   dt: 0.05 # Plant integration time [s]
 
-  total_hours: 2.0 # Total simulation duration [hours]
+  total_hours: 4.0 # Total simulation duration [hours]
 
   # Optional chunk size for long simulations/checkpoints [hours]
   chunk_hours: 1.0
