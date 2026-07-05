@@ -1,3 +1,14 @@
+from physics.physics import (
+    kiln_geometry,
+    wall_geometry,
+    interfacial_areas,
+    solid_axial_velocity,
+    gas_axial_velocity,
+    fuel_heat_release,
+    heat_transfer,
+    wall_losses,
+    thermal_capacities,)
+
 from bdb import effective
 import json
 import pickle
@@ -8,7 +19,7 @@ import yaml
 def load_cfg(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-    
+
 class Burning:
 
     def __init__(self, N=5, L=60.0):
@@ -19,52 +30,51 @@ class Burning:
         self.L = L
         self.dz = L / N
 
+        # ================= NUMERICAL =================
+        self.eps = 1e-9
+
         # ================= GEOMETRY =================
         self.D = 4.2
-        self.A_cross = np.pi * self.D**2 / 4.0
-        self.V_total = self.A_cross * self.L
-        self.V_cell = self.V_total / self.N
-        
-        # ================= NUMERICAL =================
-        
-        self.eps = 1e-9
+
+        (
+            self.A_cross,
+            self.V_total,
+            self.V_cell,
+        ) = kiln_geometry(
+            D=self.D,
+            L=self.L,
+            N=self.N,
+        )
 
         # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
-
-        # Gas-solid interfacial area density (m²/m³)
-        a_gs_base = 6.0 * (1.0 - self.epsilon_bed) / self.D
-
-        # tuning factor
         self.k_interfacial = 1.0
 
-        self.a_gs = self.k_interfacial * a_gs_base
-        self.a_ws = 0.6 * self.a_gs
-        
-        self.u_g = 5.0  # m/s (örnek kiln gas axial velocity)
+        (
+            self.a_gs,
+            self.a_ws,
+        ) = interfacial_areas(
+            D=self.D,
+            epsilon_bed=self.epsilon_bed,
+            k_interfacial=self.k_interfacial,
+        )
 
         # ================= WALL GEOMETRY =================
+        (
+            self.wall_perimeter,
+            self.A_wall_total,
+            self.A_wall_cell,
+            self.a_gw,
+            self.V_wall,
+        ) = wall_geometry(
+            D=self.D,
+            L=self.L,
+            N=self.N,
+            V_cell=self.V_cell,
+        )
 
-        # Kiln inner perimeter (m)
-        self.wall_perimeter = np.pi * self.D
-
-        # Total wall area (m²)
-        self.A_wall_total = self.wall_perimeter * self.L
-
-        # Wall area per computational cell (m²)
-        self.A_wall_cell = self.A_wall_total / self.N
-
-        # Gas-wall interfacial area density (m²/m³)
-        self.a_gw = self.A_wall_cell / self.V_cell
-
-        # External convection
-        self.h_ext = 12.0
-
-        # Wall volume (5 cm refractory thickness)
-        self.V_wall = self.A_wall_total * 0.05
-
-        # ================= PROPERTIES =================
-        self.rho_g = 0.30 # 1500–1800 K civarı
+        # ================= MATERIAL PROPERTIES =================
+        self.rho_g = 0.30
         self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
@@ -72,97 +82,70 @@ class Burning:
         self.Cp_s = 850.0
         self.Cp_wall = 1000.0
 
-        # ======================================================
-        # SOLID MOTION PARAMETERS
-        # ======================================================
-
+        # ================= KILN MOTION =================
         self.rpm_default = cfg["motion"]["rpm_default"]
         self.rpm_min = cfg["motion"]["rpm_min"]
         self.rpm_max = cfg["motion"]["rpm_max"]
 
         self.slope_deg = cfg["motion"]["inclination_deg"]
-
         self.fill_fraction = 0.10
 
-        self.u_s = self.solid_velocity(self.rpm_default)
+        self.u_s = solid_axial_velocity(
+            L=self.L,
+            D=self.D,
+            slope_deg=self.slope_deg,
+            fill_fraction=self.fill_fraction,
+            rpm=self.rpm_default,
+            eps=self.eps,
+        )
+        self.u_g = 0.0
 
+        self.u_g = gas_axial_velocity(
+            m_dot_g=inputs["Gas_mass_flow"],
+            rho_g=self.rho_g,
+            A_cross=self.A_cross,
+            eps=self.eps,
+        )
 
         # ================= HEAT TRANSFER =================
         self.hv_gs = 1300.0
         self.hv_gw = 250.0
         self.hv_ws = 300.0
-        
+
         self.T_amb = 300.0
 
-        # ================= FUEL MJ/kg =================
-        self.LHV_petcoke = 32e6
-        self.LHV_coal = 18e6
-        self.LHV_RDF = 20e6
-        self.LHV_H2 = 120e6
+        # ================= FUEL =================
+        self.LHV = {
+            "petcoke": 32e6,
+            "coal": 18e6,
+            "rdf": 20e6,
+            "h2": 120e6,
+        }
 
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
-
-        
 
         # ================= PERFORMANCE BUFFERS =================
         self._dTg_dz = np.zeros(N)
         self._dTs_dz = np.zeros(N)
 
-
         # ================= CACHE CONSTANTS =================
 
-        # Gas
         self._rho_g_Vcell_Cp_g = (
             self.rho_g * self.V_cell * self.Cp_g
         )
 
-        # Solid
         self._rho_s_Vcell_Cp_s = (
             self.rho_s * self.V_cell * self.Cp_s
         )
 
-        # Wall (per computational cell)
         self.V_wall_cell = self.V_wall / self.N
 
         self._rho_wall_Vwall_cell_Cp = (
-            self.rho_wall * self.V_wall_cell * self.Cp_wall
+            self.rho_wall
+            * self.V_wall_cell
+            * self.Cp_wall
         )
-        
-        
-    # ======================================================
-    # SOLID RESIDENCE TIME (SULLIVAN)
-    # ======================================================
-    def residence_time(self, rpm):
-
-        theta = np.deg2rad(self.slope_deg)
-
-        tau = (
-            1.77
-            * self.L
-            / (
-                self.D
-                * rpm
-                * np.tan(theta)
-                * (self.fill_fraction + self.eps)
-            )
-        )
-
-        return tau
-
-    # ======================================================
-    # SOLID AXIAL VELOCITY
-    # ======================================================
-    def solid_velocity(self, rpm):
-
-        tau = self.residence_time(rpm)
-
-        return self.L / (tau + self.eps)
-        
-
-    # ======================================================
-    def combustion_efficiency(self, O2):
-        return np.exp(-((O2 - self.O2_opt) ** 2) / self.O2_sigma2)
 
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, inputs, dt):
@@ -184,40 +167,22 @@ class Burning:
         O2 = inputs.get("O2", 3.5)
 
         # ======================================================
-        # FUEL MIX
+        # FUEL HEAT RELEASE
         # ======================================================
-        p = inputs.get("Petcoke_ratio", 0.50)
-        c = inputs.get("Coal_ratio", 0.30)
-        r = inputs.get("RDF_ratio", 0.15)
-        h = inputs.get("H2_ratio", 0.05)
-
-        norm = p + c + r + h + self.eps
-
-        p /= norm
-        c /= norm
-        r /= norm
-        h /= norm
-
-        # ======================================================
-        # FUEL FLOW (kg/s)
-        # ======================================================
-        fuel_rate_kg_s = fuel_rate_total * 1000.0 / 3600.0
-
-        # ======================================================
-        # COMBUSTION
-        # ======================================================
-        eta = self.combustion_efficiency(O2)
-
-        Q_petcoke = fuel_rate_kg_s * p * self.LHV_petcoke
-        Q_coal    = fuel_rate_kg_s * c * self.LHV_coal
-        Q_RDF     = fuel_rate_kg_s * r * self.LHV_RDF
-        Q_H2      = fuel_rate_kg_s * h * self.LHV_H2
-
-        Q_burning = eta * (
-            Q_petcoke +
-            Q_coal +
-            Q_RDF +
-            Q_H2
+        (
+            Q_petcoke,
+            Q_coal,
+            Q_RDF,
+            Q_H2,
+            Q_burning,
+        ) = fuel_heat_release(
+            fuel_rate_total=fuel_rate_total,
+            O2=O2,
+            O2_opt=self.O2_opt,
+            O2_sigma2=self.O2_sigma2,
+            LHV=self.LHV,
+            inputs=inputs,
+            eps=self.eps,
         )
 
         # ======================================================
@@ -228,46 +193,41 @@ class Burning:
         # ======================================================
         # HEAT TRANSFER
         # ======================================================
-        q_gs = self.hv_gs * self.a_gs * (Tg - Ts)
-        q_gw = self.hv_gw * self.a_gw * (Tg - Tw)
-        q_ws = self.hv_ws * self.a_ws * (Ts - Tw)
-
-        # ======================================================
-        # CAPACITIES
-        # ======================================================
-        effective = 0.01
-
-        C_s = self._rho_s_Vcell_Cp_s
-        effective_C_s = effective * C_s
-
-        C_g = self._rho_g_Vcell_Cp_g
-        C_w = self._rho_wall_Vwall_cell_Cp
-        
-        # ================= WALL HEAT LOSS =================
-        wall_loss_cells = (
-            self.h_ext
-            * self.A_wall_cell
-            * (Tw - self.T_amb)
+        q_gs, q_gw, q_ws = heat_transfer(
+            Tg=Tg,
+            Ts=Ts,
+            Tw=Tw,
+            hv_gs=self.hv_gs,
+            hv_gw=self.hv_gw,
+            hv_ws=self.hv_ws,
+            a_gs=self.a_gs,
+            a_gw=self.a_gw,
+            a_ws=self.a_ws,
         )
 
-        wall_loss = np.sum(wall_loss_cells)
-
-        # Hacimsel kayıp (enerji denklemi için)
-        q_loss = wall_loss_cells / (self.V_cell + self.eps)
+        # ======================================================
+        # WALL LOSSES
+        # ======================================================
+        q_loss, wall_loss, wall_debug = wall_losses(
+            Tw=Tw,
+            h_ext=self.h_ext,
+            A_wall_cell=self.A_wall_cell,
+            V_cell=self.V_cell,
+            T_amb=self.T_amb,
+            A_wall_total=self.A_wall_total,
+            N=self.N,
+            eps=self.eps,
+        )
 
         # ======================================================
-        # DEBUG INFORMATION
+        # THERMAL CAPACITIES
         # ======================================================
-        wall_debug = {
-            "q_loss_mean": float(np.mean(q_loss)),
-            "q_loss_max": float(np.max(q_loss)),
-            "wall_loss_mean": float(np.mean(wall_loss_cells)),
-            "wall_loss_total": float(wall_loss),
-            "A_wall": float(self.A_wall_total),
-            "A_wall_cell": float(self.A_wall_cell),
-            "V_cell": float(self.V_cell),
-            "N": int(self.N),
-        }
+        C_g, effective_C_s, C_w = heat_capacities(
+            rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
+            rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
+            rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
+            effective=0.01,
+        )
 
         # ======================================================
         # DYNAMICS
@@ -285,7 +245,6 @@ class Burning:
         Tw_n = Tw + dt * (
             (q_gw + q_ws - q_loss) / C_w
         )
-        
 
         return (
             Tg_n,
@@ -467,116 +426,3 @@ class Burning:
         H_solid_out = m_dot_s * self.Cp_s * Ts[-1]
 
         return H_solid_out
-        
-
-
-if __name__ == "__main__":
-
-    # ======================================================
-    # CHECKPOINT HELPERS
-    # ======================================================
-    def save_checkpoint(path, state):
-        with open(path, "wb") as f:
-            pickle.dump(state, f)
-
-    def load_checkpoint(path):
-        with open(path, "rb") as f:
-            return pickle.load(f)
-
-    # ======================================================
-    # MODEL
-    # ======================================================
-    cfg = load_cfg("configs/twin_cfg.yaml")
-    model = Burning(N=5)
-
-    inputs = {
-        "Fuel_rate_total": cfg["fuel"]["Fuel_rate_total"],
-        "Petcoke_ratio": cfg["fuel"]["Petcoke_ratio"],
-        "Coal_ratio": cfg["fuel"]["Coal_ratio"],
-        "RDF_ratio": cfg["fuel"]["RDF_ratio"],
-        "H2_ratio": cfg["fuel"]["H2_ratio"],
-        "O2": cfg["fuel"]["O2"],
-    }
-
-    dt = 0.05
-
-    # ======================================================
-    # CHUNK CONFIG
-    # ======================================================
-    chunk_hours = 1.0
-    chunk_time = chunk_hours * 3600
-    n_steps_chunk = int(chunk_time / dt)
-
-    total_hours = 6.0
-    n_chunks = int(total_hours / chunk_hours)
-
-    ckpt_file = "burning_ckpt.pkl"
-    status_file = "burning_status.jsonl"
-
-    # ======================================================
-    # LOAD OR INIT STATE
-    # ======================================================
-    if os.path.exists(ckpt_file):
-        state = load_checkpoint(ckpt_file)
-        Tg, Ts, Tw = state["Tg"], state["Ts"], state["Tw"]
-        start_chunk = int(state["t"] // chunk_time)
-        print(f"Resuming from chunk {start_chunk}")
-    else:
-        Tg = np.ones(5) * 1773.15
-        Ts = np.ones(5) * 1673.15
-        Tw = np.ones(5) * 873.15
-        start_chunk = 0
-
-    idx = 5 // 2
-
-    # ======================================================
-    # CHUNK LOOP
-    # ======================================================
-    for chunk in range(start_chunk, n_chunks):
-
-        t_local = 0.0
-        next_log_time = 0.0
-
-        for i in range(n_steps_chunk):
-
-            Tg, Ts, Tw, *_ = model.thermal_step(Tg, Ts, Tw, inputs, dt)
-            t_local += dt
-
-            # ==================================================
-            # 10 MIN LOG (SCALAR OUTLET ONLY)
-            # ==================================================
-            if t_local >= next_log_time:
-
-                log_entry = {
-                    "chunk": chunk,
-                    "time_h": f"{(chunk * chunk_time + t_local) / 3600.0:.4f}",
-                    # ONLY OUTLET VALUES (1 SCALAR EACH)
-                    "Tg": float(Tg[-1]),
-                    "Ts": float(Ts[-1]),
-                    "Tw": float(Tw[-1]),
-                }
-
-                with open(status_file, "a") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-
-                next_log_time += 600.0  # 10 min
-
-        # ======================================================
-        # CHECKPOINT SAVE (chunk end)
-        # ======================================================
-        global_time = (chunk + 1) * chunk_time
-
-        state = {"Tg": Tg, "Ts": Ts, "Tw": Tw, "t": global_time}
-
-        save_checkpoint(ckpt_file, state)
-
-        # ======================================================
-        # PRINT LOG
-        # ======================================================
-        print(
-            f"[CHUNK {chunk}] "
-            f"t={global_time/3600:.2f} h | "
-            f"Tg={Tg[-1]:.2f} K | "
-            f"Ts={Ts[-1]:.2f} K | "
-            f"Tw={Tw[-1]:.2f} K"
-        )

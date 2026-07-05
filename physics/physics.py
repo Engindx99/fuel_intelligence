@@ -1,0 +1,273 @@
+import numpy as np
+
+
+# ======================================================
+# FLOW
+# ======================================================
+def residence_time(L, D, slope_deg, fill_fraction, rpm, eps):
+
+    theta = np.deg2rad(slope_deg)
+
+    tau = (
+        1.77
+        * L
+        / (
+            D
+            * rpm
+            * np.tan(theta)
+            * (fill_fraction + eps)
+        )
+    )
+
+    return tau
+
+
+def solid_axial_velocity(L, D, slope_deg, fill_fraction, rpm, eps):
+
+    tau = residence_time(
+        L,
+        D,
+        slope_deg,
+        fill_fraction,
+        rpm,
+        eps,
+    )
+
+    return L / (tau + eps)
+
+def gas_axial_velocity(m_dot_g, rho_g, A_cross, eps):
+
+    return m_dot_g / (rho_g * A_cross + eps)
+
+# ======================================================
+# COMBUSTION
+# ======================================================
+def combustion_efficiency(O2, O2_opt, O2_sigma2):
+
+    return np.exp(
+        -((O2 - O2_opt) ** 2) / O2_sigma2
+    )
+    
+def fuel_heat_release(
+    fuel_rate_total,
+    O2,
+    O2_opt,
+    O2_sigma2,
+    LHV,
+    inputs,
+    eps,
+):
+
+    # ================= FUEL MIX =================
+    p = inputs.get("Petcoke_ratio", 0.50)
+    c = inputs.get("Coal_ratio", 0.30)
+    r = inputs.get("RDF_ratio", 0.15)
+    h = inputs.get("H2_ratio", 0.05)
+
+    norm = p + c + r + h + eps
+
+    p /= norm
+    c /= norm
+    r /= norm
+    h /= norm
+
+    # ================= FUEL FLOW =================
+    fuel_rate_kg_s = fuel_rate_total * 1000.0 / 3600.0
+
+    # ================= COMBUSTION =================
+    eta = combustion_efficiency(
+        O2,
+        O2_opt,
+        O2_sigma2,
+    )
+
+    Q_petcoke = fuel_rate_kg_s * p * LHV["petcoke"]
+    Q_coal    = fuel_rate_kg_s * c * LHV["coal"]
+    Q_RDF     = fuel_rate_kg_s * r * LHV["rdf"]
+    Q_H2      = fuel_rate_kg_s * h * LHV["h2"]
+
+    Q_burning = eta * (
+        Q_petcoke
+        + Q_coal
+        + Q_RDF
+        + Q_H2
+    )
+
+    return (
+        Q_petcoke,
+        Q_coal,
+        Q_RDF,
+        Q_H2,
+        Q_burning,
+    )
+    
+# ======================================================
+# HEAT TRANSFER
+# ======================================================
+def heat_transfer(
+    Tg,
+    Ts,
+    Tw,
+    hv_gs,
+    hv_gw,
+    hv_ws,
+    a_gs,
+    a_gw,
+    a_ws,
+):
+
+    q_gs = hv_gs * a_gs * (Tg - Ts)
+
+    q_gw = hv_gw * a_gw * (Tg - Tw)
+
+    q_ws = hv_ws * a_ws * (Ts - Tw)
+
+    return (
+        q_gs,
+        q_gw,
+        q_ws,
+    )
+    
+def wall_losses(
+    Tw,
+    h_ext,
+    A_wall_cell,
+    V_cell,
+    T_amb,
+    A_wall_total,
+    N,
+    eps,
+):
+
+    # Heat loss from each computational cell (W)
+    wall_loss_cells = (
+        h_ext
+        * A_wall_cell
+        * (Tw - T_amb)
+    )
+
+    # Total kiln wall heat loss (W)
+    wall_loss = np.sum(wall_loss_cells)
+
+    # Volumetric heat loss (W/m³)
+    q_loss = wall_loss_cells / (V_cell + eps)
+
+    wall_debug = {
+        "q_loss_mean": float(np.mean(q_loss)),
+        "q_loss_max": float(np.max(q_loss)),
+        "wall_loss_mean": float(np.mean(wall_loss_cells)),
+        "wall_loss_total": float(wall_loss),
+        "A_wall": float(A_wall_total),
+        "A_wall_cell": float(A_wall_cell),
+        "V_cell": float(V_cell),
+        "N": int(N),
+    }
+
+    return (
+        q_loss,
+        wall_loss,
+        wall_debug,
+    )
+    
+# ======================================================
+# THERMAL CAPACITIES
+# ======================================================
+def thermal_capacities(
+    rho_g_Vcell_Cp_g,
+    rho_s_Vcell_Cp_s,
+    rho_wall_Vwall_cell_Cp,
+    effective=0.01,
+):
+
+    C_s = rho_s_Vcell_Cp_s
+    effective_C_s = effective * C_s
+
+    C_g = rho_g_Vcell_Cp_g
+    C_w = rho_wall_Vwall_cell_Cp
+
+    return (
+        C_g,
+        effective_C_s,
+        C_w,
+    )
+    
+# ======================================================
+# GEOMETRY
+# ======================================================
+def kiln_geometry(D, L, N):
+
+    # Cross-sectional area (m²)
+    A_cross = np.pi * D**2 / 4.0
+
+    # Total kiln volume (m³)
+    V_total = A_cross * L
+
+    # Computational cell volume (m³)
+    V_cell = V_total / N
+
+    return (
+        A_cross,
+        V_total,
+        V_cell,
+    )
+# ======================================================
+# WALL GEOMETRY
+# ======================================================
+def wall_geometry(
+    D,
+    L,
+    N,
+    V_cell,
+    refractory_thickness=0.05,
+):
+
+    # Kiln inner perimeter (m)
+    wall_perimeter = np.pi * D
+
+    # Total inner wall area (m²)
+    A_wall_total = wall_perimeter * L
+
+    # Wall area per computational cell (m²)
+    A_wall_cell = A_wall_total / N
+
+    # Gas-wall interfacial area density (m²/m³)
+    a_gw = A_wall_cell / V_cell
+
+    # Refractory wall volume (m³)
+    V_wall = A_wall_total * refractory_thickness
+
+    return (
+        wall_perimeter,
+        A_wall_total,
+        A_wall_cell,
+        a_gw,
+        V_wall,
+    )
+    
+# ======================================================
+# INTERFACIAL AREAS
+# ======================================================
+def interfacial_areas(
+    D,
+    epsilon_bed,
+    k_interfacial=1.0,
+):
+
+    # Gas-solid interfacial area density (m²/m³)
+    a_gs_base = (
+        6.0
+        * (1.0 - epsilon_bed)
+        / D
+    )
+
+    a_gs = k_interfacial * a_gs_base
+
+    # Wall-solid interfacial area density (m²/m³)
+    a_ws = 0.6 * a_gs
+
+    return (
+        a_gs,
+        a_ws,
+    )
+    
+    
