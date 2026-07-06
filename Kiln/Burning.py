@@ -226,6 +226,7 @@ class Burning:
             refractory_conductivity=self.refractory_conductivity,
             eps=self.eps,
         )
+        
 
         # ======================================================
         # THERMAL CAPACITIES
@@ -237,6 +238,7 @@ class Burning:
             effective=1.0,
         )
 
+   
         # ======================================================
         # DYNAMICS
         # ======================================================
@@ -424,16 +426,7 @@ class Burning:
             state.Ts_burning,
             state,
         )
-        
-        print("\n========== BURNING ENERGY ==========")
-        print(f"Q_burning  : {state.Q_burning/1e6:.2f} MW")
-        print(f"Hgas_out   : {state.Hgas_burning_out/1e6:.2f} MW")
-        print(f"Hsolid_out : {state.Hsolid_burning_out/1e6:.2f} MW")
-        print(f"Wall_loss  : {state.Wall_loss_burning/1e6:.2f} MW")
-        print(f"Stored     : {state.Burning_stored_energy_change/1e6:.2f} MW")
-        print(f"m_dot_s    : {state.m_dot_s:.3f} kg/s")
-        print(f"Ts_out     : {state.Ts_burning[-1]:.2f} K")
-        print("====================================")
+    
 
         # ======================================================
         # STORED ENERGY

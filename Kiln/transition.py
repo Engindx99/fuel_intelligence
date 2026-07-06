@@ -151,7 +151,7 @@ class Transition:
         # ======================================================
         # THERMAL CAPACITIES
         # ======================================================
-        C_g, C_s, C_w = thermal_capacities(
+        C_g, effective_C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
@@ -163,7 +163,7 @@ class Transition:
         # ======================================================
         Tg_n = Tg + dt * (-u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
 
-        Ts_n = Ts + dt * (-u_s * dTs_dz + (q_gs - q_ws) / C_s)
+        Ts_n = Ts + dt * (-u_s * dTs_dz + (q_gs - q_ws) / effective_C_s)
 
         Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 

@@ -116,6 +116,12 @@ class Preheater:
 
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, state, dt):
+        
+        # ======================================================
+        # INLET BOUNDARY
+        # ======================================================
+        Tg_in = Tg[0]
+        Ts_in = Ts[0]
 
         # ======================================================
         # GRADIENTS (NO ALLOCATION)
@@ -167,13 +173,13 @@ class Preheater:
         )
 
         # ======================================================
-        # CAPACITIES (STANDARDIZED)
+        # THERMAL CAPACITIES
         # ======================================================
-        C_g, C_s, C_w = thermal_capacities(
+        C_g, effective_C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=1.0,   # IMPORTANT FIX
+            effective=1.0,
         )
 
         # ======================================================
@@ -186,12 +192,18 @@ class Preheater:
 
         Ts_n = Ts + dt * (
             -state.u_s * dTs_dz
-            + (q_gs - q_ws) / C_s
+            + (q_gs - q_ws) / effective_C_s
         )
 
         Tw_n = Tw + dt * (
             (q_gw + q_ws - q_loss) / C_w
         )
+        
+        # ======================================================
+        # ENFORCE INLET BOUNDARY
+        # ======================================================
+        Tg_n[0] = Tg_in
+        Ts_n[0] = Ts_in
 
         return Tg_n, Ts_n, Tw_n, wall_loss, wall_debug
 
@@ -216,15 +228,12 @@ class Preheater:
         state.Tg_preheater_old = state.Tg_preheater.copy()
         state.Ts_preheater_old = state.Ts_preheater.copy()
         state.Tw_preheater_old = state.Tw_preheater.copy()
-
+        
         # ======================================================
-        # FLOW INHERITANCE
+        # ENERGY IN
         # ======================================================
-        state.u_g = getattr(state, "u_g", self.u_g)
-        state.u_s = getattr(state, "u_s", self.u_s)
-
-        self.u_g = state.u_g
-        self.u_s = state.u_s
+        state.Hgas_preheater_in = state.Hgas_calciner_out
+        state.Hsolid_preheater_in = state.Hsolid_calciner_out
 
         # ======================================================
         # BOUNDARY CONDITIONS (FROM CALCINER)
@@ -261,12 +270,6 @@ class Preheater:
             state.Ts_preheater,
             state
         )
-
-        # ======================================================
-        # ENERGY IN
-        # ======================================================
-        state.Hgas_preheater_in = state.Hgas_calciner_out
-        state.Hsolid_preheater_in = state.Hsolid_calciner_out
 
         # ======================================================
         # ENERGY BALANCE

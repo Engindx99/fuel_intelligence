@@ -305,14 +305,47 @@ class Twin:
                 - total_stored
                 - getattr(self.state, "Calciner_Q_sink", 0.0)
             )
+            
+            # ======================================================
+            # ZONE MEAN TEMPERATURES
+            # ======================================================
 
-            print("\n========== TWIN ENERGY ==========")
-            print(f"Q_burning     : {self.state.Q_burning/1e6:.2f} MW")
-            print(f"Exhaust       : {total_exhaust/1e6:.2f} MW")
-            print(f"Wall loss     : {total_wall_loss/1e6:.2f} MW")
-            print(f"Stored        : {total_stored/1e6:.2f} MW")
-            print(f"Residual      : {global_residual/1e6:.3f} MW")
-            print("=================================\n")
+            print("\n========== ZONE TEMPERATURES ==========")
+
+            print(
+                f"BURNING   | "
+                f"Tg_mean: {np.mean(self.state.Tg_burning):.2f} K | "
+                f"Ts_mean: {np.mean(self.state.Ts_burning):.2f} K | "
+                f"Tw_mean: {np.mean(self.state.Tw_burning):.2f} K"
+            )
+
+            print(
+                f"TRANSITION| "
+                f"Tg_mean: {np.mean(self.state.Tg_transition):.2f} K | "
+                f"Ts_mean: {np.mean(self.state.Ts_transition):.2f} K | "
+                f"Tw_mean: {np.mean(self.state.Tw_transition):.2f} K"
+            )
+
+            print(
+                f"CALCINER  | "
+                f"Tg_mean: {np.mean(self.state.Tg_calciner):.2f} K | "
+                f"Ts_mean: {np.mean(self.state.Ts_calciner):.2f} K | "
+                f"Tw_mean: {np.mean(self.state.Tw_calciner):.2f} K"
+            )
+
+            print(
+                f"PREHEATER | "
+                f"Tg_mean: {np.mean(self.state.Tg_preheater):.2f} K | "
+                f"Ts_mean: {np.mean(self.state.Ts_preheater):.2f} K | "
+                f"Tw_mean: {np.mean(self.state.Tw_preheater):.2f} K"
+            )
+
+            print(
+                f"COOLER    | "
+                f"Tg_mean: {np.mean(self.state.Tg_cooler):.2f} K | "
+                f"Ts_mean: {np.mean(self.state.Ts_cooler):.2f} K | "
+                f"Tw_mean: {np.mean(self.state.Tw_cooler):.2f} K"
+            )
 
             self._next_log_time += self.log_interval
   

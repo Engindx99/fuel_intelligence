@@ -96,6 +96,12 @@ class Calciner:
     def thermal_step(self, Tg, Ts, Tw, state, dt, reaction_sink=0.0):
 
         # ======================================================
+        # STORE INLET BC
+        # ======================================================
+        Tg_in = Tg[0]
+        Ts_in = Ts[0]
+
+        # ======================================================
         # GRADIENTS
         # ======================================================
         dTg_dz = self._dTg_dz
@@ -108,7 +114,7 @@ class Calciner:
         dTs_dz[0] = dTs_dz[1]
 
         # ======================================================
-        # HEAT SOURCE (CALCINATION)
+        # REACTION SOURCE
         # ======================================================
         q_vol = -reaction_sink / (self.V_total + self.eps)
 
@@ -147,7 +153,7 @@ class Calciner:
         # ======================================================
         # CAPACITIES
         # ======================================================
-        C_g, C_s, C_w = thermal_capacities(
+        C_g, effective_C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
@@ -155,7 +161,7 @@ class Calciner:
         )
 
         # ======================================================
-        # DYNAMICS
+        # UPDATE
         # ======================================================
         Tg_n = Tg + dt * (
             -state.u_g * dTg_dz
@@ -164,12 +170,18 @@ class Calciner:
 
         Ts_n = Ts + dt * (
             -state.u_s * dTs_dz
-            + (q_gs - q_ws) / C_s
+            + (q_gs - q_ws) / effective_C_s
         )
 
         Tw_n = Tw + dt * (
             (q_gw + q_ws - q_loss) / C_w
         )
+
+        # ======================================================
+        # ENFORCE INLET BC
+        # ======================================================
+        Tg_n[0] = Tg_in
+        Ts_n[0] = Ts_in
 
         return Tg_n, Ts_n, Tw_n, wall_loss, wall_debug
 
@@ -196,12 +208,6 @@ class Calciner:
         state.Ts_calciner_old = state.Ts_calciner.copy()
         state.Tw_calciner_old = state.Tw_calciner.copy()
 
-        # ======================================================
-        # FLOW (CONSISTENT GLOBAL INJECTION)
-        # ======================================================
-        # NOTE: no fragile getattr fallback anymore
-        state.u_g = state.u_g
-        state.u_s = state.u_s
 
         # ======================================================
         # INCOMING ENTHALPY FROM TRANSITION

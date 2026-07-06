@@ -118,6 +118,12 @@ class Cooler:
 
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, state, dt):
+        
+        # ======================================================
+        # INLET BOUNDARY
+        # ======================================================
+        Tg_in = Tg[0]
+        Ts_in = Ts[0]
 
         # ======================================================
         # GRADIENTS (NO ALLOCATION)
@@ -151,6 +157,7 @@ class Cooler:
             a_ws=self.a_ws,
             zone=self.zone,
         )
+    
 
         # ======================================================
         # WALL LOSSES
@@ -171,7 +178,7 @@ class Cooler:
         # ======================================================
         # THERMAL CAPACITIES
         # ======================================================
-        C_g, C_s, C_w = thermal_capacities(
+        C_g, effective_C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
@@ -185,15 +192,22 @@ class Cooler:
             -state.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
         )
+        
 
         Ts_n = Ts + dt * (
             -state.u_s * dTs_dz
-            + (q_gs - q_ws) / C_s
+            + (q_gs - q_ws) / effective_C_s
         )
 
         Tw_n = Tw + dt * (
             (q_gw + q_ws - q_loss) / C_w
         )
+        
+        # ======================================================
+        # ENFORCE INLET BOUNDARY
+        # ======================================================
+        Tg_n[0] = Tg_in
+        Ts_n[0] = Ts_in
 
         return (
             Tg_n,
@@ -224,14 +238,6 @@ class Cooler:
         state.Ts_cooler_old = state.Ts_cooler.copy()
         state.Tw_cooler_old = state.Tw_cooler.copy()
 
-        # ======================================================
-        # FLOW INHERITANCE
-        # ======================================================
-        state.u_g = getattr(state, "u_g", self.u_g)
-        state.u_s = getattr(state, "u_s", self.u_s)
-
-        self.u_g = state.u_g
-        self.u_s = state.u_s
 
         # ======================================================
         # ENERGY IN
@@ -244,6 +250,7 @@ class Cooler:
         # ======================================================
         state.Tg_cooler[0] = state.Tg_preheater[-1]
         state.Ts_cooler[0] = state.Ts_preheater[-1]
+        
 
         # ======================================================
         # THERMAL STEP
@@ -255,6 +262,8 @@ class Cooler:
             state,
             dt,
         )
+        
+
 
         # ======================================================
         # UPDATE STATES
