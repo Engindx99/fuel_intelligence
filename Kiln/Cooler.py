@@ -148,7 +148,8 @@ class Cooler:
             a_ws=self.a_ws,
             zone=self.zone,
         )
-
+        
+        
         # ================= WALL LOSS =================
         q_loss, wall_loss, wall_debug = wall_losses(
             Tw=Tw,
@@ -223,6 +224,7 @@ class Cooler:
         # ======================================================
         state.Tg_cooler[0] = state.Tg_preheater[-1]
         state.Ts_cooler[0] = state.Ts_preheater[-1]
+
         
 
         # ================= THERMAL STEP =================
@@ -240,8 +242,6 @@ class Cooler:
         state.Ts_cooler = Ts
         state.Tw_cooler = Tw
         
-        print("Tg after thermal_step =", state.Tg_cooler)
-        print("Any NaN Tg =", np.isnan(state.Tg_cooler).any())
 
         # ================= WALL LOSS =================
         state.Wall_loss_cooler = float(wall_loss)
@@ -250,12 +250,6 @@ class Cooler:
         state.Hgas_cooler_out = self.gas_enthalpy_out(state.Tg_cooler, state)
         state.Hsolid_cooler_out = self.solid_enthalpy_out(state.Ts_cooler, state)
         
-        print("Hgas_cooler_out =", state.Hgas_cooler_out)
-        print("Hsolid_cooler_out =", state.Hsolid_cooler_out)
-        print("m_dot_g =", state.m_dot_g)
-        print("m_dot_s =", state.m_dot_s)
-        print("Tg[-1] =", state.Tg_cooler[-1])
-        print("Ts[-1] =", state.Ts_cooler[-1])
 
         # ================= ENTHALPY IN =================
         state.Hgas_cooler_in = state.Hgas_preheater_out

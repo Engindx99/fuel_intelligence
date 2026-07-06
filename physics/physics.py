@@ -104,68 +104,61 @@ def fuel_heat_release(
         Q_H2,
         Q_burning,
     )
-    
+
 # ======================================================
 # HEAT TRANSFER
 # ======================================================
-import numpy as np
 
-sigma = 5.670374419e-8
-
+"""
+k_eff is an effective radiation scaling factor representing
+unresolved radiative effects, including view factors,
+participating media, gas absorption, flame radiation,
+and other complex heat transfer mechanisms.
+"""
 
 ZONE_RAD_CONFIG = {
     "burning": {
         "eps": 0.90,
-        "T_ref": 1700.0,
+        "k_eff": 0.25,
     },
     "transition": {
         "eps": 0.85,
-        "T_ref": 1400.0,
+        "k_eff": 0.20,
     },
     "calciner": {
         "eps": 0.80,
-        "T_ref": 1200.0,
+        "k_eff": 0.18,
     },
     "preheater": {
         "eps": 0.75,
-        "T_ref": 900.0,
+        "k_eff": 0.15,
     },
     "cooler": {
         "eps": 0.60,
-        "T_ref": 600.0,
+        "k_eff": 0.10,
     },
 }
 
 
-def radiation_linear(T1, T2, zone, area=1.0):
+sigma = 5.670374419e-8
+
+def radiation(T1, T2, zone, area = 1.0):
+    """ Stefan–Boltzmann radiation model with zone-dependent tuning."""
+    
 
     cfg = ZONE_RAD_CONFIG[zone]
 
     eps = cfg["eps"]
-    T_ref = cfg["T_ref"]
+    k_eff = cfg["k_eff"]
+    
 
-    # stable operating anchor
-    T_mean = 0.5 * (T1 + T2 + T_ref)
-
-    h_rad = 4.0 * sigma * eps * (T_mean ** 3)
-
-    q_rad = h_rad * area * (T1 - T2)
-
-    return q_rad, h_rad
+    q_rad = k_eff * eps * sigma * area * (T1**4 - T2**4)
 
 
-def heat_transfer(
-    Tg,
-    Ts,
-    Tw,
-    hv_gs,
-    hv_gw,
-    hv_ws,
-    a_gs,
-    a_gw,
-    a_ws,
-    zone=None,
-):
+    return q_rad
+
+
+def heat_transfer(Tg, Ts, Tw, hv_gs, hv_gw, hv_ws, a_gs, a_gw, a_ws, zone=None):
 
     # ======================================================
     # CONVECTION
@@ -175,20 +168,21 @@ def heat_transfer(
     q_ws_conv = hv_ws * a_ws * (Ts - Tw)
 
     # ======================================================
-    # RADIATION (ZONE-DEPENDENT)
+    # RADIATION (STEFAN–BOLTZMANN)
     # ======================================================
-    q_gs_rad, _ = radiation_linear(Tg, Ts, zone, area=a_gs)
-    q_gw_rad, _ = radiation_linear(Tg, Tw, zone, area=a_gw)
-    q_ws_rad, _ = radiation_linear(Tw, Ts, zone, area=a_ws)
+    q_gs_rad = radiation(Tg, Ts, zone, area=a_gs)
+    q_gw_rad = radiation(Tg, Tw, zone, area=a_gw)
+    q_ws_rad = radiation(Tw, Ts, zone, area=a_ws)
 
     # ======================================================
-    # TOTAL
+    # TOTAL HEAT TRANSFER
     # ======================================================
     q_gs = q_gs_conv + q_gs_rad
     q_gw = q_gw_conv + q_gw_rad
     q_ws = q_ws_conv + q_ws_rad
 
     return q_gs, q_gw, q_ws
+
     
 def wall_losses(
     Tw,
