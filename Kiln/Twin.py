@@ -176,6 +176,7 @@ class Twin:
             self.dt,
         )
 
+
         self.state.Hgas_transition_in = self.state.Hgas_burning_out
         self.state.Hsolid_transition_in = self.state.Hsolid_burning_out
 
@@ -184,6 +185,7 @@ class Twin:
             self.state,
             self.dt,
         )
+  
 
         self.state.Hgas_calciner_in = self.state.Hgas_transition_out
         self.state.Hsolid_calciner_in = self.state.Hsolid_transition_out
@@ -193,6 +195,7 @@ class Twin:
             self.state,
             self.dt,
         )
+  
 
         self.state.Hgas_preheater_in = self.state.Hgas_calciner_out
         self.state.Hsolid_preheater_in = self.state.Hsolid_calciner_out
@@ -202,15 +205,20 @@ class Twin:
             self.state,
             self.dt,
         )
+        
+
 
         self.state.Hgas_cooler_in = self.state.Hgas_preheater_out
         self.state.Hsolid_cooler_in = self.state.Hsolid_preheater_out
+        
 
         # ================= COOLER =================
         self.state = self.cooler.apply(
             self.state,
             self.dt,
         )
+        
+
 
         # ======================================================
         # TIME
@@ -284,7 +292,16 @@ class Twin:
             total_exhaust = (
             self.state.Hgas_cooler_out
             + self.state.Hsolid_cooler_out
+            )
+            
+            global_residual = (
+            self.state.Q_burning
+            - total_exhaust
+            - total_wall_loss
+            - total_stored
+            - self.state.Calciner_Q_sink
         )
+  
 
             print(
                 "\n========== DIGITAL TWIN REPORT ==========\n"
@@ -399,28 +416,11 @@ class Twin:
                 f"\nResidence time  : {self.state.residence_time/60:.2f} min",
                 f"\nSolid velocity  : {self.state.solid_velocity:.5f} m/s",
                 
-                
-                f"\n--- DEBUG ------------------------------\n",
-                f"u_g            : {state.u_g:.5f} m/s\n",
-                f"Q_burning      : {state.Q_burning/1e6:.2f} MW\n",
-            
-   
-                f"\n--- FLOW DEBUG -------------------------\n",
-                f"m_dot_g         : {inputs['m_dot_g']:.5f} kg/s\n",
-                f"rho_g           : {inputs['rho_g']:.5f} kg/m3\n",
-                f"A_cross         : {self.burning.A_cross:.5f} m2\n",
-                
-                
-                f"\n--- Preheater --------------------------\n",
-                f"Tg (avg/min/max) : {np.mean(state.Tg_preheater):.2f} / {np.min(state.Tg_preheater):.2f} / {np.max(state.Tg_preheater):.2f} K\n",
-                f"Ts (avg)         : {np.mean(state.Ts_preheater):.2f} K\n",
-                f"Tw (avg/min/max) : {np.mean(state.Tw_preheater):.2f} / {np.min(state.Tw_preheater):.2f} / {np.max(state.Tw_preheater):.2f} K\n",
-                f"Hgas (in/out)    : {state.Hgas_preheater_in/1e6:.2f} / {state.Hgas_preheater_out/1e6:.2f} MW\n",
-                f"Hsolid (in/out)  : {state.Hsolid_preheater_in/1e6:.2f} / {state.Hsolid_preheater_out/1e6:.2f} MW\n",
-                f"Wall loss        : {state.Wall_loss_preheater/1e6:.2f} MW\n",
-                f"Stored energy    : {state.Preheater_stored_energy_change/1e6:.2f} MW\n",
-                f"Residual         : {state.Preheater_energy_balance/1e6:.2f} MW",
 
+                f"Calcination     : {self.state.Calciner_Q_sink/1e6:.2f} MW\n",
+                f"Global residual : {global_residual/1e6:.4f} MW\n",
+                f"==========================================\n",
+     
                 
                 flush=True,
             )

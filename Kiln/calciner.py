@@ -3,6 +3,7 @@ from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
+from physics.physics import radiation_linear
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import solid_axial_velocity
@@ -19,6 +20,9 @@ class Calciner:
         self.N = N
         self.L = L
         self.dz = L / N
+        
+        # ================= ZONE =================
+        self.zone = "calciner"
 
         # ================= NUMERICAL =================
         self.eps = 1e-9
@@ -85,7 +89,7 @@ class Calciner:
         self.u_s = 0.0
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 1300.0
+        self.hv_gs = 1100.0
         self.hv_gw = 250.0
         self.hv_ws = 300.0
 
@@ -145,7 +149,7 @@ class Calciner:
         q_vol -= sink_density
 
         # ======================================================
-        # HEAT TRANSFER
+        # HEAT TRANSFER (CONVECTION + RADIATION)
         # ======================================================
         q_gs, q_gw, q_ws = heat_transfer(
             Tg=Tg,
@@ -157,6 +161,7 @@ class Calciner:
             a_gs=self.a_gs,
             a_gw=self.a_gw,
             a_ws=self.a_ws,
+            zone=self.zone,
         )
 
         # ======================================================

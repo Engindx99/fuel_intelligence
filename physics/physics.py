@@ -108,6 +108,52 @@ def fuel_heat_release(
 # ======================================================
 # HEAT TRANSFER
 # ======================================================
+import numpy as np
+
+sigma = 5.670374419e-8
+
+
+ZONE_RAD_CONFIG = {
+    "burning": {
+        "eps": 0.90,
+        "T_ref": 1700.0,
+    },
+    "transition": {
+        "eps": 0.85,
+        "T_ref": 1400.0,
+    },
+    "calciner": {
+        "eps": 0.80,
+        "T_ref": 1200.0,
+    },
+    "preheater": {
+        "eps": 0.75,
+        "T_ref": 900.0,
+    },
+    "cooler": {
+        "eps": 0.60,
+        "T_ref": 600.0,
+    },
+}
+
+
+def radiation_linear(T1, T2, zone, area=1.0):
+
+    cfg = ZONE_RAD_CONFIG[zone]
+
+    eps = cfg["eps"]
+    T_ref = cfg["T_ref"]
+
+    # stable operating anchor
+    T_mean = 0.5 * (T1 + T2 + T_ref)
+
+    h_rad = 4.0 * sigma * eps * (T_mean ** 3)
+
+    q_rad = h_rad * area * (T1 - T2)
+
+    return q_rad, h_rad
+
+
 def heat_transfer(
     Tg,
     Ts,
@@ -118,19 +164,31 @@ def heat_transfer(
     a_gs,
     a_gw,
     a_ws,
+    zone=None,
 ):
 
-    q_gs = hv_gs * a_gs * (Tg - Ts)
+    # ======================================================
+    # CONVECTION
+    # ======================================================
+    q_gs_conv = hv_gs * a_gs * (Tg - Ts)
+    q_gw_conv = hv_gw * a_gw * (Tg - Tw)
+    q_ws_conv = hv_ws * a_ws * (Ts - Tw)
 
-    q_gw = hv_gw * a_gw * (Tg - Tw)
+    # ======================================================
+    # RADIATION (ZONE-DEPENDENT)
+    # ======================================================
+    q_gs_rad, _ = radiation_linear(Tg, Ts, zone, area=a_gs)
+    q_gw_rad, _ = radiation_linear(Tg, Tw, zone, area=a_gw)
+    q_ws_rad, _ = radiation_linear(Tw, Ts, zone, area=a_ws)
 
-    q_ws = hv_ws * a_ws * (Ts - Tw)
+    # ======================================================
+    # TOTAL
+    # ======================================================
+    q_gs = q_gs_conv + q_gs_rad
+    q_gw = q_gw_conv + q_gw_rad
+    q_ws = q_ws_conv + q_ws_rad
 
-    return (
-        q_gs,
-        q_gw,
-        q_ws,
-    )
+    return q_gs, q_gw, q_ws
     
 def wall_losses(
     Tw,

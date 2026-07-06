@@ -9,6 +9,7 @@ from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
+from physics.physics import radiation_linear
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import solid_axial_velocity
@@ -32,6 +33,8 @@ class Burning:
         self.L = L
         self.dz = L / N
 
+        # ================= ZONE =================
+        self.zone = "burning"
         # ================= NUMERICAL =================
         self.eps = 1e-9
 
@@ -74,11 +77,10 @@ class Burning:
             N=self.N,
             V_cell=self.V_cell,
         )
-        
+
         # ================= REFRACTORY =================
         self.refractory_thickness = 0.20      # m
         self.refractory_conductivity = 1.8    # W/mK
-
 
         # ================= MATERIAL PROPERTIES =================
         self.rho_g = 0.30
@@ -106,14 +108,12 @@ class Burning:
             eps=self.eps,
         )
 
-
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 1300.0
-        self.hv_gw = 250.0
-        self.hv_ws = 300.0
-        
-        self.h_ext = 12.0
+        self.hv_gs = 1800.0
+        self.hv_gw = 350.0
+        self.hv_ws = 400.0
 
+        self.h_ext = 12.0
         self.T_amb = 300.0
 
         # ================= FUEL =================
@@ -132,13 +132,16 @@ class Burning:
         self._dTs_dz = np.zeros(N)
 
         # ================= CACHE CONSTANTS =================
-
         self._rho_g_Vcell_Cp_g = (
-            self.rho_g * self.V_cell * self.Cp_g
+            self.rho_g
+            * self.V_cell
+            * self.Cp_g
         )
 
         self._rho_s_Vcell_Cp_s = (
-            self.rho_s * self.V_cell * self.Cp_s
+            self.rho_s
+            * self.V_cell
+            * self.Cp_s
         )
 
         self.V_wall_cell = self.V_wall / self.N
@@ -196,7 +199,7 @@ class Burning:
         q_vol = Q_burning / (self.V_total + self.eps)
 
         # ======================================================
-        # HEAT TRANSFER
+        # HEAT TRANSFER (CONVECTION + RADIATION)
         # ======================================================
         q_gs, q_gw, q_ws = heat_transfer(
             Tg=Tg,
@@ -208,6 +211,7 @@ class Burning:
             a_gs=self.a_gs,
             a_gw=self.a_gw,
             a_ws=self.a_ws,
+            zone=self.zone,
         )
 
         # ======================================================

@@ -3,6 +3,7 @@ from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
+from physics.physics import radiation_linear
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import solid_axial_velocity
@@ -19,6 +20,9 @@ class Transition:
         self.N = N
         self.L = L
         self.dz = L / N
+        
+        # ================= ZONE =================
+        self.zone = "transition"
 
         # ================= GEOMETRY =================
         self.D = 4.2
@@ -135,7 +139,7 @@ class Transition:
         q_vol = 0.0
 
         # ======================================================
-        # HEAT TRANSFER
+        # HEAT TRANSFER (CONVECTION + RADIATION)
         # ======================================================
         q_gs, q_gw, q_ws = heat_transfer(
             Tg=Tg,
@@ -147,6 +151,7 @@ class Transition:
             a_gs=self.a_gs,
             a_gw=self.a_gw,
             a_ws=self.a_ws,
+            zone=self.zone,
         )
 
         # ======================================================
