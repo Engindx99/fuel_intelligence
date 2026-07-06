@@ -1,9 +1,10 @@
 import numpy as np
+from physics.physics import solid_mass_flow
 from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
-from physics.physics import radiation_linear
+from physics.physics import radiation
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import solid_axial_velocity
@@ -19,8 +20,10 @@ class Cooler:
         self.N = N
         self.L = L
         self.dz = L / N
+
         # ================= ZONE =================
         self.zone = "cooler"
+
         # ================= NUMERICAL =================
         self.eps = 1e-9
 
@@ -70,10 +73,13 @@ class Cooler:
 
         # ================= EXTERNAL =================
         self.h_ext = 18.0
+
+        # ================= THERMODYNAMIC REFERENCE =================
+        self.T_ref = 298.15
         self.T_amb = 300.0
 
         # ================= PROPERTIES =================
-        self.rho_g = 1.2          # cooler gas denser (air)
+        self.rho_g = 1.2        # air-like
         self.rho_s = 1100.0
         self.rho_wall = 3000.0
 
@@ -94,31 +100,28 @@ class Cooler:
         self._dTg_dz = np.zeros(N)
         self._dTs_dz = np.zeros(N)
 
-        # ================= CACHE CONSTANTS =================
+        # ================= CACHE =================
         self._rho_g_Vcell_Cp_g = (
-            self.rho_g
-            * self.V_cell
-            * self.Cp_g
+            self.rho_g * self.V_cell * self.Cp_g
         )
 
         self._rho_s_Vcell_Cp_s = (
-            self.rho_s
-            * self.V_cell
-            * self.Cp_s
+            self.rho_s * self.V_cell * self.Cp_s
         )
 
         self.V_wall_cell = self.V_wall / self.N
 
         self._rho_wall_Vwall_cell_Cp = (
-            self.rho_wall
-            * self.V_wall_cell
-            * self.Cp_wall
+            self.rho_wall * self.V_wall_cell * self.Cp_wall
         )
         
 
     # ======================================================
     def thermal_step(self, Tg, Ts, Tw, state, dt):
 
+        # ======================================================
+        # GRADIENTS (NO ALLOCATION)
+        # ======================================================
         dTg_dz = self._dTg_dz
         dTs_dz = self._dTs_dz
 
@@ -127,10 +130,10 @@ class Cooler:
 
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
-        
 
-
-        # ================= NO CHEMISTRY =================
+        # ======================================================
+        # NO INTERNAL HEAT GENERATION
+        # ======================================================
         q_vol = 0.0
 
         # ======================================================
@@ -148,9 +151,10 @@ class Cooler:
             a_ws=self.a_ws,
             zone=self.zone,
         )
-        
-        
-        # ================= WALL LOSS =================
+
+        # ======================================================
+        # WALL LOSSES
+        # ======================================================
         q_loss, wall_loss, wall_debug = wall_losses(
             Tw=Tw,
             h_ext=self.h_ext,
@@ -164,71 +168,86 @@ class Cooler:
             eps=self.eps,
         )
 
-        # ================= CAPACITIES =================
+        # ======================================================
+        # THERMAL CAPACITIES
+        # ======================================================
         C_g, C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=0.01,
+            effective=1.0,
         )
 
-
-        # ================= DYNAMICS =================
+        # ======================================================
+        # ENERGY EQUATIONS
+        # ======================================================
         Tg_n = Tg + dt * (
             -state.u_g * dTg_dz
-            + (q_gs + q_gw) / C_g      # reversed sign effect
+            + (q_vol - q_gs - q_gw) / C_g
         )
-        
 
         Ts_n = Ts + dt * (
             -state.u_s * dTs_dz
-            + (-q_gs - q_ws) / C_s     # solid loses energy
+            + (q_gs - q_ws) / C_s
         )
 
         Tw_n = Tw + dt * (
-            (q_ws + q_gw - q_loss) / C_w
+            (q_gw + q_ws - q_loss) / C_w
         )
 
-        return Tg_n, Ts_n, Tw_n, wall_loss, wall_debug
+        return (
+            Tg_n,
+            Ts_n,
+            Tw_n,
+            wall_loss,
+            wall_debug,
+        )
     
-
-    
-
     # ======================================================
     # STATE UPDATE
     # ======================================================
     def apply(self, state, dt):
 
-        # ================= STATE CHECK =================
+        # ======================================================
+        # STATE CHECK
+        # ======================================================
         if not isinstance(state.Tg_cooler, np.ndarray):
             raise TypeError("Tg_cooler must be np.ndarray")
 
         if state.Tg_cooler.shape != (self.N,):
             raise ValueError("Cooler state corrupted")
 
-        # ================= BACKUP =================
+        # ======================================================
+        # STORE OLD STATES
+        # ======================================================
         state.Tg_cooler_old = state.Tg_cooler.copy()
         state.Ts_cooler_old = state.Ts_cooler.copy()
         state.Tw_cooler_old = state.Tw_cooler.copy()
 
-        # ================= FLOW =================
+        # ======================================================
+        # FLOW INHERITANCE
+        # ======================================================
         state.u_g = getattr(state, "u_g", self.u_g)
         state.u_s = getattr(state, "u_s", self.u_s)
 
         self.u_g = state.u_g
         self.u_s = state.u_s
-        
 
         # ======================================================
-        #  COUPLING: PREHEATER → COOLER (IMPORTANT)
+        # ENERGY IN
+        # ======================================================
+        state.Hgas_cooler_in = state.Hgas_preheater_out
+        state.Hsolid_cooler_in = state.Hsolid_preheater_out
+
+        # ======================================================
+        # BOUNDARY CONDITIONS (FROM PREHEATER)
         # ======================================================
         state.Tg_cooler[0] = state.Tg_preheater[-1]
         state.Ts_cooler[0] = state.Ts_preheater[-1]
 
-        
-
-        # ================= THERMAL STEP =================
-
+        # ======================================================
+        # THERMAL STEP
+        # ======================================================
         Tg, Ts, Tw, wall_loss, wall_debug = self.thermal_step(
             state.Tg_cooler,
             state.Ts_cooler,
@@ -237,30 +256,67 @@ class Cooler:
             dt,
         )
 
-
+        # ======================================================
+        # UPDATE STATES
+        # ======================================================
         state.Tg_cooler = Tg
         state.Ts_cooler = Ts
         state.Tw_cooler = Tw
-        
 
-        # ================= WALL LOSS =================
+        # ======================================================
+        # WALL LOSS
+        # ======================================================
         state.Wall_loss_cooler = float(wall_loss)
 
-        # ================= ENTHALPY OUT =================
-        state.Hgas_cooler_out = self.gas_enthalpy_out(state.Tg_cooler, state)
-        state.Hsolid_cooler_out = self.solid_enthalpy_out(state.Ts_cooler, state)
-        
+        # ======================================================
+        # ENERGY OUT
+        # ======================================================
+        state.Hgas_cooler_out = self.gas_enthalpy_out(
+            state.Tg_cooler,
+            state,
+        )
 
-        # ================= ENTHALPY IN =================
-        state.Hgas_cooler_in = state.Hgas_preheater_out
-        state.Hsolid_cooler_in = state.Hsolid_preheater_out
+        state.Hsolid_cooler_out = self.solid_enthalpy_out(
+            state.Ts_cooler,
+            state,
+        )
 
-        # ================= ENERGY BALANCE =================
+        # ======================================================
+        # STORED ENERGY
+        # ======================================================
+        state.Cooler_gas_stored = np.sum(
+            self._rho_g_Vcell_Cp_g
+            * (state.Tg_cooler - state.Tg_cooler_old)
+            / dt
+        )
+
+        state.Cooler_solid_stored = np.sum(
+            self._rho_s_Vcell_Cp_s
+            * (state.Ts_cooler - state.Ts_cooler_old)
+            / dt
+        )
+
+        state.Cooler_wall_stored = np.sum(
+            self._rho_wall_Vwall_cell_Cp
+            * (state.Tw_cooler - state.Tw_cooler_old)
+            / dt
+        )
+
+        state.Cooler_stored_energy_change = (
+            state.Cooler_gas_stored
+            + state.Cooler_solid_stored
+            + state.Cooler_wall_stored
+        )
+
+        # ======================================================
+        # ENERGY BALANCE
+        # ======================================================
         state.Cooler_energy_balance = (
             state.Hgas_cooler_in
             + state.Hsolid_cooler_in
             - state.Hgas_cooler_out
             - state.Hsolid_cooler_out
+            - state.Cooler_stored_energy_change
             - state.Wall_loss_cooler
         )
 
@@ -274,7 +330,7 @@ class Cooler:
         H_gas_out = (
             state.m_dot_g
             * self.Cp_g
-            * Tg[-1]
+            * (Tg[-1] - self.T_ref)
         )
 
         return H_gas_out
@@ -285,19 +341,10 @@ class Cooler:
     # ======================================================
     def solid_enthalpy_out(self, Ts, state):
 
-        fill_fraction = 0.10
-
-        m_dot_s = (
-            self.rho_s
-            * state.u_s
-            * self.A_cross
-            * fill_fraction
-        )
-
         H_solid_out = (
-            m_dot_s
+            state.m_dot_s
             * self.Cp_s
-            * Ts[-1]
+            * (Ts[-1] - self.T_ref)
         )
 
         return H_solid_out

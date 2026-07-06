@@ -5,11 +5,12 @@ import pickle
 import numpy as np
 import yaml
 
+from physics.physics import solid_mass_flow
 from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
-from physics.physics import radiation_linear
+from physics.physics import radiation
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import solid_axial_velocity
@@ -23,22 +24,30 @@ def load_cfg(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+
 class Burning:
 
     def __init__(self, N=5, L=60.0):
 
+        # ================= LOAD CFG =================
         cfg = load_cfg("configs/twin_cfg.yaml")
 
-        self.N = N
-        self.L = L
-        self.dz = L / N
+        plant = cfg.get("plant", {})
+        motion = cfg.get("motion", {})
+        fuel = cfg.get("fuel", {})
+        op = cfg.get("operational", {})
 
         # ================= ZONE =================
         self.zone = "burning"
+
         # ================= NUMERICAL =================
         self.eps = 1e-9
 
         # ================= GEOMETRY =================
+        self.N = plant.get("N", N)
+        self.L = plant.get("length", L)
+        self.dz = self.L / self.N
+
         self.D = 4.2
 
         (
@@ -79,8 +88,8 @@ class Burning:
         )
 
         # ================= REFRACTORY =================
-        self.refractory_thickness = 0.20      # m
-        self.refractory_conductivity = 1.8    # W/mK
+        self.refractory_thickness = op.get("refractory_thickness", 0.20)
+        self.refractory_conductivity = 1.8
 
         # ================= MATERIAL PROPERTIES =================
         self.rho_g = 0.30
@@ -92,31 +101,29 @@ class Burning:
         self.Cp_wall = 1000.0
 
         # ================= KILN MOTION =================
-        self.rpm_default = cfg["motion"]["rpm_default"]
-        self.rpm_min = cfg["motion"]["rpm_min"]
-        self.rpm_max = cfg["motion"]["rpm_max"]
+        self.rpm_default = motion.get("rpm_default", 1.5)
+        self.rpm_min = motion.get("rpm_min", 1.0)
+        self.rpm_max = motion.get("rpm_max", 3.0)
 
-        self.slope_deg = cfg["motion"]["inclination_deg"]
-        self.fill_fraction = 0.10
+        self.slope_deg = motion.get("inclination_deg", 3.0)
 
-        self.u_s = solid_axial_velocity(
-            L=self.L,
-            D=self.D,
-            slope_deg=self.slope_deg,
-            fill_fraction=self.fill_fraction,
-            rpm=self.rpm_default,
-            eps=self.eps,
-        )
+        #  FIX: artık operational’dan geliyor
+        self.fill_fraction = op.get("kiln_load", 0.10)
+
+        self.u_s = 0.0
+        self.u_g = 0.0
 
         # ================= HEAT TRANSFER =================
         self.hv_gs = 1800.0
         self.hv_gw = 350.0
         self.hv_ws = 400.0
 
-        self.h_ext = 12.0
-        self.T_amb = 300.0
+        #  FIX: operational full control
+        self.h_ext = op.get("h_ext", 12.0)
+        self.T_ref = op.get("T_ref", 298.15)
+        self.T_amb = op.get("T_amb", 300.0)
 
-        # ================= FUEL =================
+        # ================= FUEL (SI CLEAN) =================
         self.LHV = {
             "petcoke": 32e6,
             "coal": 18e6,
@@ -127,29 +134,18 @@ class Burning:
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
 
-        # ================= PERFORMANCE BUFFERS =================
-        self._dTg_dz = np.zeros(N)
-        self._dTs_dz = np.zeros(N)
+        # ================= BUFFERS =================
+        self._dTg_dz = np.zeros(self.N)
+        self._dTs_dz = np.zeros(self.N)
 
         # ================= CACHE CONSTANTS =================
-        self._rho_g_Vcell_Cp_g = (
-            self.rho_g
-            * self.V_cell
-            * self.Cp_g
-        )
-
-        self._rho_s_Vcell_Cp_s = (
-            self.rho_s
-            * self.V_cell
-            * self.Cp_s
-        )
+        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
+        self._rho_s_Vcell_Cp_s = self.rho_s * self.V_cell * self.Cp_s
 
         self.V_wall_cell = self.V_wall / self.N
 
         self._rho_wall_Vwall_cell_Cp = (
-            self.rho_wall
-            * self.V_wall_cell
-            * self.Cp_wall
+            self.rho_wall * self.V_wall_cell * self.Cp_wall
         )
 
     # ========================================================
@@ -197,6 +193,7 @@ class Burning:
         # HEAT SOURCE
         # ======================================================
         q_vol = Q_burning / (self.V_total + self.eps)
+        
 
         # ======================================================
         # HEAT TRANSFER (CONVECTION + RADIATION)
@@ -326,6 +323,13 @@ class Burning:
         state.solid_velocity = u_s
 
         # ======================================================
+        # SOLID MASS FLOW
+        # ======================================================
+        state.m_dot_s = solid_mass_flow(
+            inputs.get("Feed_rate_kg_s", 0.0)
+        )
+
+        # ======================================================
         # GAS MASS FLOW + VELOCITY
         # ======================================================
         m_dot_g = gas_mass_balance(
@@ -420,6 +424,16 @@ class Burning:
             state.Ts_burning,
             state,
         )
+        
+        print("\n========== BURNING ENERGY ==========")
+        print(f"Q_burning  : {state.Q_burning/1e6:.2f} MW")
+        print(f"Hgas_out   : {state.Hgas_burning_out/1e6:.2f} MW")
+        print(f"Hsolid_out : {state.Hsolid_burning_out/1e6:.2f} MW")
+        print(f"Wall_loss  : {state.Wall_loss_burning/1e6:.2f} MW")
+        print(f"Stored     : {state.Burning_stored_energy_change/1e6:.2f} MW")
+        print(f"m_dot_s    : {state.m_dot_s:.3f} kg/s")
+        print(f"Ts_out     : {state.Ts_burning[-1]:.2f} K")
+        print("====================================")
 
         # ======================================================
         # STORED ENERGY
@@ -447,42 +461,36 @@ class Burning:
         # ======================================================
         state.Burning_energy_balance = (
             state.Q_burning
-            - state.Hgas_burning_out
-            - state.Hsolid_burning_out
             - state.Burning_stored_energy_change
             - state.Wall_loss_burning
         )
+    
 
         return state
     
+    # ======================================================
+    # GAS ENTHALPY TO NEXT ZONE
     # ======================================================
     def gas_enthalpy_out(self, Tg, state):
 
         H_gas_out = (
             state.m_dot_g
             * self.Cp_g
-            * Tg[-1]
+            * (Tg[-1] - self.T_ref)
         )
 
         return H_gas_out
-    
-    # ======================================================
-    
-    
-    def solid_enthalpy_out(self, Ts, state):
-        
-        fill_fraction = 0.10
 
-        m_dot_s = (
-            self.rho_s
-            * state.u_s
-            * self.A_cross * fill_fraction
-        )
+
+    # ======================================================
+    # SOLID ENTHALPY TO NEXT ZONE
+    # ======================================================
+    def solid_enthalpy_out(self, Ts, state):
 
         H_solid_out = (
-            m_dot_s
+            state.m_dot_s
             * self.Cp_s
-            * Ts[-1]
+            * (Ts[-1] - self.T_ref)
         )
 
         return H_solid_out

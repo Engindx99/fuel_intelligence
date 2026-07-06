@@ -1,6 +1,6 @@
 plant:
   N: 5
-  length: 60.0
+  length: 60.0   # m
 
 transition:
   length: 25.0
@@ -13,32 +13,40 @@ preheater:
 
 cooler:
   length: 25.0
-  
+
 
 simulation:
-  
-  dt: 0.05 # Plant integration time [s]
-
-  total_hours: 2.0 # Total simulation duration [hours]
-
-  # Optional chunk size for long simulations/checkpoints [hours]
+  dt: 0.05
+  total_hours: 4.0
   chunk_hours: 1.0
 
-  
+
 fuel:
-  Fuel_rate_total: 5.6 # ton/h
+  Fuel_rate_total: 1.5556   # kg/s (converted from t/h if needed)
   Petcoke_ratio: 0.54
   Coal_ratio: 0.30
   RDF_ratio: 0.15
   H2_ratio: 0.01
   O2: 3.5
 
+
 motion:
   rpm_default: 1.5
   rpm_min: 1.0
   rpm_max: 3.0
-
   inclination_deg: 3.0
+
+
+feed:
+  Feed_rate_kg_s: 33.3333   # 120000 kg/h clinker feed (SOLID INPUT)
+
+
+operational:
+  kiln_load: 1.0
+  availability: 0.95
+  bypass_ratio: 0.0
+  false_air_ratio: 0.03
+  calcination_degree_target: 0.92
 
 
 logging:

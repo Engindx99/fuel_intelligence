@@ -4,6 +4,19 @@ import numpy as np
 # ======================================================
 # FLOW
 # ======================================================
+
+def solid_mass_flow(feed_rate):
+
+    m_dot_s = feed_rate # Solid feed rate [kg/s]
+
+    return m_dot_s
+
+
+def gas_mass_balance(fuel_rate_total, O2, eps):
+    
+    return fuel_rate_total * (1.0 + 0.8 * O2) # Combustion stoichiometry (SI units)
+
+
 def residence_time(L, D, slope_deg, fill_fraction, rpm, eps):
 
     theta = np.deg2rad(slope_deg)
@@ -35,13 +48,10 @@ def solid_axial_velocity(L, D, slope_deg, fill_fraction, rpm, eps):
 
     return L / (tau + eps)
 
-def gas_axial_velocity(m_dot_g, rho_g, A_cross, eps):
-    u_g = m_dot_g / (rho_g * A_cross + eps)
-    return u_g
 
-def gas_mass_balance(fuel_rate_total, O2, eps):
-    # combustion stoichiometry simplified
-    return fuel_rate_total * (1.0 + 0.8 * O2)
+def gas_axial_velocity(m_dot_g, rho_g, A_cross, eps):
+
+    return m_dot_g / (rho_g * A_cross + eps)
 
 # ======================================================
 # COMBUSTION
@@ -119,7 +129,7 @@ and other complex heat transfer mechanisms.
 ZONE_RAD_CONFIG = {
     "burning": {
         "eps": 0.90,
-        "k_eff": 0.25,
+        "k_eff": 0.70,
     },
     "transition": {
         "eps": 0.85,

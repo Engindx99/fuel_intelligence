@@ -1,9 +1,10 @@
 import numpy as np
+from physics.physics import solid_mass_flow
 from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
-from physics.physics import radiation_linear
+from physics.physics import radiation
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import solid_axial_velocity
@@ -12,7 +13,6 @@ from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
 
-
 class Transition:
 
     def __init__(self, N=5, L=25.0):
@@ -20,7 +20,7 @@ class Transition:
         self.N = N
         self.L = L
         self.dz = L / N
-        
+
         # ================= ZONE =================
         self.zone = "transition"
 
@@ -32,36 +32,30 @@ class Transition:
 
         # ================= INTERFACIAL AREA =================
         self.epsilon_bed = 0.35
-
-        # Gas-solid interfacial area density (m²/m³)
-        a_gs_base = 6.0 * (1.0 - self.epsilon_bed) / self.D
-
         self.k_interfacial = 1.0
+
+        a_gs_base = 6.0 * (1.0 - self.epsilon_bed) / self.D
 
         self.a_gs = self.k_interfacial * a_gs_base
         self.a_ws = 0.6 * self.a_gs
 
         # ================= WALL GEOMETRY =================
-
-        # Kiln inner perimeter (m)
         self.wall_perimeter = np.pi * self.D
-
-        # Total wall area (m²)
         self.A_wall = self.wall_perimeter * self.L
-
-        # Wall area per computational cell (m²)
         self.A_wall_cell = self.A_wall / self.N
-
-        # Gas-wall interfacial area density (m²/m³)
         self.a_gw = self.A_wall_cell / self.V_cell
 
-        # External convection
+        # ================= REFRACTORY =================
+        self.refractory_thickness = 0.05
+        self.refractory_conductivity = 1.8
+
+        self.V_wall = self.A_wall * self.refractory_thickness
+        self.V_wall_cell = self.V_wall / self.N
+
+        # ================= EXTERNAL WALL =================
         self.h_ext = 12.0
-
+        self.T_ref = 298.15
         self.T_amb = 300.0
-
-        # Wall volume (5 cm refractory thickness)
-        self.V_wall = self.A_wall * 0.05
 
         # ================= PROPERTIES =================
         self.rho_g = 0.30
@@ -75,7 +69,7 @@ class Transition:
         # ================= BED =================
         self.fill_fraction = 0.10
 
-        # ================= FLOW (UPDATED IN APPLY) =================
+        # ================= FLOW =================
         self.u_g = 0.0
         self.u_s = 0.0
 
@@ -87,30 +81,14 @@ class Transition:
         # ================= NUMERICAL =================
         self.eps = 1e-9
 
-        # ================= PERFORMANCE BUFFERS =================
+        # ================= BUFFERS =================
         self._dTg_dz = np.zeros(N)
         self._dTs_dz = np.zeros(N)
 
-        # ================= CACHE CONSTANTS =================
-
-        # Gas
-        self._rho_g_Vcell_Cp_g = (
-            self.rho_g * self.V_cell * self.Cp_g
-        )
-
-        # Solid
-        self._rho_s_Vcell_Cp_s = (
-            self.rho_s * self.V_cell * self.Cp_s
-        )
-
-        # Wall (per computational cell)
-        self.V_wall_cell = self.V_wall / self.N
-
-        self._rho_wall_Vwall_cell_Cp = (
-            self.rho_wall
-            * self.V_wall_cell
-            * self.Cp_wall
-        )
+        # ================= CACHE =================
+        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
+        self._rho_s_Vcell_Cp_s = self.rho_s * self.V_cell * self.Cp_s
+        self._rho_wall_Vwall_cell_Cp = self.rho_wall * self.V_wall_cell * self.Cp_wall
         
         # ======================================================
     def thermal_step(self, Tg, Ts, Tw, state, dt):
@@ -119,10 +97,10 @@ class Transition:
         # FLOW FIELDS (READ ONLY)
         # ======================================================
         u_g = state.u_g
-        u_s = state.u_s
+        u_s = state.u_s 
 
         # ======================================================
-        # GRADIENTS (NO ALLOC)
+        # GRADIENTS (NO ALLOCATION)
         # ======================================================
         dTg_dz = self._dTg_dz
         dTs_dz = self._dTs_dz
@@ -165,45 +143,31 @@ class Transition:
             T_amb=self.T_amb,
             A_wall_total=self.A_wall,
             N=self.N,
-            refractory_thickness=0.05,
-            refractory_conductivity=1.8,
+            refractory_thickness=self.refractory_thickness,
+            refractory_conductivity=self.refractory_conductivity,
             eps=self.eps,
         )
 
         # ======================================================
         # THERMAL CAPACITIES
         # ======================================================
-        C_g, effective_C_s, C_w = thermal_capacities(
+        C_g, C_s, C_w = thermal_capacities(
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=0.01,
+            effective=1.0,
         )
 
         # ======================================================
-        # DYNAMICS
+        # ENERGY BALANCE EQUATIONS
         # ======================================================
-        Tg_n = Tg + dt * (
-            -u_g * dTg_dz
-            + (q_vol - q_gs - q_gw) / C_g
-        )
+        Tg_n = Tg + dt * (-u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
 
-        Ts_n = Ts + dt * (
-            -u_s * dTs_dz
-            + (q_gs - q_ws) / effective_C_s
-        )
+        Ts_n = Ts + dt * (-u_s * dTs_dz + (q_gs - q_ws) / C_s)
 
-        Tw_n = Tw + dt * (
-            (q_gw + q_ws - q_loss) / C_w
-        )
+        Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
 
-        return (
-            Tg_n,
-            Ts_n,
-            Tw_n,
-            wall_loss,
-            wall_debug,
-        )
+        return Tg_n, Ts_n, Tw_n, wall_loss, wall_debug
 
 
     # ======================================================
@@ -212,55 +176,45 @@ class Transition:
     def apply(self, state, dt):
 
         # ======================================================
-        # STATE INTEGRITY CHECK
+        # STATE CHECK
         # ======================================================
         if not isinstance(state.Tg_transition, np.ndarray):
             raise TypeError("Tg_transition must be np.ndarray")
 
         if state.Tg_transition.shape != (5,):
-            raise ValueError(
-                f"Transition state corrupted: {state.Tg_transition.shape}"
-            )
+            raise ValueError("Transition state corrupted")
 
         # ======================================================
-        # STORE OLD STATES
+        # STORE OLD STATE
         # ======================================================
         state.Tg_transition_old = state.Tg_transition.copy()
         state.Ts_transition_old = state.Ts_transition.copy()
         state.Tw_transition_old = state.Tw_transition.copy()
 
         # ======================================================
-        # INCOMING FLOW FROM BURNING
+        # FLOW INHERITANCE
+        # ======================================================
+        state.u_g = getattr(state, "u_g", self.u_g)
+        state.u_s = getattr(state, "u_s", self.u_s)
+        state.m_dot_g = getattr(state, "m_dot_g", 0.0)
+        state.m_dot_s = getattr(state, "m_dot_s", 0.0)
+
+        # ======================================================
+        # ENERGY IN FROM PREVIOUS ZONE
         # ======================================================
         state.Hgas_transition_in = state.Hgas_burning_out
         state.Hsolid_transition_in = state.Hsolid_burning_out
 
-        state.u_g = getattr(state, "u_g", self.u_g)
-        state.u_s = getattr(state, "u_s", self.u_s)
-        state.m_dot_g = getattr(state, "m_dot_g", 0.0)
-
-        self.u_g = state.u_g
-        self.u_s = state.u_s
-
         # ======================================================
-        # BOUNDARY CONDITION FROM BURNING
+        # BOUNDARY FROM PREVIOUS ZONE
         # ======================================================
         state.Tg_transition[0] = state.Tg_burning[-1]
         state.Ts_transition[0] = state.Ts_burning[-1]
 
-        # Wall temperature is NOT overwritten.
-        # It evolves according to the wall energy equation.
-
         # ======================================================
         # THERMAL STEP
         # ======================================================
-        (
-            Tg,
-            Ts,
-            Tw,
-            wall_loss,
-            wall_debug,
-        ) = self.thermal_step(
+        Tg, Ts, Tw, wall_loss, wall_debug = self.thermal_step(
             state.Tg_transition,
             state.Ts_transition,
             state.Tw_transition,
@@ -300,7 +254,7 @@ class Transition:
         state.N_transition = state.wall_debug_transition["N"]
 
         # ======================================================
-        # ENERGY TO NEXT ZONE
+        # ENTHALPY OUT
         # ======================================================
         state.Hgas_transition_out = self.gas_enthalpy_out(
             state.Tg_transition,
@@ -362,7 +316,7 @@ class Transition:
         H_gas_out = (
             state.m_dot_g
             * self.Cp_g
-            * Tg[-1]
+            * (Tg[-1] - self.T_ref)
         )
 
         return H_gas_out
@@ -373,19 +327,10 @@ class Transition:
     # ======================================================
     def solid_enthalpy_out(self, Ts, state):
 
-        fill_fraction = 0.10
-
-        m_dot_s = (
-            self.rho_s
-            * state.u_s
-            * self.A_cross
-            * fill_fraction
-        )
-
         H_solid_out = (
-            m_dot_s
+            state.m_dot_s
             * self.Cp_s
-            * Ts[-1]
+            * (Ts[-1] - self.T_ref)
         )
 
         return H_solid_out
