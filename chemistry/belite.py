@@ -14,7 +14,7 @@ class BeliteModel(ReactionBase):
         self.activation_energy = 2.0e5
 
         # ================= THERMODYNAMICS =================
-        self.deltaH = 5.0e5          # J/kg C2S formed
+        self.deltaH = 5.0e5
 
         # ================= TEMPERATURE =================
         self.T_start = 1123.0
@@ -25,38 +25,31 @@ class BeliteModel(ReactionBase):
     # ======================================================
     def apply(self, state):
 
-        # ================= REACTION RATE =================
         rate = self.reaction_rate(
             state.Ts_burning
         )
 
-        # ================= AVAILABLE REACTANTS =================
-        m_CaO = (
-            state.m_dot_s
-            * state.CaO_mass_fraction
+        available = np.minimum(
+            state.solids.CaO / 2.0,
+            state.solids.SiO2,
         )
 
-        m_SiO2 = (
-            state.m_dot_s
-            * state.SiO2_mass_fraction
-        )
-
-        # ================= LIMITING REACTANT =================
-        m_dot_reactive = self.limiting_mass_flow(
-            m_CaO,
-            m_SiO2,
-        )
-
-        # ================= HEAT SINK =================
-        state.Belite_Q_sink = self.heat_sink(
-            m_dot_reactive,
+        reacted = self.reacted_mass(
+            available,
             rate,
+            state.dt,
         )
 
-        # ======================================================
-        # PLACEHOLDER
-        # Full stoichiometric phase update will be implemented
-        # after the complete clinker chemistry is available.
-        # ======================================================
+        state.solids.CaO -= 2.0 * reacted
+
+        state.solids.SiO2 -= reacted
+
+        state.solids.C2S += reacted
+
+        state.Belite_Q_sink = np.sum(
+            self.heat_sink(
+                reacted,
+            )
+        )
 
         return state

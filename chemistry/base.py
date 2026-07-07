@@ -5,94 +5,79 @@ class ReactionBase:
 
     def __init__(self):
 
-        # ================= KINETICS =================
-        self.prefactor = 0.0
-        self.activation_energy = 0.0
         self.R = 8.314
 
+        # ================= KINETICS =================
+        self.prefactor = 1.0
+        self.activation_energy = 0.0
+
         # ================= THERMODYNAMICS =================
-        self.deltaH = 0.0              # J/kg reacted
-        self.product_ratio = 0.0       # kg product / kg reacted
+        self.deltaH = 0.0
 
-        # ================= ACTIVE TEMPERATURE RANGE =================
-        self.T_start = 0.0
-        self.T_end = 5000.0
-
+        # ================= TEMPERATURE =================
+        self.T_start = 300.0
+        self.T_end = 2000.0
 
     # ======================================================
-    # ACTIVE MASK
+    # TEMPERATURE WINDOW
     # ======================================================
-    def active_mask(self, T):
+    def temperature_window(self, T):
 
-        return (T >= self.T_start) & (T <= self.T_end)
-
+        return np.clip(
+            (T - self.T_start)
+            / (self.T_end - self.T_start + 1e-12),
+            0.0,
+            1.0,
+        )
 
     # ======================================================
     # ARRHENIUS RATE
     # ======================================================
     def reaction_rate(self, T):
 
-        k = self.prefactor * np.exp(
-            -self.activation_energy / (self.R * T)
+        arrhenius = (
+            self.prefactor
+            * np.exp(
+                -self.activation_energy
+                / (self.R * np.maximum(T, 1.0))
+            )
         )
-
-        return np.clip(
-            np.where(self.active_mask(T), k, 0.0),
-            0.0,
-            1.0,
-        )
-
-
-    # ======================================================
-    # REACTED MASS FLOW
-    # ======================================================
-    def reacted_mass_flow(self, m_dot_reactive, reaction_rate):
-
-        return m_dot_reactive * np.mean(reaction_rate)
-
-
-    # ======================================================
-    # HEAT SINK
-    # ======================================================
-    def heat_sink(self, m_dot_reactive, reaction_rate):
 
         return (
-            self.reacted_mass_flow(
-                m_dot_reactive,
-                reaction_rate,
-            )
+            arrhenius
+            * self.temperature_window(T)
+        )
+
+    # ======================================================
+    # REACTED MASS
+    # ======================================================
+    def reacted_mass(
+        self,
+        available,
+        rate,
+        dt,
+    ):
+
+        reacted = (
+            available
+            * rate
+            * dt
+        )
+
+        return np.minimum(
+            reacted,
+            available,
+        )
+
+    # ======================================================
+    # REACTION HEAT
+    # ======================================================
+    def heat_sink(
+        self,
+        reacted,
+    ):
+
+        return (
+            reacted
             * self.deltaH
         )
-
-
-    # ======================================================
-    # PRODUCT GENERATION
-    # ======================================================
-    def product_generation(self, m_dot_reactive, reaction_rate):
-
-        return (
-            self.reacted_mass_flow(
-                m_dot_reactive,
-                reaction_rate,
-            )
-            * self.product_ratio
-        )
-
-
-    # ======================================================
-    # CONVERSION UPDATE
-    # ======================================================
-    def update_conversion(self, X, reaction_rate):
-
-        return np.clip(
-            X - reaction_rate,
-            0.0,
-            1.0,
-        )
-        
-    # ======================================================
-    # LIMITING REACTANT
-    # ======================================================
-    def limiting_mass_flow(self, *mass_flows):
-
-        return np.min(np.asarray(mass_flows), axis=0)

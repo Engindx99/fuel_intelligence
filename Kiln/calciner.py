@@ -12,9 +12,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
-from chemistry.drying import DryingModel
-from chemistry.dehydroxylation import DehydroxylationModel
-from chemistry.calcination import CalcinationModel
+from chemistry.reactions import ChemistryModel
 from physics.physics import ZONE_HT_CONFIG
 
 
@@ -29,12 +27,7 @@ class Calciner:
         # ================= ZONE =================
         self.zone = "calciner"   
         
-        self.drying = DryingModel()
-
-        self.reaction = CalcinationModel(
-            N=self.N,
-            dz=self.dz,
-        )
+        self.chemistry = ChemistryModel()
 
         # ================= NUMERICAL =================
         self.eps = 1e-9
@@ -240,13 +233,9 @@ class Calciner:
 
 
         # ======================================================
-        # CALCINATION REACTION
+        # CHEMISTRY
         # ======================================================
-        self.reaction.apply(
-            state,
-            dt,
-        )
-
+        state = self.chemistry.apply(state)
 
         # ======================================================
         # THERMAL STEP
@@ -257,12 +246,9 @@ class Calciner:
             state.Tw_calciner,
             state,
             dt,
-            reaction_sink=(
-                state.Drying_Q_sink
-                + state.Dehydroxylation_Q_sink
-                + state.Calciner_Q_sink
-            )
-        )
+            reaction_sink=state.Reaction_Q_sink,
+        )   
+               
 
         # ======================================================
         # UPDATE STATES

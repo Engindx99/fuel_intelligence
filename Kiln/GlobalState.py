@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from typing import Dict
 from chemistry.phases import SolidPhases, GasPhases
+from chemistry.composition import RAW_MEAL_COMPOSITION
 
 
 @dataclass
@@ -321,85 +322,105 @@ class GlobalState:
     # ======================================================
     # REACTIONS
     # ======================================================
-    
+
     def __post_init__(self):
 
         N = self.Tg_burning.size
 
+        # ================= SOLID PHASES =================
         self.solids = SolidPhases(
-            H2O=np.zeros(N),
-            CaCO3=np.zeros(N),
-            CaO=np.zeros(N),
-            SiO2=np.zeros(N),
-            Al2O3=np.zeros(N),
-            Fe2O3=np.zeros(N),
-            C2S=np.zeros(N),
-            C3S=np.zeros(N),
-            C3A=np.zeros(N),
-            C4AF=np.zeros(N),
+            H2O=np.full(N, RAW_MEAL_COMPOSITION["H2O"]),
+            CaCO3=np.full(N, RAW_MEAL_COMPOSITION["CaCO3"]),
+            CaO=np.full(N, RAW_MEAL_COMPOSITION["CaO"]),
+            SiO2=np.full(N, RAW_MEAL_COMPOSITION["SiO2"]),
+            Al2O3=np.full(N, RAW_MEAL_COMPOSITION["Al2O3"]),
+            Fe2O3=np.full(N, RAW_MEAL_COMPOSITION["Fe2O3"]),
+            C2S=np.full(N, RAW_MEAL_COMPOSITION["C2S"]),
+            C3S=np.full(N, RAW_MEAL_COMPOSITION["C3S"]),
+            C3A=np.full(N, RAW_MEAL_COMPOSITION["C3A"]),
+            C4AF=np.full(N, RAW_MEAL_COMPOSITION["C4AF"]),
         )
 
+        # ================= GAS PHASES =================
         self.gases = GasPhases(
             CO2=np.zeros(N),
             H2O=np.zeros(N),
         )
 
 
-    
     # ======================================================
-    # CALCINER CONVERSION
+    # LEGACY CONVERSION VARIABLES
+    # (Remove after full phase migration)
     # ======================================================
 
     X_CaCO3_calciner: np.ndarray = field(
-        default_factory=lambda: np.ones(5)
+        default_factory=lambda: np.ones(20)
     )
 
     X_CaO_calciner: np.ndarray = field(
-        default_factory=lambda: np.zeros(5)
+        default_factory=lambda: np.zeros(20)
     )
 
-
-    # ======================================================
-    # RAW MEAL COMPOSITION
-    # ======================================================
-
-    CaCO3_mass_fraction: float = 0.80
-
-    SiO2_mass_fraction: float = 0.13
-
-    Al2O3_mass_fraction: float = 0.04
-
-    Fe2O3_mass_fraction: float = 0.03
-
-
-    # ======================================================
-    # FEED CONVERSION
-    # ======================================================
-
     X_CaCO3_feed: float = 1.0
-    
-    
-    # ======================================================
-    # DRY MODEL
-    # ======================================================
-    
-    Moisture_mass_fraction: float = 0.05
 
-    X_H2O: np.ndarray = field(default_factory=lambda: np.ones(5))
-    
+    X_H2O: np.ndarray = field(
+        default_factory=lambda: np.ones(20)
+    )
+
+    X_OH: np.ndarray = field(
+        default_factory=lambda: np.zeros(20)
+    )
+
+    X_SiO2: float = 0.0
+
+    X_C2S: float = 0.0
+
+    X_CaO: float = 0.0
+
+    X_Al2O3: float = 0.0
+
+    X_Fe2O3: float = 0.0
+
+
+    # ======================================================
+    # REACTION HEAT SINKS
+    # ======================================================
+
     Drying_Q_sink: float = 0.0
-
-    m_dot_H2O: float = 0.0
-    
-    # ======================================================
-    # DEHYDROXYLATION MODEL
-    # ======================================================
-    
-    X_OH: np.ndarray = field(default_factory=lambda: np.zeros(20))
 
     Dehydroxylation_Q_sink: float = 0.0
 
+    Calciner_Q_sink: float = 0.0
+
+    Belite_Q_sink: float = 0.0
+
+    Alite_Q_sink: float = 0.0
+
+    C3A_Q_sink: float = 0.0
+
+    C4AF_Q_sink: float = 0.0
+
+    Reaction_Q_sink: float = 0.0
+
+
+    # ======================================================
+    # LEGACY MASS FLOW VARIABLES
+    # (Remove after full phase migration)
+    # ======================================================
+
+    m_dot_H2O: float = 0.0
+
     m_dot_H2O_dehydroxylation: float = 0.0
+
+    m_dot_CO2: float = 0.0
+
+    m_dot_C2S: float = 0.0
+
+    m_dot_C3S: float = 0.0
+
+    m_dot_C3A: float = 0.0
+
+    m_dot_C4AF: float = 0.0
     
 
     # ======================================================

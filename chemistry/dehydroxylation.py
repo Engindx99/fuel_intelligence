@@ -1,131 +1,53 @@
 import numpy as np
 
+from chemistry.base import ReactionBase
 
-class DehydroxylationModel:
+
+class DehydroxylationModel(ReactionBase):
 
     def __init__(self):
 
-        # ======================================================
-        # KINETICS
-        # ======================================================
+        super().__init__()
+
+        # ================= KINETICS =================
         self.prefactor = 5.0e3
         self.activation_energy = 1.20e5
-        self.R = 8.314
 
-        # ======================================================
-        # REACTION
-        # ======================================================
-        self.deltaH = 1.10e6          # J/kg reacted mineral
-        self.H2O_ratio = 0.139        # kg H2O / kg reacted clay
+        # ================= THERMODYNAMICS =================
+        self.deltaH = 1.10e6
 
-        self.T_start = 723.0          # K
-        self.T_end = 973.0            # K
+        # kg H2O / kg reacted hydroxyl-bearing mineral
+        self.product_ratio = 0.139
 
-    # ======================================================
-    # REACTION RATE
-    # ======================================================
-    def reaction_rate(self, Ts):
-
-        active = (
-            (Ts >= self.T_start)
-            &
-            (Ts <= self.T_end)
-        )
-
-        k = (
-            self.prefactor
-            *
-            np.exp(
-                -self.activation_energy
-                /
-                (self.R * Ts)
-            )
-        )
-
-        r = np.where(
-            active,
-            k,
-            0.0,
-        )
-
-        return np.clip(r, 0.0, 1.0)
-
-    # ======================================================
-    # HEAT SINK
-    # ======================================================
-    def heat_sink(self, state, reaction_rate):
-
-        m_dot_clay = (
-            state.m_dot_s
-            *
-            state.OH_mass_fraction
-        )
-
-        r_mean = np.mean(reaction_rate)
-
-        m_dot_reacted = (
-            m_dot_clay
-            *
-            r_mean
-        )
-
-        return (
-            m_dot_reacted
-            *
-            self.deltaH
-        )
-
-    # ======================================================
-    # WATER GENERATION
-    # ======================================================
-    def water_generation(self, state, reaction_rate):
-
-        m_dot_clay = (
-            state.m_dot_s
-            *
-            state.OH_mass_fraction
-        )
-
-        r_mean = np.mean(reaction_rate)
-
-        m_dot_reacted = (
-            m_dot_clay
-            *
-            r_mean
-        )
-
-        return (
-            m_dot_reacted
-            *
-            self.H2O_ratio
-        )
+        # ================= TEMPERATURE =================
+        self.T_start = 723.0
+        self.T_end = 973.0
 
     # ======================================================
     # APPLY
     # ======================================================
     def apply(self, state):
 
-        reaction_rate = self.reaction_rate(
+        rate = self.reaction_rate(
             state.Ts_calciner
         )
 
-        state.Dehydroxylation_Q_sink = self.heat_sink(
-            state,
-            reaction_rate,
+        reacted = self.reacted_mass(
+            state.solids.OH,
+            rate,
+            state.dt,
         )
 
-        state.m_dot_H2O_dehydroxylation = (
-            self.water_generation(
-                state,
-                reaction_rate,
+        state.solids.OH -= reacted
+
+        state.gases.H2O += (
+            reacted * self.product_ratio
+        )
+
+        state.Dehydroxylation_Q_sink = np.sum(
+            self.heat_sink(
+                reacted,
             )
-        )
-
-        state.X_OH = np.clip(
-            state.X_OH
-            - reaction_rate,
-            0.0,
-            1.0,
         )
 
         return state

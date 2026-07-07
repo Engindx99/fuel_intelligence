@@ -3,22 +3,22 @@ import numpy as np
 from chemistry.base import ReactionBase
 
 
-class DryingModel(ReactionBase):
+class C4AFModel(ReactionBase):
 
     def __init__(self):
 
         super().__init__()
 
         # ================= KINETICS =================
-        self.prefactor = 2.0e4
-        self.activation_energy = 5.0e4
+        self.prefactor = 3.0e3
+        self.activation_energy = 2.2e5
 
         # ================= THERMODYNAMICS =================
-        self.deltaH = 2.26e6
+        self.deltaH = 3.5e5
 
         # ================= TEMPERATURE =================
-        self.T_start = 300.0
-        self.T_end = 473.0
+        self.T_start = 1373.0
+        self.T_end = 1723.0
 
     # ======================================================
     # APPLY
@@ -26,20 +26,30 @@ class DryingModel(ReactionBase):
     def apply(self, state):
 
         rate = self.reaction_rate(
-            state.Ts_calciner
+            state.Ts_burning
         )
 
+        available = np.minimum.reduce([
+            state.solids.CaO / 4.0,
+            state.solids.Al2O3,
+            state.solids.Fe2O3,
+        ])
+
         reacted = self.reacted_mass(
-            state.solids.H2O,
+            available,
             rate,
             state.dt,
         )
 
-        state.solids.H2O -= reacted
+        state.solids.CaO -= 4.0 * reacted
 
-        state.gases.H2O += reacted
+        state.solids.Al2O3 -= reacted
 
-        state.Drying_Q_sink = np.sum(
+        state.solids.Fe2O3 -= reacted
+
+        state.solids.C4AF += reacted
+
+        state.C4AF_Q_sink = np.sum(
             self.heat_sink(
                 reacted,
             )
