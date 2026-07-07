@@ -327,7 +327,6 @@ class GlobalState:
 
         N = self.Tg_burning.size
 
-        # ================= SOLID PHASES =================
         self.solids = SolidPhases(
             H2O=np.full(N, RAW_MEAL_COMPOSITION["H2O"]),
             CaCO3=np.full(N, RAW_MEAL_COMPOSITION["CaCO3"]),
@@ -341,45 +340,20 @@ class GlobalState:
             C4AF=np.full(N, RAW_MEAL_COMPOSITION["C4AF"]),
         )
 
-        # ================= GAS PHASES =================
         self.gases = GasPhases(
             CO2=np.zeros(N),
             H2O=np.zeros(N),
         )
 
+        # Bound hydroxyl available for dehydroxylation
+        self.OH_inventory = np.full(N, 0.020)
+
 
     # ======================================================
-    # LEGACY CONVERSION VARIABLES
-    # (Remove after full phase migration)
+    # HYDROXYL INVENTORY
     # ======================================================
 
-    X_CaCO3_calciner: np.ndarray = field(
-        default_factory=lambda: np.ones(20)
-    )
-
-    X_CaO_calciner: np.ndarray = field(
-        default_factory=lambda: np.zeros(20)
-    )
-
-    X_CaCO3_feed: float = 1.0
-
-    X_H2O: np.ndarray = field(
-        default_factory=lambda: np.ones(20)
-    )
-
-    X_OH: np.ndarray = field(
-        default_factory=lambda: np.zeros(20)
-    )
-
-    X_SiO2: float = 0.0
-
-    X_C2S: float = 0.0
-
-    X_CaO: float = 0.0
-
-    X_Al2O3: float = 0.0
-
-    X_Fe2O3: float = 0.0
+    OH_inventory: np.ndarray = field(init=False)
 
 
     # ======================================================
@@ -403,25 +377,6 @@ class GlobalState:
     Reaction_Q_sink: float = 0.0
 
 
-    # ======================================================
-    # LEGACY MASS FLOW VARIABLES
-    # (Remove after full phase migration)
-    # ======================================================
-
-    m_dot_H2O: float = 0.0
-
-    m_dot_H2O_dehydroxylation: float = 0.0
-
-    m_dot_CO2: float = 0.0
-
-    m_dot_C2S: float = 0.0
-
-    m_dot_C3S: float = 0.0
-
-    m_dot_C3A: float = 0.0
-
-    m_dot_C4AF: float = 0.0
-    
 
     # ======================================================
     # API

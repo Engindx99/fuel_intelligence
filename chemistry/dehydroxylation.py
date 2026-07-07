@@ -16,7 +16,7 @@ class DehydroxylationModel(ReactionBase):
         # ================= THERMODYNAMICS =================
         self.deltaH = 1.10e6
 
-        # kg H2O / kg reacted hydroxyl-bearing mineral
+        # kg H2O released / kg hydroxyl reacted
         self.product_ratio = 0.139
 
         # ================= TEMPERATURE =================
@@ -33,12 +33,12 @@ class DehydroxylationModel(ReactionBase):
         )
 
         reacted = self.reacted_mass(
-            state.solids.OH,
+            state.OH_inventory,
             rate,
             state.dt,
         )
 
-        state.solids.OH -= reacted
+        state.OH_inventory -= reacted
 
         state.gases.H2O += (
             reacted * self.product_ratio
