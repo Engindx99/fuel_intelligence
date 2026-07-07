@@ -17,7 +17,7 @@ cooler:
 
 simulation:
   dt: 0.05
-  total_hours: 4.0
+  total_hours: 2.0
   chunk_hours: 1.0
 
 

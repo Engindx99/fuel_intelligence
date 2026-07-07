@@ -190,7 +190,7 @@ class BurningMPCModel:
     # ======================================================
     def build_capacities(self):
 
-        effective = 1.0
+        effective = 0.1
 
         C_s = self.m.rho_s * self.m.Cp_s
         effective_C_s = effective * C_s

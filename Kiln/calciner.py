@@ -163,8 +163,14 @@ class Calciner:
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=1.0,
+            effective= 0.1,
         )
+        
+        print(f"C_g = {np.sum(self._rho_g_Vcell_Cp_g):.3e}")
+
+        print(f"effective_C_s = {np.sum(effective_C_s):.3e}")
+
+        print(f"C_w = {np.sum(self._rho_wall_Vwall_cell_Cp):.3e}")
 
         # ======================================================
         # UPDATE
@@ -357,9 +363,27 @@ class Calciner:
         )
         
         # ======================================================
+        # RELATIVE ENERGY BALANCE
+        # ======================================================
+        state.Calciner_energy_balance_relative = (
+            state.Calciner_energy_balance /
+            (
+                abs(state.Hgas_calciner_in)
+                +
+                abs(state.Hsolid_calciner_in)
+                +
+                self.eps
+            )
+        )
+        
+        # ======================================================
         # DEBUG PRINT
         # ======================================================
         print("\n========== CALCINER DEBUG ==========")
+        
+        print(
+            f"Relative balance : {state.Calciner_energy_balance_relative:.6f}"
+        )
 
         print(
             f"Tg mean : {np.mean(state.Tg_calciner):.2f} K"
@@ -388,6 +412,18 @@ class Calciner:
         print(
             f"Energy balance : {state.Calciner_energy_balance:.2f} W"
         )
+        
+        print(f"H_in      : {state.Hgas_calciner_in + state.Hsolid_calciner_in:.2f}")
+        print(f"H_out     : {state.Hgas_calciner_out + state.Hsolid_calciner_out:.2f}")
+        print(f"Stored    : {state.Calciner_stored_energy_change:.2f}")
+        print(f"Wall loss : {state.Wall_loss_calciner:.2f}")
+        print(f"Reaction  : {state.Calciner_Q_sink:.2f}")
+    
+        
+        print(f"m_dot_g : {state.m_dot_g:.4f} kg/s")
+        print(f"m_dot_s : {state.m_dot_s:.4f} kg/s")
+        print(f"Cp_g : {self.Cp_g:.2f} J/kgK")
+        print(f"Cp_s : {self.Cp_s:.2f} J/kgK")
 
         return state
 

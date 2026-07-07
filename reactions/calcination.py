@@ -17,7 +17,7 @@ class CalcinationModel:
         # ======================================================
         # CALCINATION KINETICS AND ENTHALPY
         # ======================================================
-        self.A = 500          # 1/s
+        self.A = 1.5e4          # 1/s
         self.Ea = 1.8e5         # J/mol
 
         # CaCO3 decomposition heat
