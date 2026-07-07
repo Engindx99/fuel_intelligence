@@ -16,38 +16,47 @@ class DehydroxylationModel(ReactionBase):
         # ================= THERMODYNAMICS =================
         self.deltaH = 1.10e6
 
-        # kg H2O released / kg hydroxyl reacted
+        # kg H2O released / kg reacted hydroxyl
         self.product_ratio = 0.139
 
         # ================= TEMPERATURE =================
         self.T_start = 723.0
         self.T_end = 973.0
 
+
     # ======================================================
     # APPLY
     # ======================================================
-    def apply(self, state):
+    def apply(self,state):
 
         rate = self.reaction_rate(
             state.Ts_calciner
         )
 
+
         reacted = self.reacted_mass(
-            state.OH_inventory,
+            state.solids.Bound_H2O,
             rate,
             state.dt,
         )
 
-        state.OH_inventory -= reacted
+
+        state.solids.Bound_H2O -= reacted
+
 
         state.gases.H2O += (
-            reacted * self.product_ratio
+            reacted
+            *
+            self.product_ratio
         )
+
 
         state.Dehydroxylation_Q_sink = np.sum(
             self.heat_sink(
-                reacted,
+                reacted
             )
         )
 
+
         return state
+

@@ -16,9 +16,34 @@ class C4AFModel(ReactionBase):
         # ================= THERMODYNAMICS =================
         self.deltaH = 3.5e5
 
+
+        # ================= STOICHIOMETRY =================
+
+        # per kg Al2O3 reacted
+
+        self.CaO_required = (
+            (4.0 * 56.08)
+            /
+            101.96
+        )
+
+        self.Fe2O3_required = (
+            159.69
+            /
+            101.96
+        )
+
+        self.C4AF_produced = (
+            485.97
+            /
+            101.96
+        )
+
+
         # ================= TEMPERATURE =================
         self.T_start = 1373.0
         self.T_end = 1723.0
+
 
     # ======================================================
     # APPLY
@@ -29,11 +54,14 @@ class C4AFModel(ReactionBase):
             state.Ts_burning
         )
 
+
+        # limiting reactant based on Al2O3
         available = np.minimum.reduce([
-            state.solids.CaO / 4.0,
             state.solids.Al2O3,
-            state.solids.Fe2O3,
+            state.solids.CaO / self.CaO_required,
+            state.solids.Fe2O3 / self.Fe2O3_required,
         ])
+
 
         reacted = self.reacted_mass(
             available,
@@ -41,18 +69,40 @@ class C4AFModel(ReactionBase):
             state.dt,
         )
 
-        state.solids.CaO -= 4.0 * reacted
 
+        # consume Al2O3
         state.solids.Al2O3 -= reacted
 
-        state.solids.Fe2O3 -= reacted
 
-        state.solids.C4AF += reacted
+        # consume CaO
+        state.solids.CaO -= (
+            reacted
+            *
+            self.CaO_required
+        )
+
+
+        # consume Fe2O3
+        state.solids.Fe2O3 -= (
+            reacted
+            *
+            self.Fe2O3_required
+        )
+
+
+        # produce C4AF
+        state.solids.C4AF += (
+            reacted
+            *
+            self.C4AF_produced
+        )
+
 
         state.C4AF_Q_sink = np.sum(
             self.heat_sink(
                 reacted,
             )
         )
+
 
         return state

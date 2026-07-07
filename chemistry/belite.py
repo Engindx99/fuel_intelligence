@@ -16,9 +16,16 @@ class BeliteModel(ReactionBase):
         # ================= THERMODYNAMICS =================
         self.deltaH = 5.0e5
 
+        # ================= STOICHIOMETRY =================
+        
+        self.CaO_required = 112.16/60.08
+
+        self.C2S_produced = 172.24/60.08
+
         # ================= TEMPERATURE =================
         self.T_start = 1123.0
         self.T_end = 1473.0
+
 
     # ======================================================
     # APPLY
@@ -29,10 +36,13 @@ class BeliteModel(ReactionBase):
             state.Ts_burning
         )
 
-        available = np.minimum(
-            state.solids.CaO / 2.0,
+
+        # limiting reactant (SiO2 basis)
+        available=np.minimum(
             state.solids.SiO2,
+            state.solids.CaO/self.CaO_required
         )
+
 
         reacted = self.reacted_mass(
             available,
@@ -40,16 +50,30 @@ class BeliteModel(ReactionBase):
             state.dt,
         )
 
-        state.solids.CaO -= 2.0 * reacted
 
+        # consume reactants
         state.solids.SiO2 -= reacted
 
-        state.solids.C2S += reacted
+        state.solids.CaO -= (
+            reacted
+            *
+            self.CaO_required
+        )
+
+
+        # produce C2S
+        state.solids.C2S += (
+            reacted
+            *
+            self.C2S_produced
+        )
+
 
         state.Belite_Q_sink = np.sum(
             self.heat_sink(
                 reacted,
             )
         )
+
 
         return state

@@ -16,9 +16,18 @@ class C3AModel(ReactionBase):
         # ================= THERMODYNAMICS =================
         self.deltaH = 3.0e5
 
+
+        # ================= STOICHIOMETRY =================
+
+        self.CaO_required=168.24/101.96
+
+        self.C3A_produced=270.16/101.96
+
+
         # ================= TEMPERATURE =================
         self.T_start = 1373.0
         self.T_end = 1723.0
+
 
     # ======================================================
     # APPLY
@@ -29,10 +38,13 @@ class C3AModel(ReactionBase):
             state.Ts_burning
         )
 
-        available = np.minimum(
-            state.solids.CaO / 3.0,
+
+        # limiting reactant
+        available=np.minimum(
             state.solids.Al2O3,
+            state.solids.CaO/self.CaO_required
         )
+
 
         reacted = self.reacted_mass(
             available,
@@ -40,16 +52,32 @@ class C3AModel(ReactionBase):
             state.dt,
         )
 
-        state.solids.CaO -= 3.0 * reacted
 
+        # consume Al2O3
         state.solids.Al2O3 -= reacted
 
-        state.solids.C3A += reacted
+
+        # consume CaO
+        state.solids.CaO -= (
+            reacted
+            *
+            self.CaO_required
+        )
+
+
+        # produce C3A
+        state.solids.C3A += (
+            reacted
+            *
+            self.C3A_produced
+        )
+
 
         state.C3A_Q_sink = np.sum(
             self.heat_sink(
                 reacted,
             )
         )
+
 
         return state

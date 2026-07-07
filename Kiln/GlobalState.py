@@ -162,40 +162,15 @@ class GlobalState:
     # ======================================================
     # GAS PHASE
     # ======================================================
-    Gas_flow: float = 0.0
     O2: float = 3.5  # %
-    CO2: float = 0.0
-    H2O: float = 0.0
     N2: float = 0.0
+    
 
     # ======================================================
     # SOLID PHASE
     # ======================================================
     m_dot_s: float = 0.0
 
-    # ======================================================
-    # REACTION STATES
-    # ======================================================
-
-    alpha_calcination: float = 0.0
-
-    CO2_generation_rate: float = 0.0
-
-    # ======================================================
-    # CHEMISTRY
-    # ======================================================
-    CaCO3: float = 0.0
-    CaO: float = 0.0
-    SiO2: float = 0.0
-    Al2O3: float = 0.0
-    Fe2O3: float = 0.0
-
-    C3S: float = 0.0
-    C2S: float = 0.0
-    C3A: float = 0.0
-    C4AF: float = 0.0
-
-    Free_Lime: float = 0.0
     
     # ======================================================
     # OLD PREHEATER STATES
@@ -353,7 +328,9 @@ class GlobalState:
     # HYDROXYL INVENTORY
     # ======================================================
 
-    OH_inventory: np.ndarray = field(init=False)
+    Bound_H2O_inventory: np.ndarray = field(
+    default_factory=lambda: np.full(20,0.020)
+    )
 
 
     # ======================================================

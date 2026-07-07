@@ -8,8 +8,8 @@ class SolidPhases:
     # ================= MOISTURE =================
     H2O: np.ndarray
 
-    # ================= CLAY =================
-    Kaolinite: np.ndarray
+    # ================= BOUND WATER =================
+    Bound_H2O: np.ndarray
 
     # ================= CARBONATES =================
     CaCO3: np.ndarray
@@ -43,8 +43,7 @@ def initialize_raw_meal(
     # ================= MOISTURE =================
     solids.H2O[:] = total_mass * composition["H2O"]
 
-    # ================= CLAY =================
-    solids.Kaolinite[:] = total_mass * composition["Kaolinite"]
+
 
     # ================= CARBONATES =================
     solids.CaCO3[:] = total_mass * composition["CaCO3"]
