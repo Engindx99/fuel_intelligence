@@ -12,6 +12,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from chemistry.dehydroxylation import DehydroxylationModel
 from physics.physics import ZONE_HT_CONFIG
 
 class Preheater:

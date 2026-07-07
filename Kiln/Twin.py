@@ -304,6 +304,7 @@ class Twin:
             # ======================================================
             total_reaction = (
                 getattr(self.state, "Drying_Q_sink", 0.0)
+                + getattr(self.state, "Dehydroxylation_Q_sink", 0.0)
                 + getattr(self.state, "Calciner_Q_sink", 0.0)
             )
 

@@ -1,91 +1,54 @@
 import numpy as np
 
+from chemistry.base import ReactionBase
 
-class DryingModel:
 
-    def __init__(self, N=5, dz=1.0):
+class DryingModel(ReactionBase):
 
-        self.N = N
-        self.dz = dz
+    def __init__(self):
 
-        # ======================================================
-        # NUMERICAL
-        # ======================================================
-        self.eps = 1e-9
+        super().__init__()
 
-        # ======================================================
-        # CONSTANTS
-        # ======================================================
-        self.R = 8.314
+        # ================= KINETICS =================
+        self.prefactor = 2.0e4
+        self.activation_energy = 5.0e4
 
-        # ======================================================
-        # DRYING KINETICS
-        # ======================================================
-        self.A = 5.0e3
-        self.Ea = 2.0e4
+        # ================= THERMODYNAMICS =================
+        self.deltaH = 2.26e6
+        self.product_ratio = 1.0
 
-        # ======================================================
-        # WATER
-        # ======================================================
-        self.deltaH_evap = 2.26e6
+        # ================= TEMPERATURE WINDOW =================
+        self.T_start = 300.0
+        self.T_end = 473.0
 
-        # ======================================================
-        # BUFFERS
-        # ======================================================
-        self._dX_dz = np.zeros(N)
 
     # ======================================================
-    # DRYING RATE
+    # APPLY
     # ======================================================
-    def rate(self, Ts, X_H2O):
+    def apply(self, state):
 
-        k = self.A * np.exp(-self.Ea / (self.R * Ts + self.eps))
-        reaction_rate = k * X_H2O
+        rate = self.reaction_rate(
+            state.Ts_calciner
+        )
 
-        return reaction_rate
+        m_dot_water = (
+            state.m_dot_s
+            * state.H2O_mass_fraction
+        )
 
-    # ======================================================
-    # SOLVE
-    # ======================================================
-    def solve(self, Ts, X_H2O, u_s, dt):
+        state.Drying_Q_sink = self.heat_sink(
+            m_dot_water,
+            rate,
+        )
 
-        dX_dz = self._dX_dz
+        state.m_dot_H2O_drying = self.product_generation(
+            m_dot_water,
+            rate,
+        )
 
-        dX_dz[1:] = (X_H2O[1:] - X_H2O[:-1]) / self.dz
-        dX_dz[0] = dX_dz[1]
+        state.X_H2O = self.update_conversion(
+            state.X_H2O,
+            rate,
+        )
 
-        reaction_rate = self.rate(Ts, X_H2O)
-
-        X_new = X_H2O + dt * (-u_s * dX_dz - reaction_rate)
-
-        np.clip(X_new, 0.0, 1.0, out=X_new)
-
-        return X_new, reaction_rate
-
-    # ======================================================
-    # DRYING HEAT SINK
-    # ======================================================
-    def heat_sink(self, state, reaction_rate):
-
-        m_dot_water = state.m_dot_s * state.Moisture_mass_fraction
-
-        r_mean = np.mean(reaction_rate)
-
-        m_dot_evaporated = m_dot_water * r_mean
-
-        Q_sink = m_dot_evaporated * self.deltaH_evap
-
-        return Q_sink
-
-    # ======================================================
-    # WATER GENERATION
-    # ======================================================
-    def gas_generation(self, state, reaction_rate):
-
-        m_dot_water = state.m_dot_s * state.Moisture_mass_fraction
-
-        r_mean = np.mean(reaction_rate)
-
-        m_dot_H2O = m_dot_water * r_mean
-
-        return m_dot_H2O
+        return state

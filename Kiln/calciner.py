@@ -13,6 +13,7 @@ from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
 from chemistry.drying import DryingModel
+from chemistry.dehydroxylation import DehydroxylationModel
 from chemistry.calcination import CalcinationModel
 from physics.physics import ZONE_HT_CONFIG
 
@@ -28,10 +29,7 @@ class Calciner:
         # ================= ZONE =================
         self.zone = "calciner"   
         
-        self.drying = DryingModel(
-            N=self.N,
-            dz=self.dz,
-        )
+        self.drying = DryingModel()
 
         self.reaction = CalcinationModel(
             N=self.N,
@@ -260,9 +258,10 @@ class Calciner:
             state,
             dt,
             reaction_sink=(
-                state.Calciner_Q_sink
-                + state.Drying_Q_sink
-            ),
+                state.Drying_Q_sink
+                + state.Dehydroxylation_Q_sink
+                + state.Calciner_Q_sink
+            )
         )
 
         # ======================================================

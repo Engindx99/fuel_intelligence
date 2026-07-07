@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 import numpy as np
 from typing import Dict
+from chemistry.phases import SolidPhases, GasPhases
 
 
 @dataclass
@@ -321,6 +322,30 @@ class GlobalState:
     # REACTIONS
     # ======================================================
     
+    def __post_init__(self):
+
+        N = self.Tg_burning.size
+
+        self.solids = SolidPhases(
+            H2O=np.zeros(N),
+            CaCO3=np.zeros(N),
+            CaO=np.zeros(N),
+            SiO2=np.zeros(N),
+            Al2O3=np.zeros(N),
+            Fe2O3=np.zeros(N),
+            C2S=np.zeros(N),
+            C3S=np.zeros(N),
+            C3A=np.zeros(N),
+            C4AF=np.zeros(N),
+        )
+
+        self.gases = GasPhases(
+            CO2=np.zeros(N),
+            H2O=np.zeros(N),
+        )
+
+
+    
     # ======================================================
     # CALCINER CONVERSION
     # ======================================================
@@ -365,6 +390,16 @@ class GlobalState:
     Drying_Q_sink: float = 0.0
 
     m_dot_H2O: float = 0.0
+    
+    # ======================================================
+    # DEHYDROXYLATION MODEL
+    # ======================================================
+    
+    X_OH: np.ndarray = field(default_factory=lambda: np.zeros(20))
+
+    Dehydroxylation_Q_sink: float = 0.0
+
+    m_dot_H2O_dehydroxylation: float = 0.0
     
 
     # ======================================================
