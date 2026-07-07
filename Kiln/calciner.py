@@ -12,6 +12,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from reactions.calcination import CalcinationModel
 
 
 class Calciner:
@@ -24,6 +25,11 @@ class Calciner:
 
         # ================= ZONE =================
         self.zone = "calciner"
+        
+        self.reaction = CalcinationModel(
+        N=self.N,
+        dz=self.dz,
+        )
 
         # ================= NUMERICAL =================
         self.eps = 1e-9
@@ -196,10 +202,11 @@ class Calciner:
         if not isinstance(state.Tg_calciner, np.ndarray):
             raise TypeError("Tg_calciner must be np.ndarray")
 
-        if state.Tg_calciner.shape != (5,):
+        if state.Tg_calciner.shape != (self.N,):
             raise ValueError(
                 f"Calciner state corrupted: {state.Tg_calciner.shape}"
             )
+
 
         # ======================================================
         # STORE OLD STATES
@@ -215,11 +222,22 @@ class Calciner:
         state.Hgas_calciner_in = state.Hgas_transition_out
         state.Hsolid_calciner_in = state.Hsolid_transition_out
 
+
         # ======================================================
         # BOUNDARY CONDITION FROM TRANSITION
         # ======================================================
         state.Tg_calciner[0] = state.Tg_transition[-1]
         state.Ts_calciner[0] = state.Ts_transition[-1]
+
+
+        # ======================================================
+        # CALCINATION REACTION
+        # ======================================================
+        self.reaction.apply(
+            state,
+            dt,
+        )
+
 
         # ======================================================
         # THERMAL STEP
@@ -230,8 +248,9 @@ class Calciner:
             state.Tw_calciner,
             state,
             dt,
-            reaction_sink=getattr(state, "Calciner_Q_sink", 0.0),
+            reaction_sink=state.Calciner_Q_sink,
         )
+
 
         # ======================================================
         # UPDATE STATES
@@ -242,27 +261,44 @@ class Calciner:
 
         state.Wall_loss_calciner = float(wall_loss)
 
+
+
         # ======================================================
         # WALL DEBUG
         # ======================================================
         if wall_debug is None:
             wall_debug = {}
 
+
         state.wall_debug_calciner = {
             "q_loss_mean": wall_debug.get("q_loss_mean", 0.0),
             "q_loss_total": wall_debug.get("wall_loss_total", 0.0),
             "A_wall": wall_debug.get("A_wall", 0.0),
             "V_cell": wall_debug.get("V_cell", 0.0),
-            "N": wall_debug.get("N", 0),
+            "N": wall_debug.get("N", self.N),
         }
 
-        state.q_loss_mean_calciner = state.wall_debug_calciner["q_loss_mean"]
-        state.A_wall_calciner = state.wall_debug_calciner["A_wall"]
-        state.V_cell_calciner = state.wall_debug_calciner["V_cell"]
-        state.N_calciner = state.wall_debug_calciner["N"]
+
+        state.q_loss_mean_calciner = (
+            state.wall_debug_calciner["q_loss_mean"]
+        )
+
+        state.A_wall_calciner = (
+            state.wall_debug_calciner["A_wall"]
+        )
+
+        state.V_cell_calciner = (
+            state.wall_debug_calciner["V_cell"]
+        )
+
+        state.N_calciner = (
+            state.wall_debug_calciner["N"]
+        )
+
+
 
         # ======================================================
-        # ENERGY OUT (ENTHALPY)
+        # ENERGY OUT
         # ======================================================
         state.Hgas_calciner_out = self.gas_enthalpy_out(
             state.Tg_calciner,
@@ -274,29 +310,39 @@ class Calciner:
             state,
         )
 
+
+
         # ======================================================
         # STORED ENERGY
         # ======================================================
         state.Calciner_gas_stored = np.sum(
             self._rho_g_Vcell_Cp_g *
-            (state.Tg_calciner - state.Tg_calciner_old) / dt
+            (state.Tg_calciner - state.Tg_calciner_old)
+            / dt
         )
+
 
         state.Calciner_solid_stored = np.sum(
             self._rho_s_Vcell_Cp_s *
-            (state.Ts_calciner - state.Ts_calciner_old) / dt
+            (state.Ts_calciner - state.Ts_calciner_old)
+            / dt
         )
+
 
         state.Calciner_wall_stored = np.sum(
             self._rho_wall_Vwall_cell_Cp *
-            (state.Tw_calciner - state.Tw_calciner_old) / dt
+            (state.Tw_calciner - state.Tw_calciner_old)
+            / dt
         )
+
 
         state.Calciner_stored_energy_change = (
             state.Calciner_gas_stored
             + state.Calciner_solid_stored
             + state.Calciner_wall_stored
         )
+
+
 
         # ======================================================
         # ENERGY BALANCE
@@ -306,9 +352,41 @@ class Calciner:
             + state.Hsolid_calciner_in
             - state.Hgas_calciner_out
             - state.Hsolid_calciner_out
-            - getattr(state, "Calciner_Q_sink", 0.0)
             - state.Calciner_stored_energy_change
             - state.Wall_loss_calciner
+        )
+        
+        # ======================================================
+        # DEBUG PRINT
+        # ======================================================
+        print("\n========== CALCINER DEBUG ==========")
+
+        print(
+            f"Tg mean : {np.mean(state.Tg_calciner):.2f} K"
+        )
+
+        print(
+            f"Ts mean : {np.mean(state.Ts_calciner):.2f} K"
+        )
+
+        print(
+            f"X CaCO3 : {np.mean(state.X_CaCO3_calciner):.4f}"
+        )
+
+        print(
+            f"X CaO   : {np.mean(state.X_CaO_calciner):.4f}"
+        )
+
+        print(
+            f"Q sink  : {state.Calciner_Q_sink:.2f} W"
+        )
+
+        print(
+            f"CO2 out : {state.m_dot_CO2_calciner:.4f} kg/s"
+        )
+
+        print(
+            f"Energy balance : {state.Calciner_energy_balance:.2f} W"
         )
 
         return state

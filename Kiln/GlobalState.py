@@ -315,6 +315,45 @@ class GlobalState:
     Ts_cooler: np.ndarray = field(default_factory=lambda: np.ones(5) * (393.15))
 
     Tw_cooler: np.ndarray = field(default_factory=lambda: np.ones(5) * (353.15))
+    
+    
+    # ======================================================
+    # REACTIONS
+    # ======================================================
+    
+    # ======================================================
+    # CALCINER CONVERSION
+    # ======================================================
+
+    X_CaCO3_calciner: np.ndarray = field(
+        default_factory=lambda: np.ones(5)
+    )
+
+    X_CaO_calciner: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    # ======================================================
+    # RAW MEAL COMPOSITION
+    # ======================================================
+
+    CaCO3_mass_fraction: float = 0.80
+
+    SiO2_mass_fraction: float = 0.13
+
+    Al2O3_mass_fraction: float = 0.04
+
+    Fe2O3_mass_fraction: float = 0.03
+
+
+    # ======================================================
+    # FEED CONVERSION
+    # ======================================================
+
+    X_CaCO3_feed: float = 1.0
+    
+    
 
     # ======================================================
     # API
