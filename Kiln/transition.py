@@ -12,6 +12,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from physics.physics import ZONE_HT_CONFIG
 
 class Transition:
 
@@ -74,9 +75,11 @@ class Transition:
         self.u_s = 0.0
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 1300.0
-        self.hv_gw = 250.0
-        self.hv_ws = 300.0
+        cfg = ZONE_HT_CONFIG[self.zone]
+
+        self.hv_gs = cfg["hv_gs"]
+        self.hv_gw = cfg["hv_gw"]
+        self.hv_ws = cfg["hv_ws"]
 
         # ================= NUMERICAL =================
         self.eps = 1e-9

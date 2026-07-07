@@ -12,6 +12,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from physics.physics import ZONE_HT_CONFIG
 
 class Preheater:
 
@@ -91,9 +92,11 @@ class Preheater:
         self.fill_fraction = 0.10
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 600.0
-        self.hv_gw = 150.0
-        self.hv_ws = 200.0
+        cfg = ZONE_HT_CONFIG[self.zone]
+
+        self.hv_gs = cfg["hv_gs"]
+        self.hv_gw = cfg["hv_gw"]
+        self.hv_ws = cfg["hv_ws"]
 
         # ================= BUFFERS =================
         self._dTg_dz = np.zeros(N)
@@ -257,6 +260,33 @@ class Preheater:
         state.Tw_preheater = Tw
 
         state.Wall_loss_preheater = float(wall_loss)
+        
+        
+        # ======================================================
+        # STORED ENERGY
+        # ======================================================
+
+        state.Preheater_gas_stored = np.sum(
+            self._rho_g_Vcell_Cp_g *
+            (state.Tg_preheater - state.Tg_preheater_old) / dt
+        )
+
+        state.Preheater_solid_stored = np.sum(
+            self._rho_s_Vcell_Cp_s *
+            (state.Ts_preheater - state.Ts_preheater_old) / dt
+        )
+
+        state.Preheater_wall_stored = np.sum(
+            self._rho_wall_Vwall_cell_Cp *
+            (state.Tw_preheater - state.Tw_preheater_old) / dt
+        )
+
+
+        state.Preheater_stored_energy_change = (
+            state.Preheater_gas_stored
+            + state.Preheater_solid_stored
+            + state.Preheater_wall_stored
+        )
 
         # ======================================================
         # ENERGY OUT

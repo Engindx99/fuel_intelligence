@@ -12,7 +12,9 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
-from reactions.calcination import CalcinationModel
+from chemistry.drying import DryingModel
+from chemistry.calcination import CalcinationModel
+from physics.physics import ZONE_HT_CONFIG
 
 
 class Calciner:
@@ -24,11 +26,16 @@ class Calciner:
         self.dz = L / N
 
         # ================= ZONE =================
-        self.zone = "calciner"
+        self.zone = "calciner"   
         
+        self.drying = DryingModel(
+            N=self.N,
+            dz=self.dz,
+        )
+
         self.reaction = CalcinationModel(
-        N=self.N,
-        dz=self.dz,
+            N=self.N,
+            dz=self.dz,
         )
 
         # ================= NUMERICAL =================
@@ -85,9 +92,11 @@ class Calciner:
         self.u_s = 0.0
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 1100.0
-        self.hv_gw = 250.0
-        self.hv_ws = 300.0
+        cfg = ZONE_HT_CONFIG[self.zone]
+
+        self.hv_gs = cfg["hv_gs"]
+        self.hv_gw = cfg["hv_gw"]
+        self.hv_ws = cfg["hv_ws"]
 
         # ================= BUFFERS =================
         self._dTg_dz = np.zeros(N)
@@ -166,11 +175,7 @@ class Calciner:
             effective= 0.1,
         )
         
-        print(f"C_g = {np.sum(self._rho_g_Vcell_Cp_g):.3e}")
 
-        print(f"effective_C_s = {np.sum(effective_C_s):.3e}")
-
-        print(f"C_w = {np.sum(self._rho_wall_Vwall_cell_Cp):.3e}")
 
         # ======================================================
         # UPDATE
@@ -254,9 +259,11 @@ class Calciner:
             state.Tw_calciner,
             state,
             dt,
-            reaction_sink=state.Calciner_Q_sink,
+            reaction_sink=(
+                state.Calciner_Q_sink
+                + state.Drying_Q_sink
+            ),
         )
-
 
         # ======================================================
         # UPDATE STATES
@@ -375,55 +382,6 @@ class Calciner:
                 self.eps
             )
         )
-        
-        # ======================================================
-        # DEBUG PRINT
-        # ======================================================
-        print("\n========== CALCINER DEBUG ==========")
-        
-        print(
-            f"Relative balance : {state.Calciner_energy_balance_relative:.6f}"
-        )
-
-        print(
-            f"Tg mean : {np.mean(state.Tg_calciner):.2f} K"
-        )
-
-        print(
-            f"Ts mean : {np.mean(state.Ts_calciner):.2f} K"
-        )
-
-        print(
-            f"X CaCO3 : {np.mean(state.X_CaCO3_calciner):.4f}"
-        )
-
-        print(
-            f"X CaO   : {np.mean(state.X_CaO_calciner):.4f}"
-        )
-
-        print(
-            f"Q sink  : {state.Calciner_Q_sink:.2f} W"
-        )
-
-        print(
-            f"CO2 out : {state.m_dot_CO2_calciner:.4f} kg/s"
-        )
-
-        print(
-            f"Energy balance : {state.Calciner_energy_balance:.2f} W"
-        )
-        
-        print(f"H_in      : {state.Hgas_calciner_in + state.Hsolid_calciner_in:.2f}")
-        print(f"H_out     : {state.Hgas_calciner_out + state.Hsolid_calciner_out:.2f}")
-        print(f"Stored    : {state.Calciner_stored_energy_change:.2f}")
-        print(f"Wall loss : {state.Wall_loss_calciner:.2f}")
-        print(f"Reaction  : {state.Calciner_Q_sink:.2f}")
-    
-        
-        print(f"m_dot_g : {state.m_dot_g:.4f} kg/s")
-        print(f"m_dot_s : {state.m_dot_s:.4f} kg/s")
-        print(f"Cp_g : {self.Cp_g:.2f} J/kgK")
-        print(f"Cp_s : {self.Cp_s:.2f} J/kgK")
 
         return state
 

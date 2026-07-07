@@ -265,6 +265,7 @@ class Twin:
 
             fuel_rate_total = inputs["Fuel_rate_total"]
 
+
             # ======================================================
             # TOTAL LOSSES
             # ======================================================
@@ -275,6 +276,7 @@ class Twin:
                 + self.state.Wall_loss_preheater
                 + self.state.Wall_loss_cooler
             )
+
 
             # ======================================================
             # TOTAL STORED ENERGY
@@ -287,6 +289,7 @@ class Twin:
                 + self.state.Cooler_stored_energy_change
             )
 
+
             # ======================================================
             # TOTAL EXHAUST ENTHALPY
             # ======================================================
@@ -295,6 +298,16 @@ class Twin:
                 + self.state.Hsolid_cooler_out
             )
 
+
+            # ======================================================
+            # TOTAL REACTION HEAT SINK
+            # ======================================================
+            total_reaction = (
+                getattr(self.state, "Drying_Q_sink", 0.0)
+                + getattr(self.state, "Calciner_Q_sink", 0.0)
+            )
+
+
             # ======================================================
             # GLOBAL ENERGY RESIDUAL
             # ======================================================
@@ -302,10 +315,11 @@ class Twin:
                 self.state.Q_burning
                 - total_exhaust
                 - total_wall_loss
-                - total_stored
-                - getattr(self.state, "Calciner_Q_sink", 0.0)
+                - total_reaction
+                
             )
-            
+
+
             # ======================================================
             # ZONE MEAN TEMPERATURES
             # ======================================================
@@ -347,8 +361,72 @@ class Twin:
                 f"Tw_mean: {np.mean(self.state.Tw_cooler):.2f} K"
             )
 
+
+            # ======================================================
+            # GLOBAL ENERGY
+            # ======================================================
+
+            print("\n========== GLOBAL ENERGY ==========")
+
+            print(
+                f"Fuel       : {self.state.Q_burning:.2f} W"
+            )
+
+            print(
+                f"Exhaust    : {total_exhaust:.2f} W"
+            )
+
+            print(
+                f"Wall loss  : {total_wall_loss:.2f} W"
+            )
+
+            print(
+                f"Reaction   : {total_reaction:.2f} W"
+            )
+
+            print(
+                f"Stored     : {total_stored:.2f} W"
+            )
+
+            print(
+                f"Residual   : {global_residual:.2f} W"
+            )
+
+
+            relative = global_residual / (
+                abs(self.state.Q_burning) + 1e-9
+            )
+
+            print(
+                f"Relative   : {relative:.6f}"
+            )
+            
+            print("\n========== STORED BREAKDOWN ==========")
+
+            print(
+                f"Burning stored    : {self.state.Burning_stored_energy_change:.2f} W"
+            )
+
+            print(
+                f"Transition stored : {self.state.Transition_stored_energy_change:.2f} W"
+            )
+
+            print(
+                f"Calciner stored   : {self.state.Calciner_stored_energy_change:.2f} W"
+            )
+
+            print(
+                f"Preheater stored  : {self.state.Preheater_stored_energy_change:.2f} W"
+            )
+
+            print(
+                f"Cooler stored     : {self.state.Cooler_stored_energy_change:.2f} W"
+            )
+
+
             self._next_log_time += self.log_interval
-  
+
+
         return self.state
 
     # --------------------------------------------------

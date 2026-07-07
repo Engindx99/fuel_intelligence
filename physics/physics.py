@@ -63,7 +63,7 @@ def combustion_efficiency(O2, O2_opt, O2_sigma2):
     )
     
 def fuel_heat_release(
-    fuel_rate_total,
+    fuel_rate_total,     # kg/s
     O2,
     O2_opt,
     O2_sigma2,
@@ -86,7 +86,10 @@ def fuel_heat_release(
     h /= norm
 
     # ================= FUEL FLOW =================
-    fuel_rate_kg_s = fuel_rate_total * 1000.0 / 3600.0
+    Q_petcoke = fuel_rate_total * p * LHV["petcoke"]
+    Q_coal    = fuel_rate_total * c * LHV["coal"]
+    Q_RDF     = fuel_rate_total * r * LHV["rdf"]
+    Q_H2      = fuel_rate_total * h * LHV["h2"]
 
     # ================= COMBUSTION =================
     eta = combustion_efficiency(
@@ -95,10 +98,6 @@ def fuel_heat_release(
         O2_sigma2,
     )
 
-    Q_petcoke = fuel_rate_kg_s * p * LHV["petcoke"]
-    Q_coal    = fuel_rate_kg_s * c * LHV["coal"]
-    Q_RDF     = fuel_rate_kg_s * r * LHV["rdf"]
-    Q_H2      = fuel_rate_kg_s * h * LHV["h2"]
 
     Q_burning = eta * (
         Q_petcoke
@@ -133,26 +132,54 @@ ZONE_RAD_CONFIG = {
     },
     "transition": {
         "eps": 0.85,
-        "k_eff": 0.20,
+        "k_eff": 0.35,
     },
     "calciner": {
         "eps": 0.80,
-        "k_eff": 0.18,
+        "k_eff": 0.30,
     },
     "preheater": {
         "eps": 0.75,
-        "k_eff": 0.15,
+        "k_eff": 0.22,
     },
     "cooler": {
         "eps": 0.60,
-        "k_eff": 0.10,
+        "k_eff": 0.15,
+    },
+}
+
+ZONE_HT_CONFIG = {
+    "burning": {
+        "hv_gs": 700.0,
+        "hv_gw": 180.0,
+        "hv_ws": 220.0,
+    },
+    "transition": {
+        "hv_gs": 450.0,
+        "hv_gw": 150.0,
+        "hv_ws": 180.0,
+    },
+    "calciner": {
+        "hv_gs": 350.0,
+        "hv_gw": 120.0,
+        "hv_ws": 150.0,
+    },
+    "preheater": {
+        "hv_gs": 220.0,
+        "hv_gw": 90.0,
+        "hv_ws": 110.0,
+    },
+    "cooler": {
+        "hv_gs": 180.0,
+        "hv_gw": 70.0,
+        "hv_ws": 90.0,
     },
 }
 
 
 sigma = 5.670374419e-8
 
-def radiation(T1, T2, zone, area = 1.0):
+def radiation(T1, T2, zone, area=1.0):
     """ Stefan–Boltzmann radiation model with zone-dependent tuning."""
     
 
@@ -182,7 +209,7 @@ def heat_transfer(Tg, Ts, Tw, hv_gs, hv_gw, hv_ws, a_gs, a_gw, a_ws, zone=None):
     # ======================================================
     q_gs_rad = radiation(Tg, Ts, zone, area=a_gs)
     q_gw_rad = radiation(Tg, Tw, zone, area=a_gw)
-    q_ws_rad = radiation(Tw, Ts, zone, area=a_ws)
+    q_ws_rad = radiation(Ts, Tw, zone, area=a_ws)
 
     # ======================================================
     # TOTAL HEAT TRANSFER

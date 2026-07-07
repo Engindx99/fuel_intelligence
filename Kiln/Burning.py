@@ -18,6 +18,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from physics.physics import ZONE_HT_CONFIG
 
 
 def load_cfg(path):
@@ -114,9 +115,11 @@ class Burning:
         self.u_g = 0.0
 
         # ================= HEAT TRANSFER =================
-        self.hv_gs = 1800.0
-        self.hv_gw = 350.0
-        self.hv_ws = 400.0
+        cfg = ZONE_HT_CONFIG[self.zone]
+
+        self.hv_gs = cfg["hv_gs"]
+        self.hv_gw = cfg["hv_gw"]
+        self.hv_ws = cfg["hv_ws"]
 
         #  FIX: operational full control
         self.h_ext = op.get("h_ext", 12.0)

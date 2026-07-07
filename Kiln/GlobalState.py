@@ -354,6 +354,18 @@ class GlobalState:
     X_CaCO3_feed: float = 1.0
     
     
+    # ======================================================
+    # DRY MODEL
+    # ======================================================
+    
+    Moisture_mass_fraction: float = 0.05
+
+    X_H2O: np.ndarray = field(default_factory=lambda: np.ones(5))
+    
+    Drying_Q_sink: float = 0.0
+
+    m_dot_H2O: float = 0.0
+    
 
     # ======================================================
     # API
