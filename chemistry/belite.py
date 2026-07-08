@@ -10,7 +10,7 @@ class BeliteModel(ReactionBase):
         super().__init__()
 
         # ================= KINETICS =================
-        self.prefactor = 2.0e3
+        self.prefactor = 1.0e3
         self.activation_energy = 2.0e5
 
         # ================= THERMODYNAMICS =================

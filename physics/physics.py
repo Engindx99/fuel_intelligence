@@ -126,25 +126,30 @@ and other complex heat transfer mechanisms.
 """
 
 ZONE_RAD_CONFIG = {
+
     "burning": {
-        "eps": 0.90,
-        "k_eff": 0.70,
+        "eps":0.92,
+        "k_eff":1.00,
     },
-    "transition": {
-        "eps": 0.85,
-        "k_eff": 0.35,
+
+    "transition":{
+        "eps":0.88,
+        "k_eff":0.55,
     },
-    "calciner": {
-        "eps": 0.80,
-        "k_eff": 0.30,
+
+    "calciner":{
+        "eps":0.82,
+        "k_eff":0.35,
     },
-    "preheater": {
-        "eps": 0.75,
-        "k_eff": 0.22,
+
+    "preheater":{
+        "eps":0.70,
+        "k_eff":0.15,
     },
-    "cooler": {
-        "eps": 0.60,
-        "k_eff": 0.15,
+
+    "cooler":{
+        "eps":0.55,
+        "k_eff":0.05,
     },
 }
 

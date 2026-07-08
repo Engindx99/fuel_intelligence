@@ -17,12 +17,12 @@ cooler:
 
 simulation:
   dt: 0.05
-  total_hours: 4.0
+  total_hours: 1.0
   chunk_hours: 1.0
 
 
 fuel:
-  Fuel_rate_total: 28.4   # kg/s
+  Fuel_rate_total: 24.8   # kg/s
   Petcoke_ratio: 0.54
   Coal_ratio: 0.30
   RDF_ratio: 0.15

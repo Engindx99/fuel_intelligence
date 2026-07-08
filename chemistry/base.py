@@ -60,14 +60,15 @@ class ReactionBase:
 
         reacted = (
             available
-            * rate
-            * dt
+            *
+            (
+                1.0
+                -
+                np.exp(-rate * dt)
+            )
         )
 
-        return np.minimum(
-            reacted,
-            available,
-        )
+        return reacted
 
     # ======================================================
     # REACTION HEAT

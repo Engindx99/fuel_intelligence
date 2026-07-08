@@ -10,7 +10,7 @@ class DehydroxylationModel(ReactionBase):
         super().__init__()
 
         # ================= KINETICS =================
-        self.prefactor = 5.0e3
+        self.prefactor = 1.0e3
         self.activation_energy = 1.20e5
 
         # ================= THERMODYNAMICS =================
@@ -29,9 +29,7 @@ class DehydroxylationModel(ReactionBase):
     # ======================================================
     def apply(self,state):
 
-        rate = self.reaction_rate(
-            state.Ts_calciner
-        )
+        rate = self.reaction_rate(state.Ts_preheater)
 
 
         reacted = self.reacted_mass(

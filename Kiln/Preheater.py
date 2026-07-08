@@ -12,8 +12,9 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
-from chemistry.dehydroxylation import DehydroxylationModel
 from physics.physics import ZONE_HT_CONFIG
+from chemistry.reactions import ChemistryModel
+
 
 class Preheater:
 
@@ -25,6 +26,8 @@ class Preheater:
 
         # ================= ZONE =================
         self.zone = "preheater"
+        
+        self.chemistry = ChemistryModel()
 
         # ================= NUMERICAL =================
         self.eps = 1e-9
@@ -119,7 +122,7 @@ class Preheater:
         )
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, state, dt):
+    def thermal_step(self, Tg, Ts, Tw, state, dt, reaction_sink=0.0):
         
         # ======================================================
         # INLET BOUNDARY
@@ -140,9 +143,14 @@ class Preheater:
         dTs_dz[0] = dTs_dz[1]
 
         # ======================================================
-        # NO REACTION
+        # REACTION SOURCE / SINK
         # ======================================================
-        q_vol = 0.0
+
+        q_vol = (
+            -reaction_sink
+            /
+            (self.V_total + self.eps)
+        )
 
         # ======================================================
         # HEAT TRANSFER
@@ -244,6 +252,14 @@ class Preheater:
         # ======================================================
         state.Tg_preheater[0] = state.Tg_calciner[-1]
         state.Ts_preheater[0] = state.Ts_calciner[-1]
+        
+        # ======================================================
+        # PREHEATER CHEMISTRY
+        # ======================================================
+
+        state = self.chemistry.apply_preheater(
+            state
+        )
 
         # ======================================================
         # THERMAL STEP
@@ -254,6 +270,7 @@ class Preheater:
             state.Tw_preheater,
             state,
             dt,
+            reaction_sink=state.Preheater_Q_sink,
         )
 
         state.Tg_preheater = Tg

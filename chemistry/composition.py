@@ -5,17 +5,17 @@
 
 RAW_MEAL_COMPOSITION = {
 
-    "H2O": 0.00,
+    "H2O": 5000,
 
-    "Bound_H2O": 0.020,
+    "Bound_H2O": 2000,
 
-    "CaCO3": 0.780,
+    "CaCO3": 73000, #kg
 
     "CaO": 0.000,
 
-    "SiO2": 0.130,
-    "Al2O3": 0.040,
-    "Fe2O3": 0.030,
+    "SiO2": 13000,
+    "Al2O3": 4000,
+    "Fe2O3": 3000,
 
     "C2S":0.0,
     "C3S":0.0,
@@ -30,7 +30,7 @@ RAW_MEAL_COMPOSITION = {
 
 total = sum(RAW_MEAL_COMPOSITION.values())
 
-if abs(total - 1.0) > 1e-6:
+if abs(total - 100000.0) > 1e-6:
     raise ValueError(
         f"Raw meal composition must sum to 1.0 (current = {total:.6f})"
     )

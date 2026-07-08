@@ -19,6 +19,7 @@ from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
 from physics.physics import ZONE_HT_CONFIG
+from chemistry.reactions import ChemistryModel
 
 
 def load_cfg(path):
@@ -27,135 +28,71 @@ def load_cfg(path):
 
 
 class Burning:
-
-    def __init__(self, N=5, L=60.0):
-
-        # ================= LOAD CFG =================
+    def __init__(self, N=5, L=60.0, chemistry=None):
         cfg = load_cfg("configs/twin_cfg.yaml")
-
-        plant = cfg.get("plant", {})
-        motion = cfg.get("motion", {})
-        fuel = cfg.get("fuel", {})
-        op = cfg.get("operational", {})
-
-        # ================= ZONE =================
+        plant, motion, op = cfg.get("plant", {}), cfg.get("motion", {}), cfg.get("operational", {})
+        
         self.zone = "burning"
-
-        # ================= NUMERICAL =================
+        self.chemistry = chemistry or ChemistryModel()
         self.eps = 1e-9
-
-        # ================= GEOMETRY =================
-        self.N = plant.get("N", N)
-        self.L = plant.get("length", L)
-        self.dz = self.L / self.N
-
-        self.D = 4.2
-
-        (
-            self.A_cross,
-            self.V_total,
-            self.V_cell,
-        ) = kiln_geometry(
-            D=self.D,
-            L=self.L,
-            N=self.N,
-        )
-
-        # ================= INTERFACIAL AREA =================
-        self.epsilon_bed = 0.35
-        self.k_interfacial = 1.0
-
-        (
-            self.a_gs,
-            self.a_ws,
-        ) = interfacial_areas(
-            D=self.D,
-            epsilon_bed=self.epsilon_bed,
-            k_interfacial=self.k_interfacial,
-        )
-
-        # ================= WALL GEOMETRY =================
-        (
-            self.wall_perimeter,
-            self.A_wall_total,
-            self.A_wall_cell,
-            self.a_gw,
-            self.V_wall,
-        ) = wall_geometry(
-            D=self.D,
-            L=self.L,
-            N=self.N,
-            V_cell=self.V_cell,
-        )
-
-        # ================= REFRACTORY =================
-        self.refractory_thickness = op.get("refractory_thickness", 0.20)
-        self.refractory_conductivity = 1.8
-
-        # ================= MATERIAL PROPERTIES =================
-        self.rho_g = 0.30
-        self.rho_s = 1100.0
-        self.rho_wall = 3000.0
-
-        self.Cp_g = 1150.0
-        self.Cp_s = 850.0
-        self.Cp_wall = 1000.0
-
-        # ================= KILN MOTION =================
+        
+        # Geometry
+        self.N, self.L = plant.get("N", N), plant.get("length", L)
+        
+        self.dz, self.D = self.L / self.N, 4.2
+        
+        self.A_cross, self.V_total, self.V_cell = kiln_geometry(D=self.D, L=self.L, N=self.N)
+        
+        # Interfacial & Wall
+        self.epsilon_bed, self.k_interfacial = 0.35, 1.0
+        
+        self.a_gs, self.a_ws = interfacial_areas(D=self.D, epsilon_bed=self.epsilon_bed, k_interfacial=self.k_interfacial)
+        
+        (self.wall_perimeter, self.A_wall_total, self.A_wall_cell,
+         
+         self.a_gw, self.V_wall) = wall_geometry(D=self.D, L=self.L, N=self.N, V_cell=self.V_cell)
+        
+        # Refractory, Props & Motion
+        self.refractory_thickness, self.refractory_conductivity = op.get("refractory_thickness", 0.20), 1.8
+        
+        self.rho_g, self.rho_s, self.rho_wall = 0.30, 1100.0, 3000.0
+        
+        self.Cp_g, self.Cp_s, self.Cp_wall = 1150.0, 850.0, 1000.0
+        
+        
         self.rpm_default = motion.get("rpm_default", 1.5)
+        
         self.rpm_min = motion.get("rpm_min", 1.0)
+        
         self.rpm_max = motion.get("rpm_max", 3.0)
-
+        
         self.slope_deg = motion.get("inclination_deg", 3.0)
-
-        #  FIX: artık operational’dan geliyor
+        
         self.fill_fraction = op.get("kiln_load", 0.10)
-
-        self.u_s = 0.0
-        self.u_g = 0.0
-
-        # ================= HEAT TRANSFER =================
-        cfg = ZONE_HT_CONFIG[self.zone]
-
-        self.hv_gs = cfg["hv_gs"]
-        self.hv_gw = cfg["hv_gw"]
-        self.hv_ws = cfg["hv_ws"]
-
-        #  FIX: operational full control
-        self.h_ext = op.get("h_ext", 12.0)
-        self.T_ref = op.get("T_ref", 298.15)
-        self.T_amb = op.get("T_amb", 300.0)
-
-        # ================= FUEL (SI CLEAN) =================
-        self.LHV = {
-            "petcoke": 32e6,
-            "coal": 18e6,
-            "rdf": 20e6,
-            "h2": 120e6,
-        }
-
-        self.O2_opt = 3.5
-        self.O2_sigma2 = 25.0
-
-        # ================= BUFFERS =================
-        self._dTg_dz = np.zeros(self.N)
-        self._dTs_dz = np.zeros(self.N)
-
-        # ================= CACHE CONSTANTS =================
+        
+        self.u_s = self.u_g = 0.0
+        
+        # Heat Transfer & Fuel
+        ht = ZONE_HT_CONFIG[self.zone]
+        self.hv_gs, self.hv_gw, self.hv_ws = ht["hv_gs"], ht["hv_gw"], ht["hv_ws"]
+        
+        self.h_ext, self.T_ref, self.T_amb = op.get("h_ext", 12.0), op.get("T_ref", 298.15), op.get("T_amb", 300.0)
+        
+        self.LHV = {"petcoke": 32e6, "coal": 18e6, "rdf": 20e6, "h2": 120e6}
+        self.O2_opt, self.O2_sigma2 = 3.5, 25.0
+        
+        # Buffers & Cache
+        self._dTg_dz, self._dTs_dz = np.zeros(self.N), np.zeros(self.N)
         self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
         self._rho_s_Vcell_Cp_s = self.rho_s * self.V_cell * self.Cp_s
-
         self.V_wall_cell = self.V_wall / self.N
-
-        self._rho_wall_Vwall_cell_Cp = (
-            self.rho_wall * self.V_wall_cell * self.Cp_wall
-        )
-
+        self._rho_wall_Vwall_cell_Cp = self.rho_wall * self.V_wall_cell * self.Cp_wall
+        
     # ========================================================
     def thermal_step(self, Tg, Ts, Tw, state, inputs, dt, u_g, u_s):
 
         # ======================================================
-        # GRADIENTS (NO ALLOC)
+        # GRADIENTS
         # ======================================================
         dTg_dz = self._dTg_dz
         dTs_dz = self._dTs_dz
@@ -295,6 +232,9 @@ class Burning:
         state.Ts_burning_old = state.Ts_burning.copy()
         state.Tw_burning_old = state.Tw_burning.copy()
 
+        state.Hg_burning_old = state.Hg_burning.copy()
+        state.Hs_burning_old = state.Hs_burning.copy()
+
         # ======================================================
         # SOLID MOTION
         # ======================================================
@@ -389,6 +329,35 @@ class Burning:
         state.Tg_burning = Tg
         state.Ts_burning = Ts
         state.Tw_burning = Tw
+        
+        # ======================================================
+        # BURNING CHEMISTRY
+        # ======================================================
+        
+        state = self.chemistry.apply_burning(state)
+        
+        
+        # ======================================================
+        # UPDATE ENTHALPY STATES
+        # ======================================================
+
+        state.Hg_burning = (
+            state.m_dot_g
+            * self.Cp_g
+            * (state.Tg_burning - self.T_ref)
+        )
+
+        state.Hs_burning = (
+            state.m_dot_s
+            * self.Cp_s
+            * (state.Ts_burning - self.T_ref)
+        )
+        
+        #print("\n========== BURNING ENTHALPY ==========")
+        #print(f"Q_burning       : {state.Q_burning:.2f} W")
+        #print(f"Hg_total        : {np.sum(state.Hg_burning):.2f} W")
+        #print(f"Hs_total        : {np.sum(state.Hs_burning):.2f} W")
+        
 
         state.Q_petcoke = Q_petcoke
         state.Q_coal = Q_coal
@@ -420,26 +389,28 @@ class Burning:
         # ======================================================
         # ENERGY OUT
         # ======================================================
+
         state.Hgas_burning_out = self.gas_enthalpy_out(
-            state.Tg_burning,
-            state,
+            state.Hg_burning
         )
 
         state.Hsolid_burning_out = self.solid_enthalpy_out(
-            state.Ts_burning,
-            state,
+            state.Hs_burning
         )
-    
+        #print(f"Hgas_out        : {state.Hgas_burning_out:.2f} W")
+        #print(f"Hsolid_out      : {state.Hsolid_burning_out:.2f} W")
 
         # ======================================================
         # STORED ENERGY
         # ======================================================
         state.Burning_gas_stored = np.sum(
-            self._rho_g_Vcell_Cp_g * (state.Tg_burning - state.Tg_burning_old) / dt
+            (state.Hg_burning - state.Hg_burning_old)
+            / dt
         )
 
         state.Burning_solid_stored = np.sum(
-            self._rho_s_Vcell_Cp_s * (state.Ts_burning - state.Ts_burning_old) / dt
+            (state.Hs_burning - state.Hs_burning_old)
+            / dt
         )
 
         state.Burning_wall_stored = np.sum(
@@ -457,6 +428,8 @@ class Burning:
         # ======================================================
         state.Burning_energy_balance = (
             state.Q_burning
+            - state.Hgas_burning_out
+            - state.Hsolid_burning_out
             - state.Burning_stored_energy_change
             - state.Wall_loss_burning
         )
@@ -467,26 +440,15 @@ class Burning:
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE
     # ======================================================
-    def gas_enthalpy_out(self, Tg, state):
+    def gas_enthalpy_out(self, Hg):
 
-        H_gas_out = (
-            state.m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_ref)
-        )
+        return Hg[-1]
 
-        return H_gas_out
 
 
     # ======================================================
     # SOLID ENTHALPY TO NEXT ZONE
     # ======================================================
-    def solid_enthalpy_out(self, Ts, state):
+    def solid_enthalpy_out(self, Hs):
 
-        H_solid_out = (
-            state.m_dot_s
-            * self.Cp_s
-            * (Ts[-1] - self.T_ref)
-        )
-
-        return H_solid_out
+        return Hs[-1]

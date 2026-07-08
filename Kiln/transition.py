@@ -179,45 +179,64 @@ class Transition:
     def apply(self, state, dt):
 
         # ======================================================
-        # STATE CHECK
+        # STATE INTEGRITY CHECK
         # ======================================================
         if not isinstance(state.Tg_transition, np.ndarray):
             raise TypeError("Tg_transition must be np.ndarray")
 
         if state.Tg_transition.shape != (5,):
-            raise ValueError("Transition state corrupted")
+            raise ValueError(
+                f"Transition shape corrupted: {state.Tg_transition.shape}"
+            )
 
         # ======================================================
-        # STORE OLD STATE
+        # STORE OLD STATES
         # ======================================================
         state.Tg_transition_old = state.Tg_transition.copy()
         state.Ts_transition_old = state.Ts_transition.copy()
         state.Tw_transition_old = state.Tw_transition.copy()
 
+        state.Hg_transition_old = state.Hg_transition.copy()
+        state.Hs_transition_old = state.Hs_transition.copy()
+
         # ======================================================
-        # FLOW INHERITANCE
+        # FLOW VARIABLES (FROM BURNING)
         # ======================================================
         state.u_g = getattr(state, "u_g", self.u_g)
         state.u_s = getattr(state, "u_s", self.u_s)
+
         state.m_dot_g = getattr(state, "m_dot_g", 0.0)
         state.m_dot_s = getattr(state, "m_dot_s", 0.0)
 
         # ======================================================
-        # ENERGY IN FROM PREVIOUS ZONE
+        # INLET ENTHALPY FROM BURNING
         # ======================================================
         state.Hgas_transition_in = state.Hgas_burning_out
         state.Hsolid_transition_in = state.Hsolid_burning_out
 
-        # ======================================================
-        # BOUNDARY FROM PREVIOUS ZONE
-        # ======================================================
-        state.Tg_transition[0] = state.Tg_burning[-1]
-        state.Ts_transition[0] = state.Ts_burning[-1]
+        Tg_in = self.gas_inlet_temperature_from_enthalpy(
+            state.Hgas_transition_in,
+            state,
+        )
+
+        Ts_in = self.solid_inlet_temperature_from_enthalpy(
+            state.Hsolid_transition_in,
+            state,
+        )
+
+        state.Tg_transition[0] = state.Tg_transition_old[0] = Tg_in
+        state.Ts_transition[0] = state.Ts_transition_old[0] = Ts_in
 
         # ======================================================
         # THERMAL STEP
         # ======================================================
-        Tg, Ts, Tw, wall_loss, wall_debug = self.thermal_step(
+        (
+            Tg,
+            Ts,
+            Tw,
+            wall_loss,
+            wall_debug,
+        ) = self.thermal_step(
             state.Tg_transition,
             state.Ts_transition,
             state.Tw_transition,
@@ -231,6 +250,27 @@ class Transition:
         state.Tg_transition = Tg
         state.Ts_transition = Ts
         state.Tw_transition = Tw
+
+        # ======================================================
+        # TRANSITION CHEMISTRY
+        # ======================================================
+        # Eğer transition reaksiyonları eklenecekse burada çalışacak.
+        # state = self.chemistry.apply_transition(state)
+
+        # ======================================================
+        # UPDATE ENTHALPY STATES
+        # ======================================================
+        state.Hg_transition = (
+            state.m_dot_g
+            * self.Cp_g
+            * (state.Tg_transition - self.T_ref)
+        )
+
+        state.Hs_transition = (
+            state.m_dot_s
+            * self.Cp_s
+            * (state.Ts_transition - self.T_ref)
+        )
 
         # ======================================================
         # WALL LOSS
@@ -251,36 +291,43 @@ class Transition:
             "N": wall_debug.get("N", 0),
         }
 
-        state.q_loss_mean_transition = state.wall_debug_transition["q_loss_mean"]
-        state.A_wall_transition = state.wall_debug_transition["A_wall"]
-        state.V_cell_transition = state.wall_debug_transition["V_cell"]
-        state.N_transition = state.wall_debug_transition["N"]
+        state.q_loss_mean_transition = (
+            state.wall_debug_transition["q_loss_mean"]
+        )
+
+        state.A_wall_transition = (
+            state.wall_debug_transition["A_wall"]
+        )
+
+        state.V_cell_transition = (
+            state.wall_debug_transition["V_cell"]
+        )
+
+        state.N_transition = (
+            state.wall_debug_transition["N"]
+        )
 
         # ======================================================
-        # ENTHALPY OUT
+        # ENERGY OUT
         # ======================================================
         state.Hgas_transition_out = self.gas_enthalpy_out(
-            state.Tg_transition,
-            state,
+            state.Hg_transition
         )
 
         state.Hsolid_transition_out = self.solid_enthalpy_out(
-            state.Ts_transition,
-            state,
+            state.Hs_transition
         )
 
         # ======================================================
         # STORED ENERGY
         # ======================================================
         state.Transition_gas_stored = np.sum(
-            self._rho_g_Vcell_Cp_g
-            * (state.Tg_transition - state.Tg_transition_old)
+            (state.Hg_transition - state.Hg_transition_old)
             / dt
         )
 
         state.Transition_solid_stored = np.sum(
-            self._rho_s_Vcell_Cp_s
-            * (state.Ts_transition - state.Ts_transition_old)
+            (state.Hs_transition - state.Hs_transition_old)
             / dt
         )
 
@@ -309,31 +356,33 @@ class Transition:
         )
 
         return state
+    
+    # ======================================================
+    # TEMPERATURE FROM INLET ENTHALPY
+    # ======================================================
+    def gas_inlet_temperature_from_enthalpy(self, H, state):
+        return (
+            H / (state.m_dot_g * self.Cp_g + self.eps)
+            + self.T_ref
+        )
+
+
+    def solid_inlet_temperature_from_enthalpy(self, H, state):
+        return (
+            H / (state.m_dot_s * self.Cp_s + self.eps)
+            + self.T_ref
+        )
 
 
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE
     # ======================================================
-    def gas_enthalpy_out(self, Tg, state):
-
-        H_gas_out = (
-            state.m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_ref)
-        )
-
-        return H_gas_out
+    def gas_enthalpy_out(self, Hg):
+        return Hg[-1]
 
 
     # ======================================================
     # SOLID ENTHALPY TO NEXT ZONE
     # ======================================================
-    def solid_enthalpy_out(self, Ts, state):
-
-        H_solid_out = (
-            state.m_dot_s
-            * self.Cp_s
-            * (Ts[-1] - self.T_ref)
-        )
-
-        return H_solid_out
+    def solid_enthalpy_out(self, Hs):
+        return Hs[-1]

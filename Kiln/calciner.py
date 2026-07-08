@@ -221,21 +221,75 @@ class Calciner:
         # ======================================================
         # INCOMING ENTHALPY FROM TRANSITION
         # ======================================================
+
         state.Hgas_calciner_in = state.Hgas_transition_out
         state.Hsolid_calciner_in = state.Hsolid_transition_out
 
 
         # ======================================================
-        # BOUNDARY CONDITION FROM TRANSITION
+        # TEMPERATURE FROM ENTHALPY
         # ======================================================
-        state.Tg_calciner[0] = state.Tg_transition[-1]
-        state.Ts_calciner[0] = state.Ts_transition[-1]
+
+        state.Tg_calciner[0] = self.gas_temperature_from_enthalpy(
+            state.Hgas_calciner_in,
+            state,
+        )
+
+
+        state.Ts_calciner[0] = self.solid_temperature_from_enthalpy(
+            state.Hsolid_calciner_in,
+            state,
+        )
 
 
         # ======================================================
-        # CHEMISTRY
+        # CALCINER CHEMISTRY
         # ======================================================
-        state = self.chemistry.apply(state)
+
+        state = self.chemistry.apply_calciner(state)
+        
+        # ======================================================
+        # UPDATE ENTHALPY FROM TEMPERATURE
+        # ======================================================
+
+        state.Hg_calciner = (
+            state.m_dot_g
+            *
+            self.Cp_g
+            *
+            (state.Tg_calciner - self.T_ref)
+        )
+
+
+        state.Hs_calciner = (
+            state.m_dot_s
+            *
+            self.Cp_s
+            *
+            (state.Ts_calciner - self.T_ref)
+        )
+        
+        # ======================================================
+        # APPLY CALCINATION ENTHALPY SINK
+        # ======================================================
+
+        state.Hs_calciner -= (
+            state.Calcination_Q_sink
+            *
+            dt
+        )
+        
+        # ======================================================
+        # TEMPERATURE UPDATE AFTER REACTION
+        # ======================================================
+
+        state.Ts_calciner = (
+            state.Hs_calciner
+            /
+            (state.m_dot_s * self.Cp_s + self.eps)
+            +
+            self.T_ref
+        )
 
         # ======================================================
         # THERMAL STEP
@@ -244,10 +298,9 @@ class Calciner:
             state.Tg_calciner,
             state.Ts_calciner,
             state.Tw_calciner,
-            state,
+            state,  
             dt,
-            reaction_sink=state.Reaction_Q_sink,
-        )   
+        )
                
 
         # ======================================================
@@ -294,20 +347,12 @@ class Calciner:
         )
 
 
-
         # ======================================================
         # ENERGY OUT
         # ======================================================
-        state.Hgas_calciner_out = self.gas_enthalpy_out(
-            state.Tg_calciner,
-            state,
-        )
+        state.Hgas_calciner_out = state.Hg_calciner[-1]
 
-        state.Hsolid_calciner_out = self.solid_enthalpy_out(
-            state.Ts_calciner,
-            state,
-        )
-
+        state.Hsolid_calciner_out = state.Hs_calciner[-1]
 
 
         # ======================================================
@@ -352,6 +397,7 @@ class Calciner:
             - state.Hsolid_calciner_out
             - state.Calciner_stored_energy_change
             - state.Wall_loss_calciner
+            - state.Calcination_Q_sink
         )
         
         # ======================================================
@@ -372,28 +418,38 @@ class Calciner:
 
 
     # ======================================================
-    # GAS ENTHALPY TO NEXT ZONE
+    # TEMPERATURE FROM ENTHALPY
     # ======================================================
-    def gas_enthalpy_out(self, Tg, state):
 
-        H_gas_out = (
-            state.m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_ref)
+    def gas_temperature_from_enthalpy(self, H, state):
+
+        return (
+            H /
+            (state.m_dot_g * self.Cp_g + self.eps)
+            +
+            self.T_ref
         )
 
-        return H_gas_out
 
+    def solid_temperature_from_enthalpy(self, H, state):
 
-    # ======================================================
-    # SOLID ENTHALPY TO NEXT ZONE
-    # ======================================================
-    def solid_enthalpy_out(self, Ts, state):
-
-        H_solid_out = (
-            state.m_dot_s
-            * self.Cp_s
-            * (Ts[-1] - self.T_ref)
+        return (
+            H /
+            (state.m_dot_s * self.Cp_s + self.eps)
+            +
+            self.T_ref
         )
 
-        return H_solid_out
+
+    # ======================================================
+    # ENTHALPY TO NEXT ZONE
+    # ======================================================
+
+    def gas_enthalpy_out(self, Hg):
+
+        return Hg[-1]
+
+
+    def solid_enthalpy_out(self, Hs):
+
+        return Hs[-1]

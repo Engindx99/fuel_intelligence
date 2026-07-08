@@ -134,11 +134,6 @@ class GlobalState:
     V_cell_transition: float = 0.0
     N_transition: int = 0
     
-    # ======================================================
-    # REACTION ENERGY SINKS (W)
-    # ======================================================
-
-    Calciner_Q_sink: float = 0.0
 
     # ======================================================
     # GLOBAL MASS & ENERGY
@@ -302,34 +297,151 @@ class GlobalState:
 
         N = self.Tg_burning.size
 
+        # ======================================================
+        # CELL INVENTORY (kg per cell)
+        # ======================================================
+
+        cell = lambda key: np.full(
+            N,
+            RAW_MEAL_COMPOSITION[key] / N,
+            dtype=float,
+        )
+
+        # ================= SOLID PHASES =================
         self.solids = SolidPhases(
-            H2O=np.full(N, RAW_MEAL_COMPOSITION["H2O"]),
-            CaCO3=np.full(N, RAW_MEAL_COMPOSITION["CaCO3"]),
-            CaO=np.full(N, RAW_MEAL_COMPOSITION["CaO"]),
-            SiO2=np.full(N, RAW_MEAL_COMPOSITION["SiO2"]),
-            Al2O3=np.full(N, RAW_MEAL_COMPOSITION["Al2O3"]),
-            Fe2O3=np.full(N, RAW_MEAL_COMPOSITION["Fe2O3"]),
-            C2S=np.full(N, RAW_MEAL_COMPOSITION["C2S"]),
-            C3S=np.full(N, RAW_MEAL_COMPOSITION["C3S"]),
-            C3A=np.full(N, RAW_MEAL_COMPOSITION["C3A"]),
-            C4AF=np.full(N, RAW_MEAL_COMPOSITION["C4AF"]),
+
+            # Free moisture
+            H2O=cell("H2O"),
+
+            # Bound hydroxyl water
+            Bound_H2O=cell("Bound_H2O"),
+
+            # Carbonates
+            CaCO3=cell("CaCO3"),
+
+            # Oxides
+            CaO=cell("CaO"),
+            SiO2=cell("SiO2"),
+            Al2O3=cell("Al2O3"),
+            Fe2O3=cell("Fe2O3"),
+
+            # Clinker phases
+            C2S=cell("C2S"),
+            C3S=cell("C3S"),
+            C3A=cell("C3A"),
+            C4AF=cell("C4AF"),
         )
 
+        # ================= GAS PHASES =================
         self.gases = GasPhases(
-            CO2=np.zeros(N),
-            H2O=np.zeros(N),
+
+            CO2=np.zeros(
+                N,
+                dtype=float,
+            ),
+
+            H2O=np.zeros(
+                N,
+                dtype=float,
+            ),
         )
 
-        # Bound hydroxyl available for dehydroxylation
-        self.OH_inventory = np.full(N, 0.020)
+
+    # ======================================================
+    # ENTHALPY STATE VARIABLES
+    # ======================================================
+
+    Hg_burning: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_burning: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_transition: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_transition: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_calciner: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_calciner: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_preheater: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_preheater: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_cooler: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_cooler: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
 
 
     # ======================================================
-    # HYDROXYL INVENTORY
+    # OLD ENTHALPY STATES
     # ======================================================
 
-    Bound_H2O_inventory: np.ndarray = field(
-    default_factory=lambda: np.full(20,0.020)
+    Hg_burning_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_burning_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_transition_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_transition_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_calciner_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_calciner_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_preheater_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_preheater_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+
+    Hg_cooler_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
+    )
+
+    Hs_cooler_old: np.ndarray = field(
+        default_factory=lambda: np.zeros(5)
     )
 
 
@@ -341,7 +453,7 @@ class GlobalState:
 
     Dehydroxylation_Q_sink: float = 0.0
 
-    Calciner_Q_sink: float = 0.0
+    Calcination_Q_sink: float = 0.0
 
     Belite_Q_sink: float = 0.0
 
@@ -352,6 +464,12 @@ class GlobalState:
     C4AF_Q_sink: float = 0.0
 
     Reaction_Q_sink: float = 0.0
+    
+    # ======================================================
+    # ZONE HEAT SINKS
+    # ======================================================
+    
+    Calciner_Q_sink: float = 0.0
 
 
 

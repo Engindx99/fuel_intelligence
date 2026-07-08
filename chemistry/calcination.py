@@ -10,7 +10,7 @@ class CalcinationModel(ReactionBase):
         super().__init__()
 
         # ================= KINETICS =================
-        self.prefactor = 1.0e5
+        self.prefactor = 1.0e3
         self.activation_energy = 1.5e5
 
         # ================= THERMODYNAMICS =================
@@ -19,7 +19,7 @@ class CalcinationModel(ReactionBase):
         # mass ratios
         self.CaO_ratio = 56.08/100.09
 
-        self.CO2_ratio = 44.01/100.09
+        self.CO2_ratio = 44.01/100.09   
 
         # ================= TEMPERATURE =================
         self.T_start = 1073.0
@@ -31,9 +31,7 @@ class CalcinationModel(ReactionBase):
     # ======================================================
     def apply(self,state):
 
-        rate = self.reaction_rate(
-            state.Ts_calciner
-        )
+        rate = self.reaction_rate(state.Ts_calciner)
 
 
         reacted = self.reacted_mass(
@@ -41,6 +39,7 @@ class CalcinationModel(ReactionBase):
             rate,
             state.dt,
         )
+
 
 
         state.solids.CaCO3 -= reacted

@@ -10,17 +10,6 @@ import numpy as np
 import yaml
 
 
-from kiln.globalstate import GlobalState
-from kiln.burning import Burning
-from kiln.transition import Transition
-from kiln.calciner import Calciner
-from kiln.preheater import Preheater
-from kiln.cooler import Cooler
-from controls.mpc import MasterMPC
-
-import numpy as np
-import yaml
-
 
 def load_cfg(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -60,6 +49,11 @@ class Twin:
             N=cfg["plant"]["N"],
             L=cfg["cooler"]["length"],
         )
+        
+        # ======================================================
+        # NUMERICAL
+        # ======================================================
+        self.eps = 1e-9
 
         # ======================================================
         # MPC (optional)
@@ -119,6 +113,7 @@ class Twin:
 
         return {
 
+            # ================= FUEL =================
             "Fuel_rate_total": raw.get(
                 "Fuel_rate_total",
                 self._last_inputs["Fuel_rate_total"],
@@ -148,6 +143,25 @@ class Twin:
                 "O2",
                 self._last_inputs["O2"],
             ),
+
+
+            # ================= OPERATION =================
+            "rpm": raw.get(
+                "rpm",
+                self.operational.get(
+                    "rpm_default",
+                    1.5
+                ),
+            ),
+
+            "Feed_rate_kg_s": raw.get(
+                "Feed_rate_kg_s",
+                self._last_inputs.get(
+                    "Feed_rate_kg_s",
+                    0.0
+                ),
+            ),
+
         }
 
 
@@ -186,8 +200,6 @@ class Twin:
             self.dt,
         )
 
-        self.state.Hgas_transition_in = self.state.Hgas_burning_out
-        self.state.Hsolid_transition_in = self.state.Hsolid_burning_out
 
         # ======================================================
         # TRANSITION
@@ -197,8 +209,6 @@ class Twin:
             self.dt,
         )
 
-        self.state.Hgas_calciner_in = self.state.Hgas_transition_out
-        self.state.Hsolid_calciner_in = self.state.Hsolid_transition_out
 
         # ======================================================
         # CALCINER
@@ -208,8 +218,6 @@ class Twin:
             self.dt,
         )
 
-        self.state.Hgas_preheater_in = self.state.Hgas_calciner_out
-        self.state.Hsolid_preheater_in = self.state.Hsolid_calciner_out
 
         # ======================================================
         # PREHEATER
@@ -219,8 +227,6 @@ class Twin:
             self.dt,
         )
 
-        self.state.Hgas_cooler_in = self.state.Hgas_preheater_out
-        self.state.Hsolid_cooler_in = self.state.Hsolid_preheater_out
 
         # ======================================================
         # COOLER
@@ -265,9 +271,8 @@ class Twin:
 
             fuel_rate_total = inputs["Fuel_rate_total"]
 
-
             # ======================================================
-            # TOTAL LOSSES
+            # TOTAL WALL LOSSES
             # ======================================================
             total_wall_loss = (
                 self.state.Wall_loss_burning
@@ -276,7 +281,6 @@ class Twin:
                 + self.state.Wall_loss_preheater
                 + self.state.Wall_loss_cooler
             )
-
 
             # ======================================================
             # TOTAL STORED ENERGY
@@ -289,7 +293,6 @@ class Twin:
                 + self.state.Cooler_stored_energy_change
             )
 
-
             # ======================================================
             # TOTAL EXHAUST ENTHALPY
             # ======================================================
@@ -298,16 +301,13 @@ class Twin:
                 + self.state.Hsolid_cooler_out
             )
 
-
             # ======================================================
             # TOTAL REACTION HEAT SINK
             # ======================================================
             total_reaction = (
-                getattr(self.state, "Drying_Q_sink", 0.0)
-                + getattr(self.state, "Dehydroxylation_Q_sink", 0.0)
-                + getattr(self.state, "Calciner_Q_sink", 0.0)
+                getattr(self.state, "Preheater_Q_sink", 0.0)
+                + getattr(self.state, "Calcination_Q_sink", 0.0)
             )
-
 
             # ======================================================
             # GLOBAL ENERGY RESIDUAL
@@ -316,13 +316,12 @@ class Twin:
                 self.state.Q_burning
                 - total_exhaust
                 - total_wall_loss
-                - total_reaction
-                
+                - total_stored
             )
 
 
             # ======================================================
-            # ZONE MEAN TEMPERATURES
+            # ZONE TEMPERATURES
             # ======================================================
 
             print("\n========== ZONE TEMPERATURES ==========")
@@ -362,68 +361,94 @@ class Twin:
                 f"Tw_mean: {np.mean(self.state.Tw_cooler):.2f} K"
             )
 
-
             # ======================================================
             # GLOBAL ENERGY
             # ======================================================
 
             print("\n========== GLOBAL ENERGY ==========")
 
-            print(
-                f"Fuel       : {self.state.Q_burning:.2f} W"
+            print(f"Fuel       : {self.state.Q_burning:.2f} W")
+            print(f"Exhaust    : {total_exhaust:.2f} W")
+            print(f"Wall loss  : {total_wall_loss:.2f} W")
+            print(f"Reaction   : {total_reaction:.2f} W")
+            print(f"Stored     : {total_stored:.2f} W")
+            print(f"Residual   : {global_residual:.2f} W")
+
+            relative = (
+                global_residual /
+                (
+                    abs(self.state.Q_burning)
+                    + self.eps
+                )
             )
 
-            print(
-                f"Exhaust    : {total_exhaust:.2f} W"
-            )
+            print(f"Relative   : {relative:.6f}")
+
+            # ======================================================
+            # REACTION BREAKDOWN
+            # ======================================================
+
+            print("\n========== REACTION BREAKDOWN ==========")
 
             print(
-                f"Wall loss  : {total_wall_loss:.2f} W"
-            )
-
-            print(
-                f"Reaction   : {total_reaction:.2f} W"
-            )
-
-            print(
-                f"Stored     : {total_stored:.2f} W"
-            )
-
-            print(
-                f"Residual   : {global_residual:.2f} W"
-            )
-
-
-            relative = global_residual / (
-                abs(self.state.Q_burning) + 1e-9
+                f"Preheater  : {getattr(self.state, 'Preheater_Q_sink', 0.0):.2f} W"
             )
 
             print(
-                f"Relative   : {relative:.6f}"
+                f"Calciner   : {getattr(self.state, 'Calcination_Q_sink', 0.0):.2f} W"
             )
-            
+
+            # ======================================================
+            # STORED BREAKDOWN
+            # ======================================================
+
             print("\n========== STORED BREAKDOWN ==========")
 
             print(
-                f"Burning stored    : {self.state.Burning_stored_energy_change:.2f} W"
+                f"Burning    : {self.state.Burning_stored_energy_change:.2f} W"
             )
 
             print(
-                f"Transition stored : {self.state.Transition_stored_energy_change:.2f} W"
+                f"Transition : {self.state.Transition_stored_energy_change:.2f} W"
             )
 
             print(
-                f"Calciner stored   : {self.state.Calciner_stored_energy_change:.2f} W"
+                f"Calciner   : {self.state.Calciner_stored_energy_change:.2f} W"
             )
 
             print(
-                f"Preheater stored  : {self.state.Preheater_stored_energy_change:.2f} W"
+                f"Preheater  : {self.state.Preheater_stored_energy_change:.2f} W"
             )
 
             print(
-                f"Cooler stored     : {self.state.Cooler_stored_energy_change:.2f} W"
+                f"Cooler     : {self.state.Cooler_stored_energy_change:.2f} W"
             )
 
+            # ======================================================
+            # ZONE ENERGY BALANCES
+            # ======================================================
+
+            print("\n========== ZONE ENERGY BALANCES ==========")
+
+            print(
+                f"Burning    : {self.state.Burning_energy_balance:.2f} W"
+            )
+
+            print(
+                f"Transition : {self.state.Transition_energy_balance:.2f} W"
+            )
+
+            print(
+                f"Calciner   : {self.state.Calciner_energy_balance:.2f} W"
+            )
+
+            print(
+                f"Preheater  : {self.state.Preheater_energy_balance:.2f} W"
+            )
+
+            print(
+                f"Cooler     : {self.state.Cooler_energy_balance:.2f} W"
+            )
 
             self._next_log_time += self.log_interval
 

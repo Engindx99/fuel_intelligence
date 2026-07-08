@@ -10,7 +10,7 @@ class DryingModel(ReactionBase):
         super().__init__()
 
         # ================= KINETICS =================
-        self.prefactor = 2.0e4
+        self.prefactor = 1.0e3
         self.activation_energy = 5.0e4
 
         # ================= THERMODYNAMICS =================
@@ -26,14 +26,17 @@ class DryingModel(ReactionBase):
     def apply(self, state):
 
         rate = self.reaction_rate(
-            state.Ts_calciner
+            state.Ts_preheater
         )
 
+
+        
         reacted = self.reacted_mass(
             state.solids.H2O,
             rate,
             state.dt,
         )
+        
 
         state.solids.H2O -= reacted
 
