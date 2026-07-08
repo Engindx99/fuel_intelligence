@@ -25,23 +25,37 @@ class DryingModel(ReactionBase):
     # ======================================================
     def apply(self, state):
 
+        # ======================================================
+        # MATERIAL INVENTORY (PREHEATER)
+        # ======================================================
+        mat = state.materials["preheater"]
+
+        # ======================================================
+        # REACTION RATE
+        # ======================================================
         rate = self.reaction_rate(
             state.Ts_preheater
         )
 
-
-        
+        # ======================================================
+        # REACTED MASS
+        # ======================================================
         reacted = self.reacted_mass(
-            state.solids.H2O,
+            mat.solids.H2O,
             rate,
             state.dt,
         )
-        
 
-        state.solids.H2O -= reacted
+        # ======================================================
+        # UPDATE PHASES
+        # ======================================================
+        mat.solids.H2O -= reacted
 
-        state.gases.H2O += reacted
+        mat.gases.H2O += reacted
 
+        # ======================================================
+        # REACTION HEAT
+        # ======================================================
         state.Drying_Q_sink = np.sum(
             self.heat_sink(
                 reacted,

@@ -186,6 +186,7 @@ class Burning:
             -u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
         )
+        
 
         Ts_n = Ts + dt * (
             -u_s * dTs_dz
@@ -393,12 +394,13 @@ class Burning:
         state.Hgas_burning_out = self.gas_enthalpy_out(
             state.Hg_burning
         )
+        
+
 
         state.Hsolid_burning_out = self.solid_enthalpy_out(
             state.Hs_burning
         )
-        #print(f"Hgas_out        : {state.Hgas_burning_out:.2f} W")
-        #print(f"Hsolid_out      : {state.Hsolid_burning_out:.2f} W")
+
 
         # ======================================================
         # STORED ENERGY

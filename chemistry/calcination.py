@@ -16,54 +16,70 @@ class CalcinationModel(ReactionBase):
         # ================= THERMODYNAMICS =================
         self.deltaH = 1.78e6
 
-        # mass ratios
-        self.CaO_ratio = 56.08/100.09
-
-        self.CO2_ratio = 44.01/100.09   
+        # ================= STOICHIOMETRY =================
+        self.CaO_ratio = 56.08 / 100.09
+        self.CO2_ratio = 44.01 / 100.09
 
         # ================= TEMPERATURE =================
         self.T_start = 1073.0
         self.T_end = 1300.0
 
-
     # ======================================================
     # APPLY
     # ======================================================
-    def apply(self,state):
+    def apply(self, state):
 
-        rate = self.reaction_rate(state.Ts_calciner)
+        # ======================================================
+        # MATERIAL INVENTORY OF CALCINER
+        # ======================================================
+        mat = state.materials["calciner"]
+
+        # ======================================================
+        # REACTION RATE
+        # ======================================================
+        rate = self.reaction_rate(
+            state.Ts_calciner
+        )
 
 
+        # ======================================================
+        # REACTED MASS
+        # ======================================================
         reacted = self.reacted_mass(
-            state.solids.CaCO3,
+            mat.solids.CaCO3,
             rate,
             state.dt,
         )
 
 
+        # ======================================================
+        # UPDATE SOLID PHASES
+        # ======================================================
+        mat.solids.CaCO3 -= reacted
 
-        state.solids.CaCO3 -= reacted
-
-
-        state.solids.CaO += (
+        mat.solids.CaO += (
             reacted
-            *
-            self.CaO_ratio
+            * self.CaO_ratio
         )
 
-
-        state.gases.CO2 += (
+        # ======================================================
+        # UPDATE GAS PHASES
+        # ======================================================
+        mat.gases.CO2 += (
             reacted
-            *
-            self.CO2_ratio
+            * self.CO2_ratio
         )
 
-
+        # ======================================================
+        # REACTION HEAT
+        # ======================================================
         state.Calcination_Q_sink = np.sum(
             self.heat_sink(
                 reacted
             )
         )
-
+        
+        print("\n========== CALCINATION HEAT ==========")
+        print("Q_sink:", state.Calcination_Q_sink)
 
         return state

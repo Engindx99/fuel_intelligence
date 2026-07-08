@@ -22,7 +22,7 @@ simulation:
 
 
 fuel:
-  Fuel_rate_total: 24.8   # kg/s
+  Fuel_rate_total: 2.0   # kg/s
   Petcoke_ratio: 0.54
   Coal_ratio: 0.30
   RDF_ratio: 0.15
@@ -38,7 +38,8 @@ motion:
 
 
 feed:
-  Feed_rate_kg_s: 33.3333   # 120000 kg/h clinker feed (SOLID INPUT)
+  Feed_rate_kg_s: 27.78   # 100000 kg/h clinker feed (SOLID INPUT)
+  inventory_kg: 100000
 
 
 operational:

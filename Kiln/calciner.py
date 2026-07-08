@@ -175,6 +175,8 @@ class Calciner:
             -state.u_g * dTg_dz
             + (q_vol - q_gs - q_gw) / C_g
         )
+        
+
 
         Ts_n = Ts + dt * (
             -state.u_s * dTs_dz
@@ -224,6 +226,9 @@ class Calciner:
 
         state.Hgas_calciner_in = state.Hgas_transition_out
         state.Hsolid_calciner_in = state.Hsolid_transition_out
+        
+
+        
 
 
         # ======================================================
@@ -242,11 +247,6 @@ class Calciner:
         )
 
 
-        # ======================================================
-        # CALCINER CHEMISTRY
-        # ======================================================
-
-        state = self.chemistry.apply_calciner(state)
         
         # ======================================================
         # UPDATE ENTHALPY FROM TEMPERATURE
@@ -272,12 +272,7 @@ class Calciner:
         # ======================================================
         # APPLY CALCINATION ENTHALPY SINK
         # ======================================================
-
-        state.Hs_calciner -= (
-            state.Calcination_Q_sink
-            *
-            dt
-        )
+        state.Hs_calciner -= state.Calcination_Q_sink
         
         # ======================================================
         # TEMPERATURE UPDATE AFTER REACTION
@@ -353,6 +348,8 @@ class Calciner:
         state.Hgas_calciner_out = state.Hg_calciner[-1]
 
         state.Hsolid_calciner_out = state.Hs_calciner[-1]
+        
+
 
 
         # ======================================================

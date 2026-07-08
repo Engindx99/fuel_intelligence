@@ -223,6 +223,7 @@ class Transition:
             state.Hsolid_transition_in,
             state,
         )
+        
 
         state.Tg_transition[0] = state.Tg_transition_old[0] = Tg_in
         state.Ts_transition[0] = state.Ts_transition_old[0] = Ts_in
@@ -313,10 +314,13 @@ class Transition:
         state.Hgas_transition_out = self.gas_enthalpy_out(
             state.Hg_transition
         )
+        
+
 
         state.Hsolid_transition_out = self.solid_enthalpy_out(
             state.Hs_transition
         )
+           
 
         # ======================================================
         # STORED ENERGY
@@ -361,10 +365,15 @@ class Transition:
     # TEMPERATURE FROM INLET ENTHALPY
     # ======================================================
     def gas_inlet_temperature_from_enthalpy(self, H, state):
-        return (
+
+        Tin = (
             H / (state.m_dot_g * self.Cp_g + self.eps)
             + self.T_ref
         )
+
+        return Tin
+        
+        
 
 
     def solid_inlet_temperature_from_enthalpy(self, H, state):

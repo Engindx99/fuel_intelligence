@@ -5,6 +5,9 @@ from kiln.calciner import Calciner
 from kiln.preheater import Preheater
 from kiln.cooler import Cooler
 from controls.mpc import MasterMPC
+from physics.mass_transport import MassTransport
+from dataclasses import fields
+from chemistry.phases import SolidPhases
 
 import numpy as np
 import yaml
@@ -21,6 +24,8 @@ class Twin:
     def __init__(self, state, cfg, mpc_cfg):
 
         self.state = state
+        
+        self.mass_transport = MassTransport()
 
         # ======================================================
         # ZONE MODELS
@@ -167,6 +172,11 @@ class Twin:
 
     # --------------------------------------------------
     def step(self):
+        
+        self.state = self.mass_transport.apply(
+        self.state,
+        self.dt,
+        )
 
         # ======================================================
         # MPC (DISABLED TEMPORARILY)
@@ -318,11 +328,37 @@ class Twin:
                 - total_wall_loss
                 - total_stored
             )
+            
+            # ======================================================
+            # MASS FLOW
+            # ======================================================
+            
+            print("\n========== MASS INVENTORY (CaCO3) ==========")
 
+            for zone in [
+                "preheater",
+                "calciner",
+                "transition",
+                "burning",
+                "cooler",
+            ]:
+                print(
+                    f"{zone:11s}: "
+                    f"{np.sum(self.state.materials[zone].solids.CaCO3):10.2f} kg"
+                )
+                
+            total_solids = 0.0
 
+            for zone in state.materials.values():
+                for f in fields(SolidPhases):
+                    total_solids += np.sum(getattr(zone.solids, f.name))
+
+            print(f"TOTAL SOLIDS = {total_solids:.2f} kg")
+    
             # ======================================================
             # ZONE TEMPERATURES
             # ======================================================
+            
 
             print("\n========== ZONE TEMPERATURES ==========")
 

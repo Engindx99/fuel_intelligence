@@ -18,10 +18,9 @@ class AliteModel(ReactionBase):
 
         # ================= STOICHIOMETRY =================
 
-        self.CaO_required=56.08/172.24
+        self.CaO_required = 56.08 / 172.24
 
-        self.C3S_produced=228.32/172.24
-
+        self.C3S_produced = 228.32 / 172.24
 
         # ================= TEMPERATURE =================
         self.T_start = 1373.0
@@ -33,50 +32,57 @@ class AliteModel(ReactionBase):
     # ======================================================
     def apply(self, state):
 
+        # ======================================================
+        # MATERIAL INVENTORY (BURNING)
+        # ======================================================
+        mat = state.materials["burning"]
+
+        # ======================================================
+        # REACTION RATE
+        # ======================================================
         rate = self.reaction_rate(
             state.Ts_burning
         )
 
-
-        # limiting reactant
-        available=np.minimum(
-            state.solids.C2S,
-            state.solids.CaO/self.CaO_required
+        # ======================================================
+        # LIMITING REACTANT
+        # ======================================================
+        available = np.minimum(
+            mat.solids.C2S,
+            mat.solids.CaO / self.CaO_required,
         )
 
-
+        # ======================================================
+        # REACTED MASS
+        # ======================================================
         reacted = self.reacted_mass(
             available,
             rate,
             state.dt,
         )
 
+        # ======================================================
+        # UPDATE SOLID PHASES
+        # ======================================================
+        mat.solids.C2S -= reacted
 
-        # consume C2S
-        state.solids.C2S -= reacted
-
-
-        # consume CaO
-        state.solids.CaO -= (
+        mat.solids.CaO -= (
             reacted
-            *
-            self.CaO_required
+            * self.CaO_required
         )
 
-
-        # produce C3S
-        state.solids.C3S += (
+        mat.solids.C3S += (
             reacted
-            *
-            self.C3S_produced
+            * self.C3S_produced
         )
 
-
+        # ======================================================
+        # REACTION HEAT
+        # ======================================================
         state.Alite_Q_sink = np.sum(
             self.heat_sink(
                 reacted,
             )
         )
-
 
         return state

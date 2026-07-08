@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from typing import Dict
 from chemistry.phases import SolidPhases, GasPhases
+from physics.zone_material import ZoneMaterial
+from physics.zone_material import build_zone_material
 from chemistry.composition import RAW_MEAL_COMPOSITION
 
 
@@ -17,11 +19,13 @@ class GlobalState:
     # ======================================================
     # OPERATION
     # ======================================================
-    Feed_rate: float = 40.0
-    Fuel_rate_total: float = 3.0
+    Feed_rate: float = 40.0 # kg/s
+    Inventory_kg: float = 0.0 # kg/s
+    Residence_time_target: float = 0.0 #min
+    Fuel_rate_total: float = 2.0 # kg/s
     rpm: float = 0.0
-    residence_time: float = 0.0
-    solid_velocity: float = 0.0
+    residence_time: float = 0.0 #min
+    solid_velocity: float = 0.0 #m/s
 
     # ======================================================
     # FUEL ENERGY (W)
@@ -290,16 +294,12 @@ class GlobalState:
     
     
     # ======================================================
-    # REACTIONS
+    # SOLID - GASES
     # ======================================================
 
     def __post_init__(self):
 
         N = self.Tg_burning.size
-
-        # ======================================================
-        # CELL INVENTORY (kg per cell)
-        # ======================================================
 
         cell = lambda key: np.full(
             N,
@@ -307,44 +307,19 @@ class GlobalState:
             dtype=float,
         )
 
-        # ================= SOLID PHASES =================
-        self.solids = SolidPhases(
+        self.materials = {
 
-            # Free moisture
-            H2O=cell("H2O"),
+            "burning": build_zone_material(N, cell),
 
-            # Bound hydroxyl water
-            Bound_H2O=cell("Bound_H2O"),
+            "transition": build_zone_material(N, cell),
 
-            # Carbonates
-            CaCO3=cell("CaCO3"),
+            "calciner": build_zone_material(N, cell),
 
-            # Oxides
-            CaO=cell("CaO"),
-            SiO2=cell("SiO2"),
-            Al2O3=cell("Al2O3"),
-            Fe2O3=cell("Fe2O3"),
+            "preheater": build_zone_material(N, cell),
 
-            # Clinker phases
-            C2S=cell("C2S"),
-            C3S=cell("C3S"),
-            C3A=cell("C3A"),
-            C4AF=cell("C4AF"),
-        )
-
-        # ================= GAS PHASES =================
-        self.gases = GasPhases(
-
-            CO2=np.zeros(
-                N,
-                dtype=float,
-            ),
-
-            H2O=np.zeros(
-                N,
-                dtype=float,
-            ),
-        )
+            "cooler": build_zone_material(N, cell),
+        }
+        
 
 
     # ======================================================
@@ -472,9 +447,11 @@ class GlobalState:
     Calciner_Q_sink: float = 0.0
 
 
-
     # ======================================================
     # API
     # ======================================================
     Inputs: Dict = field(default_factory=dict)
     Outputs: Dict = field(default_factory=dict)
+    
+    
+

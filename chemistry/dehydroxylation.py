@@ -27,34 +27,49 @@ class DehydroxylationModel(ReactionBase):
     # ======================================================
     # APPLY
     # ======================================================
-    def apply(self,state):
+    def apply(self, state):
 
-        rate = self.reaction_rate(state.Ts_preheater)
+        # ======================================================
+        # MATERIAL INVENTORY (CALCINER)
+        # ======================================================
+        mat = state.materials["calciner"]
 
+        # ======================================================
+        # REACTION RATE
+        # ======================================================
+        rate = self.reaction_rate(
+            state.Ts_calciner
+        )
 
+        # ======================================================
+        # REACTED MASS
+        # ======================================================
         reacted = self.reacted_mass(
-            state.solids.Bound_H2O,
+            mat.solids.Bound_H2O,
             rate,
             state.dt,
         )
 
+        # ======================================================
+        # UPDATE SOLID PHASES
+        # ======================================================
+        mat.solids.Bound_H2O -= reacted
 
-        state.solids.Bound_H2O -= reacted
-
-
-        state.gases.H2O += (
+        # ======================================================
+        # UPDATE GAS PHASES
+        # ======================================================
+        mat.gases.H2O += (
             reacted
-            *
-            self.product_ratio
+            * self.product_ratio
         )
 
-
+        # ======================================================
+        # REACTION HEAT
+        # ======================================================
         state.Dehydroxylation_Q_sink = np.sum(
             self.heat_sink(
                 reacted
             )
         )
 
-
         return state
-

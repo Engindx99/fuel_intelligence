@@ -17,10 +17,10 @@ class BeliteModel(ReactionBase):
         self.deltaH = 5.0e5
 
         # ================= STOICHIOMETRY =================
-        
-        self.CaO_required = 112.16/60.08
 
-        self.C2S_produced = 172.24/60.08
+        self.CaO_required = 112.16 / 60.08
+
+        self.C2S_produced = 172.24 / 60.08
 
         # ================= TEMPERATURE =================
         self.T_start = 1123.0
@@ -32,48 +32,57 @@ class BeliteModel(ReactionBase):
     # ======================================================
     def apply(self, state):
 
+        # ======================================================
+        # MATERIAL INVENTORY (BURNING)
+        # ======================================================
+        mat = state.materials["burning"]
+
+        # ======================================================
+        # REACTION RATE
+        # ======================================================
         rate = self.reaction_rate(
             state.Ts_burning
         )
 
-
-        # limiting reactant (SiO2 basis)
-        available=np.minimum(
-            state.solids.SiO2,
-            state.solids.CaO/self.CaO_required
+        # ======================================================
+        # LIMITING REACTANT (SiO2 BASIS)
+        # ======================================================
+        available = np.minimum(
+            mat.solids.SiO2,
+            mat.solids.CaO / self.CaO_required,
         )
 
-
+        # ======================================================
+        # REACTED MASS
+        # ======================================================
         reacted = self.reacted_mass(
             available,
             rate,
             state.dt,
         )
 
+        # ======================================================
+        # UPDATE SOLID PHASES
+        # ======================================================
+        mat.solids.SiO2 -= reacted
 
-        # consume reactants
-        state.solids.SiO2 -= reacted
-
-        state.solids.CaO -= (
+        mat.solids.CaO -= (
             reacted
-            *
-            self.CaO_required
+            * self.CaO_required
         )
 
-
-        # produce C2S
-        state.solids.C2S += (
+        mat.solids.C2S += (
             reacted
-            *
-            self.C2S_produced
+            * self.C2S_produced
         )
 
-
+        # ======================================================
+        # REACTION HEAT
+        # ======================================================
         state.Belite_Q_sink = np.sum(
             self.heat_sink(
                 reacted,
             )
         )
-
 
         return state
