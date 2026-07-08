@@ -103,6 +103,8 @@ class Burning:
         dTg_dz[0] = dTg_dz[1]
         dTs_dz[0] = dTs_dz[1]
         
+        
+        
 
         # ======================================================
         # INPUTS
@@ -177,6 +179,9 @@ class Burning:
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
             effective=0.1,
         )
+        
+
+        
 
    
         # ======================================================

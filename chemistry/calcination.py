@@ -78,8 +78,5 @@ class CalcinationModel(ReactionBase):
                 reacted
             )
         )
-        
-        print("\n========== CALCINATION HEAT ==========")
-        print("Q_sink:", state.Calcination_Q_sink)
 
         return state

@@ -69,12 +69,13 @@ class ChemistryModel:
     def apply_calciner(self, state):
 
         state = self.calcination.apply(state)
+        
+        
 
 
         state.Calciner_Q_sink = (
             state.Calcination_Q_sink
         )
-
 
         return state
 

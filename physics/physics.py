@@ -129,27 +129,27 @@ ZONE_RAD_CONFIG = {
 
     "burning": {
         "eps":0.92,
-        "k_eff":1.00,
+        "k_eff":0.005,
     },
 
     "transition":{
         "eps":0.88,
-        "k_eff":0.55,
+        "k_eff":0.005,
     },
 
     "calciner":{
         "eps":0.82,
-        "k_eff":0.35,
+        "k_eff":0.005,
     },
 
     "preheater":{
         "eps":0.70,
-        "k_eff":0.15,
+        "k_eff":0.005,
     },
 
     "cooler":{
         "eps":0.55,
-        "k_eff":0.05,
+        "k_eff":0.005,
     },
 }
 
@@ -205,6 +205,11 @@ def heat_transfer(Tg, Ts, Tw, hv_gs, hv_gw, hv_ws, a_gs, a_gw, a_ws, zone=None):
     # ======================================================
     # CONVECTION
     # ======================================================
+    
+    dT_gs = Tg - Ts
+    dT_gw = Tg - Tw
+    dT_ws = Ts - Tw
+    
     q_gs_conv = hv_gs * a_gs * (Tg - Ts)
     q_gw_conv = hv_gw * a_gw * (Tg - Tw)
     q_ws_conv = hv_ws * a_ws * (Ts - Tw)
@@ -222,6 +227,8 @@ def heat_transfer(Tg, Ts, Tw, hv_gs, hv_gw, hv_ws, a_gs, a_gw, a_ws, zone=None):
     q_gs = q_gs_conv + q_gs_rad
     q_gw = q_gw_conv + q_gw_rad
     q_ws = q_ws_conv + q_ws_rad
+
+    
 
     return q_gs, q_gw, q_ws
 
