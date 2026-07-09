@@ -22,7 +22,7 @@ simulation:
 
 
 fuel:
-  Fuel_rate_total: 5.0  # kg/s
+  Fuel_rate_total: 2.5  # kg/s
   Petcoke_ratio: 0.54
   Coal_ratio: 0.30
   RDF_ratio: 0.15

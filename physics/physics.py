@@ -311,7 +311,7 @@ def thermal_capacities(
     rho_g_Vcell_Cp_g,
     rho_s_Vcell_Cp_s,
     rho_wall_Vwall_cell_Cp,
-    effective=0.01,
+    effective=1.0,
 ):
 
     C_s = rho_s_Vcell_Cp_s

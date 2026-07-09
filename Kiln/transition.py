@@ -158,7 +158,7 @@ class Transition:
             rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
             rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
             rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=0.1,
+            effective=1.0,
         )
 
         # ======================================================
