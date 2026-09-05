@@ -88,23 +88,8 @@ class Burning:
         self.V_wall_cell = self.V_wall / self.N
         self._rho_wall_Vwall_cell_Cp = self.rho_wall * self.V_wall_cell * self.Cp_wall
         
-    # ========================================================
-    def thermal_step(self, Tg, Ts, Tw, state, inputs, dt, u_g, u_s):
 
-        # ======================================================
-        # GRADIENTS
-        # ======================================================
-        dTg_dz = self._dTg_dz
-        dTs_dz = self._dTs_dz
-
-        dTg_dz[1:] = (Tg[1:] - Tg[:-1]) / self.dz
-        dTs_dz[1:] = (Ts[1:] - Ts[:-1]) / self.dz
-
-        dTg_dz[0] = dTg_dz[1]
-        dTs_dz[0] = dTs_dz[1]
-        
-        
-        
+    def thermal_step(self, Tg, Ts, Tw, state, inputs, u_g, u_s):
 
         # ======================================================
         # INPUTS
@@ -131,93 +116,329 @@ class Burning:
             eps=self.eps,
         )
 
-        # ======================================================
-        # HEAT SOURCE
-        # ======================================================
         q_vol = Q_burning / (self.V_total + self.eps)
         
+        if True:
+            print("\n===== BURNING GEOMETRY DEBUG =====")
+            print("N               =", self.N)
+            print("L               =", self.L)
+            print("dz              =", self.dz)
+            print("L/N             =", self.L / self.N)
+            print("A_cross         =", self.A_cross)
+            print("V_total         =", self.V_total)
+            print("A_cross * L     =", self.A_cross * self.L)
+
+            print("q_vol           =", q_vol)
+            print("q_vol * V_total =", q_vol * self.V_total)
+            print(
+                "q_vol*A*dz*N    =",
+                q_vol * self.A_cross * self.dz * self.N
+            )
 
         # ======================================================
-        # HEAT TRANSFER (CONVECTION + RADIATION)
+        # MASS FLOW
         # ======================================================
-        q_gs, q_gw, q_ws = heat_transfer(
-            Tg=Tg,
-            Ts=Ts,
-            Tw=Tw,
-            hv_gs=self.hv_gs,
-            hv_gw=self.hv_gw,
-            hv_ws=self.hv_ws,
-            a_gs=self.a_gs,
-            a_gw=self.a_gw,
-            a_ws=self.a_ws,
-            zone=self.zone,
+        m_dot_g = max(float(state.m_dot_g), self.eps)
+        m_dot_s = max(float(state.m_dot_s), self.eps)
+
+        # ======================================================
+        # BOUNDARY CONDITIONS
+        # ======================================================
+        Tg = np.asarray(Tg, dtype=float).copy()
+        Ts = np.asarray(Ts, dtype=float).copy()
+        Tw = np.asarray(Tw, dtype=float).copy()
+
+        Hg_in = (
+            m_dot_g
+            * self.Cp_g
+            * (Tg[-1] - self.T_ref)
+        )
+
+        Hs_in = (
+            m_dot_s
+            * self.Cp_s
+            * (Ts[0] - self.T_ref)
         )
 
         # ======================================================
-        # WALL LOSSES
+        # INITIAL GUESS
         # ======================================================
-        q_loss, wall_loss, wall_debug = wall_losses(
-            Tw=Tw,
-            h_ext=self.h_ext,
-            A_wall_cell=self.A_wall_cell,
-            V_cell=self.V_cell,
-            T_amb=self.T_amb,
-            A_wall_total=self.A_wall_total,
-            N=self.N,
-            refractory_thickness=self.refractory_thickness,
-            refractory_conductivity=self.refractory_conductivity,
-            eps=self.eps,
-        )
-        
+        Tg_ss = Tg.copy()
+        Ts_ss = Ts.copy()
+        Tw_ss = Tw.copy()
 
         # ======================================================
-        # THERMAL CAPACITIES
+        # ITERATION
         # ======================================================
-        C_g, effective_C_s, C_w = thermal_capacities(
-            rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
-            rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
-            rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=1.0,
-        )
-        
+        max_iter = 1
+        tolerance = 1e-5
+        relaxation = 0.005
 
-        
+        error = np.inf
 
-   
+        for iteration in range(max_iter):
+
+            if iteration < 5:
+                print(f"\n######## ITERATION {iteration} ########")
+
+            Tg_old = Tg_ss.copy()
+            Ts_old = Ts_ss.copy()
+
+            # ==================================================
+            # HEAT TRANSFER
+            # ==================================================
+            q_gs = (
+                self.hv_gs
+                * self.a_gs
+                * (Tg_ss - Ts_ss)
+            )
+
+            q_gw = np.zeros(self.N)
+            q_ws = np.zeros(self.N)
+
+            # ==================================================
+            # GAS ENERGY SOURCE
+            # ==================================================
+            gas_source = (
+                q_vol
+                - q_gs
+                - q_gw
+            )
+
+            # ==================================================
+            # SOLID ENERGY SOURCE
+            # ==================================================
+            solid_source = (
+                q_gs
+                - q_ws
+            )
+            
+            
+            if iteration == 0:
+                print("\n===== BURNING ENERGY DEBUG =====")
+                print("Q_burning       =", Q_burning)
+                print("q_vol           =", q_vol)
+                print("q_gs min/max    =", np.min(q_gs), np.max(q_gs))
+                print("gas_source min/max =", np.min(gas_source), np.max(gas_source))
+                print("solid_source min/max =", np.min(solid_source), np.max(solid_source))
+                print("A_cross         =", self.A_cross)
+                print("dz              =", self.dz)
+                print("cell gas energy =", self.A_cross * self.dz * np.max(np.abs(gas_source)))
+                print("cell solid energy =", self.A_cross * self.dz * np.max(np.abs(solid_source)))
+                print("Hg_in           =", Hg_in)
+                print("Hs_in           =", Hs_in)
+
+            # ==================================================
+            # GAS ENTHALPY
+            # ==================================================
+            Hg_new = np.zeros(self.N, dtype=float)
+
+            Hg_new[-1] = Hg_in
+
+            for j in range(self.N - 2, -1, -1):
+
+                Hg_new[j] = (
+                    Hg_new[j + 1]
+                    - self.A_cross
+                    * self.dz
+                    * gas_source[j + 1]
+                )
+
+            # ==================================================
+            # GAS TEMPERATURE
+            # ==================================================
+            Tg_new = (
+                self.T_ref
+                + Hg_new
+                / (
+                    m_dot_g * self.Cp_g
+                    + self.eps
+                )
+            )
+
+            # ==================================================
+            # SOLID ENTHALPY
+            # ==================================================
+            Hs_new = np.zeros(self.N, dtype=float)
+
+            Hs_new[0] = Hs_in
+
+            for j in range(1, self.N):
+
+                Hs_new[j] = (
+                    Hs_new[j - 1]
+                    + self.A_cross
+                    * self.dz
+                    * solid_source[j - 1]
+                )
+
+            # ==================================================
+            # SOLID TEMPERATURE
+            # ==================================================
+            Ts_new = (
+                self.T_ref
+                + Hs_new
+                / (
+                    m_dot_s * self.Cp_s
+                    + self.eps
+                )
+            )
+
+            # ==================================================
+            # RELAXATION
+            # ==================================================
+            Tg_ss = Tg_new.copy()
+            Ts_ss = Ts_new.copy()
+
+            # Wall is temporarily frozen
+            Tw_ss = Tw.copy()
+
+            # ==================================================
+            # CONVERGENCE
+            # ==================================================
+            error_Tg = np.max(
+                np.abs(Tg_ss - Tg_old)
+            )
+
+            error_Ts = np.max(
+                np.abs(Ts_ss - Ts_old)
+            )
+
+            error = max(
+                error_Tg,
+                error_Ts,
+            )
+
+            if error < tolerance:
+                break
+
         # ======================================================
-        # DYNAMICS
+        # FINAL HEAT TRANSFER
         # ======================================================
-        Tg_n = Tg + dt * (
-            -u_g * dTg_dz
-            + (q_vol - q_gs - q_gw) / C_g
-        )
-        
-
-        Ts_n = Ts + dt * (
-            -u_s * dTs_dz
-            + (q_gs - q_ws) / effective_C_s
+        q_gs = (
+            self.hv_gs
+            * self.a_gs
+            * (Tg_ss - Ts_ss)
         )
 
-        Tw_n = Tw + dt * (
-            (q_gw + q_ws - q_loss) / C_w
+        q_gw = np.zeros(self.N)
+        q_ws = np.zeros(self.N)
+
+        # ======================================================
+        # NO WALL LOSS FOR THIS TEST
+        # ======================================================
+        wall_loss = 0.0
+        wall_debug = None
+
+        # ======================================================
+        # OUTLET ENTHALPIES
+        # ======================================================
+        Hg_out = Hg_new[0]
+        Hs_out = Hs_new[-1]
+
+        # ======================================================
+        # ENERGY BALANCE
+        # ======================================================
+        gas_energy_change = (
+            Hg_out - Hg_in
         )
 
+        solid_energy_change = (
+            Hs_out - Hs_in
+        )
+
+        gas_source_integral = (
+            self.A_cross
+            * self.dz
+            * np.sum(gas_source)
+        )
+
+        solid_source_integral = (
+            self.A_cross
+            * self.dz
+            * np.sum(solid_source)
+        )
+
+        gas_energy_balance = (
+            gas_energy_change
+            + gas_source_integral
+        )
+
+        solid_energy_balance = (
+            solid_energy_change
+            - solid_source_integral
+        )
+
+        # ======================================================
+        # TOTAL THERMAL BALANCE
+        # ======================================================
+        total_in = (
+            Q_burning
+            + Hg_in
+            + Hs_in
+        )
+
+        total_out = (
+            Hg_out
+            + Hs_out
+            + wall_loss
+        )
+
+        thermal_energy_balance = (
+            total_in - total_out
+        )
+
+        # ======================================================
+        # DEBUG STATE
+        # ======================================================
+        state.Burning_thermal_iterations = iteration + 1
+
+        state.Burning_thermal_converged = (
+            error < tolerance
+        )
+
+        state.Burning_thermal_residual = float(error)
+
+        state.Burning_wall_iterations = 0
+        state.Burning_wall_residual = 0.0
+
+        state.Burning_gas_energy_balance = float(
+            gas_energy_balance
+        )
+
+        state.Burning_solid_energy_balance = float(
+            solid_energy_balance
+        )
+
+        state.Burning_thermal_energy_balance = float(
+            thermal_energy_balance
+        )
+
+        state.Hg_burning_in = float(Hg_in)
+        state.Hg_burning_out = float(Hg_out)
+
+        state.Hs_burning_in = float(Hs_in)
+        state.Hs_burning_out = float(Hs_out)
+
+        # ======================================================
+        # RETURN
+        # ======================================================
         return (
-            Tg_n,
-            Ts_n,
-            Tw_n,
+            Tg_ss,
+            Ts_ss,
+            Tw_ss,
             Q_petcoke,
             Q_coal,
             Q_RDF,
             Q_H2,
             Q_burning,
-            wall_loss,
-            wall_debug,
         )
+
     
     # ======================================================
     # STATE UPDATE
     # ======================================================
+
     def apply(self, state, inputs, dt):
 
         # ======================================================
@@ -230,16 +451,6 @@ class Burning:
             raise ValueError(
                 f"Burning shape corrupted: {state.Tg_burning.shape}"
             )
-
-        # ======================================================
-        # STORE OLD STATES
-        # ======================================================
-        state.Tg_burning_old = state.Tg_burning.copy()
-        state.Ts_burning_old = state.Ts_burning.copy()
-        state.Tw_burning_old = state.Tw_burning.copy()
-
-        state.Hg_burning_old = state.Hg_burning.copy()
-        state.Hs_burning_old = state.Hs_burning.copy()
 
         # ======================================================
         # SOLID MOTION
@@ -281,17 +492,31 @@ class Burning:
         )
 
         # ======================================================
-        # GAS MASS FLOW + VELOCITY
+        # GAS MASS FLOW
         # ======================================================
         m_dot_g = gas_mass_balance(
-            fuel_rate_total=inputs.get("Fuel_rate_total", 1.0),
-            O2=inputs.get("O2", 3.5),
+            fuel_rate_total=inputs.get(
+                "Fuel_rate_total",
+                1.0,
+            ),
+            O2=inputs.get(
+                "O2",
+                3.5,
+            ),
             eps=self.eps,
         )
 
         state.m_dot_g = float(m_dot_g)
 
-        rho_g = getattr(self, "rho_g_avg", None)
+        # ======================================================
+        # GAS VELOCITY
+        # ======================================================
+        rho_g = getattr(
+            self,
+            "rho_g_avg",
+            None,
+        )
+
         if rho_g is None:
             rho_g = self.rho_g
 
@@ -305,7 +530,7 @@ class Burning:
         state.u_g = u_g
 
         # ======================================================
-        # THERMAL STEP
+        # STEADY-STATE THERMAL SOLUTION
         # ======================================================
         (
             Tg,
@@ -316,140 +541,103 @@ class Burning:
             Q_RDF,
             Q_H2,
             Q_burning,
-            wall_loss,
-            wall_debug,
         ) = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
             state.Tw_burning,
             state,
             inputs,
-            dt,
             u_g,
             u_s,
         )
 
         # ======================================================
-        # UPDATE STATES
+        # UPDATE TEMPERATURE STATES
         # ======================================================
         state.Tg_burning = Tg
         state.Ts_burning = Ts
         state.Tw_burning = Tw
-        
+
         # ======================================================
         # BURNING CHEMISTRY
         # ======================================================
-        
         state = self.chemistry.apply_burning(state)
-        
-        
-        # ======================================================
-        # UPDATE ENTHALPY STATES
-        # ======================================================
 
+        # ======================================================
+        # ENTHALPY STATES
+        # ======================================================
         state.Hg_burning = (
             state.m_dot_g
             * self.Cp_g
-            * (state.Tg_burning - self.T_ref)
+            * (
+                state.Tg_burning
+                - self.T_ref
+            )
         )
 
         state.Hs_burning = (
             state.m_dot_s
             * self.Cp_s
-            * (state.Ts_burning - self.T_ref)
+            * (
+                state.Ts_burning
+                - self.T_ref
+            )
         )
-        
-        #print("\n========== BURNING ENTHALPY ==========")
-        #print(f"Q_burning       : {state.Q_burning:.2f} W")
-        #print(f"Hg_total        : {np.sum(state.Hg_burning):.2f} W")
-        #print(f"Hs_total        : {np.sum(state.Hs_burning):.2f} W")
-        
 
+        # ======================================================
+        # FUEL HEAT RELEASE STATES
+        # ======================================================
         state.Q_petcoke = Q_petcoke
         state.Q_coal = Q_coal
         state.Q_RDF = Q_RDF
         state.Q_H2 = Q_H2
         state.Q_burning = Q_burning
 
-        state.Wall_loss_burning = float(wall_loss)
-
         # ======================================================
-        # WALL DEBUG
+        # GAS ENTHALPY OUT
         # ======================================================
-        if wall_debug is None:
-            wall_debug = {}
-
-        state.wall_debug_burning = {
-            "q_loss_mean": wall_debug.get("q_loss_mean", 0.0),
-            "q_loss_total": wall_debug.get("wall_loss_total", 0.0),
-            "A_wall": wall_debug.get("A_wall", 0.0),
-            "V_cell": wall_debug.get("V_cell", 0.0),
-            "N": wall_debug.get("N", 0),
-        }
-
-        state.q_loss_mean_burning = state.wall_debug_burning["q_loss_mean"]
-        state.A_wall_burning = state.wall_debug_burning["A_wall"]
-        state.V_cell_burning = state.wall_debug_burning["V_cell"]
-        state.N_burning = state.wall_debug_burning["N"]
-
-        # ======================================================
-        # ENERGY OUT
-        # ======================================================
-
-        state.Hgas_burning_out = self.gas_enthalpy_out(
-            state.Hg_burning
-        )
-        
-
-
-        state.Hsolid_burning_out = self.solid_enthalpy_out(
-            state.Hs_burning
-        )
-
-
-        # ======================================================
-        # STORED ENERGY
-        # ======================================================
-        state.Burning_gas_stored = np.sum(
-            (state.Hg_burning - state.Hg_burning_old)
-            / dt
-        )
-
-        state.Burning_solid_stored = np.sum(
-            (state.Hs_burning - state.Hs_burning_old)
-            / dt
-        )
-
-        state.Burning_wall_stored = np.sum(
-            self._rho_wall_Vwall_cell_Cp * (state.Tw_burning - state.Tw_burning_old) / dt
-        )
-
-        state.Burning_stored_energy_change = (
-            state.Burning_gas_stored
-            + state.Burning_solid_stored
-            + state.Burning_wall_stored
+        state.Hgas_burning_out = (
+            self.gas_enthalpy_out(
+                state.Hg_burning
+            )
         )
 
         # ======================================================
-        # ENERGY BALANCE
+        # SOLID ENTHALPY OUT
+        # ======================================================
+        state.Hsolid_burning_out = (
+            self.solid_enthalpy_out(
+                state.Hs_burning
+            )
+        )
+
+        # ======================================================
+        # STEADY-STATE STORED ENERGY
+        # ======================================================
+        state.Burning_gas_stored = 0.0
+        state.Burning_solid_stored = 0.0
+        state.Burning_wall_stored = 0.0
+
+        state.Burning_stored_energy_change = 0.0
+
+        # ======================================================
+        # STEADY-STATE ENERGY BALANCE
         # ======================================================
         state.Burning_energy_balance = (
             state.Q_burning
             - state.Hgas_burning_out
             - state.Hsolid_burning_out
-            - state.Burning_stored_energy_change
-            - state.Wall_loss_burning
         )
-    
 
         return state
+
+
     
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE
     # ======================================================
     def gas_enthalpy_out(self, Hg):
-
-        return Hg[-1]
+        return Hg[0]
 
 
 

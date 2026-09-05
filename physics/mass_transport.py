@@ -8,9 +8,9 @@ from chemistry.composition import RAW_MEAL_COMPOSITION
 class MassTransport:
 
     # ======================================================
-    # SHIFT ONE PHASE
+    # SHIFT SOLID: 0 -> N-1
     # ======================================================
-    def shift(self, array, fraction):
+    def shift_solid(self, array, fraction):
 
         moved = array * fraction
 
@@ -21,13 +21,25 @@ class MassTransport:
 
         return new
 
+    # ======================================================
+    # SHIFT GAS: N-1 -> 0
+    # ======================================================
+    def shift_gas(self, array, fraction):
+
+        moved = array * fraction
+
+        new = array.copy()
+
+        new[:-1] += moved[1:]
+        new[1:] -= moved[1:]
+
+        return new
 
     # ======================================================
-    # MOVE ONE MATERIAL
+    # MOVE SOLID MATERIAL INSIDE ONE ZONE
     # ======================================================
-    def move_material(self, material, fraction):
+    def move_solid(self, material, fraction):
 
-        # ---------------- SOLIDS ----------------
         for f in fields(SolidPhases):
 
             values = getattr(material.solids, f.name)
@@ -35,10 +47,14 @@ class MassTransport:
             setattr(
                 material.solids,
                 f.name,
-                self.shift(values, fraction),
+                self.shift_solid(values, fraction),
             )
 
-        # ---------------- GASES ----------------
+    # ======================================================
+    # MOVE KILN PROCESS GAS INSIDE ONE ZONE
+    # ======================================================
+    def move_process_gas(self, material, fraction):
+
         for f in fields(GasPhases):
 
             values = getattr(material.gases, f.name)
@@ -46,12 +62,11 @@ class MassTransport:
             setattr(
                 material.gases,
                 f.name,
-                self.shift(values, fraction),
+                self.shift_gas(values, fraction),
             )
 
-
     # ======================================================
-    # MOVE INSIDE ALL ZONES
+    # MOVE MATERIAL INSIDE ALL ZONES
     # ======================================================
     def move_inside_all_zones(
         self,
@@ -66,19 +81,41 @@ class MassTransport:
             1.0,
         )
 
+        # --------------------------------------------------
+        # SOLID
+        # --------------------------------------------------
         for material in state.materials.values():
 
-            self.move_material(
+            self.move_solid(
                 material,
                 fraction,
             )
-            
 
+        # --------------------------------------------------
+        # KILN PROCESS GAS
+        #
+        # Cooler gas is intentionally excluded.
+        # Cooler gas is cooling air and will be handled
+        # separately when its flow architecture is defined.
+        # --------------------------------------------------
+        for zone_name in (
+            "preheater",
+            "calciner",
+            "transition",
+            "burning",
+        ):
+
+            self.move_process_gas(
+                state.materials[zone_name],
+                fraction,
+            )
 
     # ======================================================
-    # TRANSFER BETWEEN TWO ZONES
+    # TRANSFER SOLID BETWEEN TWO ZONES
+    #
+    # src[-1] -> dst[0]
     # ======================================================
-    def transfer_zone(
+    def transfer_solid_zone(
         self,
         source,
         destination,
@@ -91,7 +128,6 @@ class MassTransport:
             1.0,
         )
 
-        # ---------- SOLIDS ----------
         for f in fields(SolidPhases):
 
             src = getattr(source.solids, f.name)
@@ -102,54 +138,100 @@ class MassTransport:
             dst[0] += moved
             src[-1] -= moved
 
-        # ---------- GASES ----------
+    # ======================================================
+    # TRANSFER KILN GAS BETWEEN TWO ZONES
+    #
+    # src[0] -> dst[-1]
+    # ======================================================
+    def transfer_gas_zone(
+        self,
+        source,
+        destination,
+        fraction,
+    ):
+
+        fraction = np.clip(
+            fraction,
+            0.0,
+            1.0,
+        )
+
         for f in fields(GasPhases):
 
             src = getattr(source.gases, f.name)
             dst = getattr(destination.gases, f.name)
 
-            moved = src[-1] * fraction
+            moved = src[0] * fraction
 
-            dst[0] += moved
-            src[-1] -= moved
-
+            dst[-1] += moved
+            src[0] -= moved
 
     # ======================================================
-    # TRANSFER BETWEEN ZONES
+    # TRANSFER SOLID BETWEEN ZONES
     # ======================================================
-    def transfer_between_zones(
+    def transfer_solid_between_zones(
         self,
         state,
         fraction,
     ):
 
-        self.transfer_zone(
+        self.transfer_solid_zone(
             state.materials["preheater"],
             state.materials["calciner"],
             fraction,
         )
 
-        self.transfer_zone(
+        self.transfer_solid_zone(
             state.materials["calciner"],
             state.materials["transition"],
             fraction,
         )
 
-        self.transfer_zone(
+        self.transfer_solid_zone(
             state.materials["transition"],
             state.materials["burning"],
             fraction,
         )
 
-        self.transfer_zone(
+        self.transfer_solid_zone(
             state.materials["burning"],
             state.materials["cooler"],
             fraction,
         )
 
+    # ======================================================
+    # TRANSFER KILN GAS BETWEEN ZONES
+    #
+    # Burning -> Transition -> Calciner -> Preheater
+    # ======================================================
+    def transfer_gas_between_zones(
+        self,
+        state,
+        fraction,
+    ):
+
+        self.transfer_gas_zone(
+            state.materials["burning"],
+            state.materials["transition"],
+            fraction,
+        )
+
+        self.transfer_gas_zone(
+            state.materials["transition"],
+            state.materials["calciner"],
+            fraction,
+        )
+
+        self.transfer_gas_zone(
+            state.materials["calciner"],
+            state.materials["preheater"],
+            fraction,
+        )
 
     # ======================================================
-    # FEED
+    # FEED RAW MEAL
+    #
+    # External solid feed enters Preheater[0]
     # ======================================================
     def feed_raw_meal(self, state, dt):
 
@@ -169,12 +251,16 @@ class MassTransport:
                     / 100000.0
                 )
 
-
     # ======================================================
-    # DISCHARGE
+    # DISCHARGE CLINKER
+    #
+    # Cooler[-1] -> clinker outlet
     # ======================================================
-    def discharge_clinker(self, state, fraction,):
-    
+    def discharge_clinker(
+        self,
+        state,
+        fraction,
+    ):
 
         solids = state.materials["cooler"].solids
 
@@ -183,15 +269,6 @@ class MassTransport:
             values = getattr(solids, f.name)
 
             values[-1] = 0.0
-
-        gases = state.materials["cooler"].gases
-
-        for f in fields(GasPhases):
-
-            values = getattr(gases, f.name)
-
-            values[-1] = 0.0
-
 
     # ======================================================
     # APPLY
@@ -203,24 +280,46 @@ class MassTransport:
             0.0,
             1.0,
         )
-        
 
+        # --------------------------------------------------
+        # 1. MOVE MATERIAL INSIDE ZONES
+        # --------------------------------------------------
         self.move_inside_all_zones(
             state,
             state.residence_time,
             dt,
         )
 
-        self.transfer_between_zones(
+        # --------------------------------------------------
+        # 2. SOLID ZONE TRANSFERS
+        # --------------------------------------------------
+        self.transfer_solid_between_zones(
             state,
             fraction,
         )
 
+        # --------------------------------------------------
+        # 3. KILN GAS ZONE TRANSFERS
+        # --------------------------------------------------
+        self.transfer_gas_between_zones(
+            state,
+            fraction,
+        )
+
+        # --------------------------------------------------
+        # 4. RAW MEAL FEED
+        # --------------------------------------------------
         self.feed_raw_meal(
             state,
             dt,
         )
 
-        self.discharge_clinker(state, fraction)
+        # --------------------------------------------------
+        # 5. CLINKER DISCHARGE
+        # --------------------------------------------------
+        self.discharge_clinker(
+            state,
+            fraction,
+        )
 
         return state

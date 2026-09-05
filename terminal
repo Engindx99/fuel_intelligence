@@ -2,7 +2,7 @@ python -m kiln.burning
 
 python -m kiln.calcination
 
-python -m kiln.twin
+python main.py
 
 
 python -m controls.mpc
