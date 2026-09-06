@@ -201,9 +201,6 @@ def radiation(T1, T2, zone, area=1.0):
 
 
 def heat_transfer(Tg, Ts, Tw, hv_gs, hv_gw, hv_ws, a_gs, a_gw, a_ws, zone=None):
-    
-
-
 
     # ======================================================
     # CONVECTION
@@ -230,11 +227,10 @@ def heat_transfer(Tg, Ts, Tw, hv_gs, hv_gw, hv_ws, a_gs, a_gw, a_ws, zone=None):
     q_gs = q_gs_conv + q_gs_rad
     q_gw = q_gw_conv + q_gw_rad
     q_ws = q_ws_conv + q_ws_rad
-    
+
     
 
     return q_gs, q_gw, q_ws
-    
 
     
 def wall_losses(
@@ -307,8 +303,6 @@ def wall_losses(
     }
 
     return q_loss, wall_loss, wall_debug
-
-
     
 # ======================================================
 # THERMAL CAPACITIES
