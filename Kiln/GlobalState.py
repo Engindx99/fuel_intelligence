@@ -214,7 +214,7 @@ class GlobalState:
     
 
     # ======================================================
-    # OLD TEMPERATURE STATES (5 CELL)
+    # OLD TEMPERATURE STATES (5 CELL) (K)
     # ======================================================
 
     Tg_transition_old: np.ndarray = field(
@@ -243,7 +243,7 @@ class GlobalState:
 
 
     # ======================================================
-    # CALCINER STATES (5 CELL)
+    # CALCINER STATES (5 CELL) (K)
     # ======================================================
 
     Tg_calciner: np.ndarray = field(
@@ -259,23 +259,45 @@ class GlobalState:
     )
 
     # ======================================================
-    # BURNING STATES (5 CELL) (KELVIN)
+    # BURNING STATES (5 CELL) (K)
     # ======================================================
     
     Tg_burning_old: np.ndarray = field(
-    default_factory=lambda: np.ones(5) * 1773.15)
+        default_factory=lambda: np.ones(5) * 1773.15
+    )
 
     Ts_burning_old: np.ndarray = field(
-    default_factory=lambda: np.ones(5) * 1673.15)
+        default_factory=lambda: np.ones(5) * 1673.15
+    )
 
     Tw_burning_old: np.ndarray = field(
-    default_factory=lambda: np.ones(5) * 873.15)
+        default_factory=lambda: np.ones(5) * 873.15
+    )
 
-    Tg_burning: np.ndarray = field(default_factory=lambda: np.ones(5) * (1773.15))
 
-    Ts_burning: np.ndarray = field(default_factory=lambda: np.ones(5) * (1673.15))
+    # ======================================================
+    # BURNING ZONE INLET TEMPERATURES (K)
+    # ======================================================
 
-    Tw_burning: np.ndarray = field(default_factory=lambda: np.ones(5) * (873.15))
+    Tg_burning_in: float = 1773.15
+    Ts_burning_in: float = 1673.15
+
+
+    # ======================================================
+    # BURNING ZONE CELL TEMPERATURES (K)
+    # ======================================================
+
+    Tg_burning: np.ndarray = field(
+        default_factory=lambda: np.ones(5) * 1773.15
+    )
+
+    Ts_burning: np.ndarray = field(
+        default_factory=lambda: np.ones(5) * 1673.15
+    )
+
+    Tw_burning: np.ndarray = field(
+        default_factory=lambda: np.ones(5) * 873.15
+    )
 
     # ======================================================
     # COOLER STATES (5 CELL) (KELVIN)

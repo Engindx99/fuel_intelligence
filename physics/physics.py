@@ -12,9 +12,128 @@ def solid_mass_flow(feed_rate):
     return m_dot_s
 
 
-def gas_mass_balance(fuel_rate_total, O2, eps):
-    
-    return fuel_rate_total * (1.0 + 0.8 * O2) # Combustion stoichiometry (SI units)
+def gas_mass_balance(
+    fuel_rate_total,
+    O2,
+    eps=1e-12,
+):
+    # ======================================================
+    # REPRESENTATIVE PETCOKE COMPOSITION
+    # [mass fraction]
+    # ======================================================
+    fuel_composition = {
+        "C": 0.88,
+        "H": 0.04,
+        "O": 0.02,
+        "S": 0.06,
+    }
+
+    # ======================================================
+    # MOLAR MASSES [kg/mol]
+    # ======================================================
+    M_C = 0.012011
+    M_H = 0.001008
+    M_O = 0.015999
+    M_S = 0.03206
+    M_O2 = 0.031998
+
+    # Dry air oxygen mass fraction
+    Y_O2_air = 0.232
+
+    # ======================================================
+    # FUEL MASS FRACTIONS
+    # ======================================================
+    w_C = fuel_composition["C"]
+    w_H = fuel_composition["H"]
+    w_O = fuel_composition["O"]
+    w_S = fuel_composition["S"]
+
+    # ======================================================
+    # STOICHIOMETRIC O2 [mol/kg fuel]
+    # ======================================================
+    n_O2_st = (
+        w_C / M_C
+        + 0.25 * w_H / M_H
+        + w_S / M_S
+        - 0.5 * w_O / M_O
+    )
+
+    # ======================================================
+    # STOICHIOMETRIC O2 [kg/kg fuel]
+    # ======================================================
+    m_O2_st = n_O2_st * M_O2
+
+    # ======================================================
+    # STOICHIOMETRIC AIR [kg/kg fuel]
+    # ======================================================
+    m_air_st = m_O2_st / Y_O2_air
+
+    # ======================================================
+    # DRY FLUE-GAS O2 TARGET
+    # O2 = vol% dry O2
+    # ======================================================
+    O2_dry_target = O2 / 100.0
+
+    # ======================================================
+    # PRODUCT MOLES [mol/kg fuel]
+    # ======================================================
+    n_CO2 = w_C / M_C
+    n_SO2 = w_S / M_S
+
+    # ======================================================
+    # DRY FLUE-GAS O2 FRACTION
+    # ======================================================
+    def dry_O2_fraction(lam):
+
+        n_O2_excess = (lam - 1.0) * n_O2_st
+
+        n_N2 = lam * n_O2_st * (79.0 / 21.0)
+
+        n_dry = (
+            n_CO2
+            + n_SO2
+            + n_O2_excess
+            + n_N2
+        )
+
+        return n_O2_excess / (n_dry + eps)
+
+    # ======================================================
+    # SOLVE λ FROM DRY FLUE-GAS O2
+    # ======================================================
+    lam_low = 1.0
+    lam_high = 3.0
+
+    for _ in range(60):
+
+        lam_mid = 0.5 * (lam_low + lam_high)
+
+        if dry_O2_fraction(lam_mid) < O2_dry_target:
+            lam_low = lam_mid
+        else:
+            lam_high = lam_mid
+
+    lam = 0.5 * (lam_low + lam_high)
+
+    # ======================================================
+    # ACTUAL AIR FLOW
+    # ======================================================
+    m_air_per_kg_fuel = lam * m_air_st
+
+    m_dot_air = (
+        fuel_rate_total
+        * m_air_per_kg_fuel
+    )
+
+    # ======================================================
+    # TOTAL GAS MASS FLOW
+    # ======================================================
+    m_dot_g = (
+        m_dot_air
+        + fuel_rate_total
+    )
+
+    return m_dot_g
 
 
 def residence_time(L, D, slope_deg, fill_fraction, rpm, eps):
@@ -72,39 +191,41 @@ def fuel_heat_release(
     eps,
 ):
 
-    # ================= FUEL MIX =================
-    p = inputs.get("Petcoke_ratio", 0.50)
-    c = inputs.get("Coal_ratio", 0.30)
-    r = inputs.get("RDF_ratio", 0.15)
-    h = inputs.get("H2_ratio", 0.05)
+    # ======================================================
+    # PETCOKE-ONLY FUEL MODEL
+    # ======================================================
 
-    norm = p + c + r + h + eps
+    Q_petcoke = (
+        fuel_rate_total
+        * LHV["petcoke"]
+    )
 
-    p /= norm
-    c /= norm
-    r /= norm
-    h /= norm
+    # ======================================================
+    # COMBUSTION EFFICIENCY
+    # ======================================================
 
-    # ================= FUEL FLOW =================
-    Q_petcoke = fuel_rate_total * p * LHV["petcoke"]
-    Q_coal    = fuel_rate_total * c * LHV["coal"]
-    Q_RDF     = fuel_rate_total * r * LHV["rdf"]
-    Q_H2      = fuel_rate_total * h * LHV["h2"]
-
-    # ================= COMBUSTION =================
     eta = combustion_efficiency(
         O2,
         O2_opt,
         O2_sigma2,
     )
 
+    # ======================================================
+    # TOTAL HEAT RELEASE
+    # ======================================================
 
-    Q_burning = eta * (
-        Q_petcoke
-        + Q_coal
-        + Q_RDF
-        + Q_H2
+    Q_burning = (
+        eta
+        * Q_petcoke
     )
+
+    # ======================================================
+    # OTHER FUELS DISABLED
+    # ======================================================
+
+    Q_coal = 0.0
+    Q_RDF = 0.0
+    Q_H2 = 0.0
 
     return (
         Q_petcoke,
@@ -113,6 +234,43 @@ def fuel_heat_release(
         Q_H2,
         Q_burning,
     )
+
+
+def combustion_axial_distribution(
+    Q_total,
+    N,
+    center=0.65,
+    sigma=0.20,
+):
+    """
+    Burning zone içerisinde toplam yanma ısısının
+    eksenel dağılımını oluşturur.
+
+    Q_total : toplam yanma ısısı [W]
+    N       : hücre sayısı
+    center  : normalize edilmiş yanma merkezi [0-1]
+    sigma   : dağılım genişliği
+    """
+
+    x = np.linspace(
+        0.0,
+        1.0,
+        N,
+    )
+
+    weights = np.exp(
+        -0.5
+        * (
+            (x - center) / sigma
+        ) ** 2
+    )
+
+    # Enerji korunumu
+    weights /= np.sum(weights)
+
+    q_cell = Q_total * weights
+
+    return q_cell
 
 # ======================================================
 # HEAT TRANSFER

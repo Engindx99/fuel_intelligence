@@ -7,6 +7,7 @@ import yaml
 
 from physics.physics import solid_mass_flow
 from physics.physics import fuel_heat_release
+from physics.physics import combustion_axial_distribution
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
 from physics.physics import heat_transfer
@@ -20,6 +21,7 @@ from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
 from physics.physics import ZONE_HT_CONFIG
 from chemistry.reactions import ChemistryModel
+from physics.physics import wall_thermal_resistance
 
 
 def load_cfg(path):
@@ -30,63 +32,172 @@ def load_cfg(path):
 class Burning:
     def __init__(self, N=5, L=60.0, chemistry=None):
         cfg = load_cfg("configs/twin_cfg.yaml")
-        plant, motion, op = cfg.get("plant", {}), cfg.get("motion", {}), cfg.get("operational", {})
-        
+        plant = cfg.get("plant", {})
+        motion = cfg.get("motion", {})
+        op = cfg.get("operational", {})
+
         self.zone = "burning"
         self.chemistry = chemistry or ChemistryModel()
         self.eps = 1e-9
-        
-        # Geometry
-        self.N, self.L = plant.get("N", N), plant.get("length", L)
-        
-        self.dz, self.D = self.L / self.N, 4.2
-        
-        self.A_cross, self.V_total, self.V_cell = kiln_geometry(D=self.D, L=self.L, N=self.N)
-        
-        # Interfacial & Wall
-        self.epsilon_bed, self.k_interfacial = 0.35, 1.0
-        
-        self.a_gs, self.a_ws = interfacial_areas(D=self.D, epsilon_bed=self.epsilon_bed, k_interfacial=self.k_interfacial)
-        
-        (self.wall_perimeter, self.A_wall_total, self.A_wall_cell,
-         
-         self.a_gw, self.V_wall) = wall_geometry(D=self.D, L=self.L, N=self.N, V_cell=self.V_cell)
-        
-        # Refractory, Props & Motion
-        self.refractory_thickness, self.refractory_conductivity = op.get("refractory_thickness", 0.20), 1.8
-        
-        self.rho_g, self.rho_s, self.rho_wall = 0.30, 1100.0, 3000.0
-        
-        self.Cp_g, self.Cp_s, self.Cp_wall = 1150.0, 850.0, 1000.0
-        
-        
-        self.rpm_default = motion.get("rpm_default", 1.5)
-        
-        self.rpm_min = motion.get("rpm_min", 1.0)
-        
-        self.rpm_max = motion.get("rpm_max", 3.0)
-        
-        self.slope_deg = motion.get("inclination_deg", 3.0)
-        
-        self.fill_fraction = op.get("kiln_load", 0.10)
-        
-        self.u_s = self.u_g = 0.0
-        
-        # Heat Transfer & Fuel
+
+        # ======================================================
+        # GEOMETRY
+        # ======================================================
+        self.N = plant.get("N", N)
+        self.L = plant.get("length", L)
+
+        self.dz = self.L / self.N
+        self.D = 4.2
+
+        self.A_cross, self.V_total, self.V_cell = kiln_geometry(
+            D=self.D,
+            L=self.L,
+            N=self.N
+        )
+
+        # ======================================================
+        # INTERFACIAL & WALL GEOMETRY
+        # ======================================================
+        self.epsilon_bed = 0.35
+        self.k_interfacial = 1.0
+
+        self.a_gs, self.a_ws = interfacial_areas(
+            D=self.D,
+            epsilon_bed=self.epsilon_bed,
+            k_interfacial=self.k_interfacial
+        )
+
+        # ======================================================
+        # REFRACTORY
+        # ======================================================
+        self.refractory_thickness = op.get(
+            "refractory_thickness",
+            0.20
+        )
+
+        self.refractory_conductivity = 1.8
+
+        # ======================================================
+        # WALL GEOMETRY
+        # ======================================================
+        (
+            self.wall_perimeter,
+            self.A_wall_total,
+            self.A_wall_cell,
+            self.a_gw,
+            self.V_wall
+        ) = wall_geometry(
+            D=self.D,
+            L=self.L,
+            N=self.N,
+            V_cell=self.V_cell,
+            refractory_thickness=self.refractory_thickness
+        )
+
+        # ======================================================
+        # PHYSICAL PROPERTIES
+        # ======================================================
+        self.rho_g = 0.30
+        self.rho_s = 1100.0
+        self.rho_wall = 3000.0
+
+        self.Cp_g = 1150.0
+        self.Cp_s = 850.0
+        self.Cp_wall = 1000.0
+
+        # ======================================================
+        # MOTION
+        # ======================================================
+        self.rpm_default = motion.get(
+            "rpm_default",
+            1.5
+        )
+
+        self.rpm_min = motion.get(
+            "rpm_min",
+            1.0
+        )
+
+        self.rpm_max = motion.get(
+            "rpm_max",
+            3.0
+        )
+
+        self.slope_deg = motion.get(
+            "inclination_deg",
+            3.0
+        )
+
+        self.fill_fraction = op.get(
+            "kiln_load",
+            0.10
+        )
+
+        self.u_s = 0.0
+        self.u_g = 0.0
+
+        # ======================================================
+        # HEAT TRANSFER
+        # ======================================================
         ht = ZONE_HT_CONFIG[self.zone]
-        self.hv_gs, self.hv_gw, self.hv_ws = ht["hv_gs"], ht["hv_gw"], ht["hv_ws"]
-        
-        self.h_ext, self.T_ref, self.T_amb = op.get("h_ext", 12.0), op.get("T_ref", 298.15), op.get("T_amb", 300.0)
-        
-        self.LHV = {"petcoke": 32e6, "coal": 18e6, "rdf": 20e6, "h2": 120e6}
-        self.O2_opt, self.O2_sigma2 = 3.5, 25.0
-        
-        # Buffers & Cache
-        self._dTg_dz, self._dTs_dz = np.zeros(self.N), np.zeros(self.N)
-        self._rho_g_Vcell_Cp_g = self.rho_g * self.V_cell * self.Cp_g
-        self._rho_s_Vcell_Cp_s = self.rho_s * self.V_cell * self.Cp_s
+
+        self.hv_gs = ht["hv_gs"]
+        self.hv_gw = ht["hv_gw"]
+        self.hv_ws = ht["hv_ws"]
+
+        self.h_ext = op.get(
+            "h_ext",
+            12.0
+        )
+
+        self.T_ref = op.get(
+            "T_ref",
+            298.15
+        )
+
+        self.T_amb = op.get(
+            "T_amb",
+            300.0
+        )
+
+        # ======================================================
+        # FUEL
+        # ======================================================
+        self.LHV = {
+            "petcoke": 32e6,
+            "coal": 18e6,
+            "rdf": 20e6,
+            "h2": 120e6
+        }
+
+        self.O2_opt = 3.5
+        self.O2_sigma2 = 25.0
+
+        # ======================================================
+        # BUFFERS & CACHE
+        # ======================================================
+        self._dTg_dz = np.zeros(self.N)
+        self._dTs_dz = np.zeros(self.N)
+
+        self._rho_g_Vcell_Cp_g = (
+            self.rho_g
+            * self.V_cell
+            * self.Cp_g
+        )
+
+        self._rho_s_Vcell_Cp_s = (
+            self.rho_s
+            * self.V_cell
+            * self.Cp_s
+        )
+
         self.V_wall_cell = self.V_wall / self.N
-        self._rho_wall_Vwall_cell_Cp = self.rho_wall * self.V_wall_cell * self.Cp_wall
+
+        self._rho_wall_Vwall_cell_Cp = (
+            self.rho_wall
+            * self.V_wall_cell
+            * self.Cp_wall
+        )
         
 
     def thermal_step(self, Tg, Ts, Tw, state, inputs, u_g, u_s):
@@ -105,41 +216,61 @@ class Burning:
             3.5,
         )
 
-        # IMPORTANT:
-        # Use the same reference temperature as the class.
         T_ref = self.T_ref
 
+        # ======================================================
+        # MASS FLOW / THERMAL CAPACITY
+        # ======================================================
+
+        m_dot_g = gas_mass_balance(
+            fuel_rate_total=fuel_rate_total,
+            O2=O2,
+            eps=self.eps
+        )
+
+        state.m_dot_g = float(m_dot_g)
+
+        m_dot_s = state.m_dot_s
+
+        Cp_g = self.Cp_g
+        Cp_s = self.Cp_s
+
+        Cg = m_dot_g * Cp_g
+        Cs = m_dot_s * Cp_s
+        
+        
+        print("\n--- MASS / CAPACITY CHECK ---")
+        print(f"m_dot_g = {m_dot_g:.6f} kg/s")
+        print(f"m_dot_s = {m_dot_s:.6f} kg/s")
+        print(f"Cp_g = {Cp_g:.3f} J/(kg K)")
+        print(f"Cp_s = {Cp_s:.3f} J/(kg K)")
+        print(f"Cg = {Cg:.3f} W/K")
+        print(f"Cs = {Cs:.3f} W/K")
+        print(f"Cg/Cs = {Cg/Cs:.6f}")
+        
         # ======================================================
         # GRID / GEOMETRY
         # ======================================================
 
         N = len(Tg)
 
-        A_cross = self.A_cross
-        dz = self.dz
-
         V_cell = self.V_cell
 
         # ======================================================
-        # MASS FLOW / THERMAL CAPACITY
+        # HEAT TRANSFER COEFFICIENTS
         # ======================================================
 
-        # These are calculated in apply()
-        m_dot_g = state.m_dot_g
-        m_dot_s = state.m_dot_s
+        hv_gs = self.hv_gs
+        hv_gw = self.hv_gw
+        hv_ws = self.hv_ws
 
-        Cp_g = self.Cp_g
-        Cp_s = self.Cp_s
+        a_gs = self.a_gs
+        a_gw = self.a_gw
+        a_ws = self.a_ws
 
-        # Enthalpy flow capacities [W/K]
-        Cg = m_dot_g * Cp_g
-        Cs = m_dot_s * Cp_s
-
-        # ======================================================
-        # GAS-SOLID HEAT TRANSFER
-        # ======================================================
-
-        K = self.hv_gs * self.a_gs
+        K_gs = hv_gs * a_gs
+        K_gw = hv_gw * a_gw
+        K_ws = hv_ws * a_ws
 
         # ======================================================
         # FUEL HEAT RELEASE
@@ -161,221 +292,494 @@ class Burning:
             eps=self.eps,
         )
 
-
-
         # ======================================================
-        # TEMPORARY TEST
+        # AXIAL COMBUSTION HEAT DISTRIBUTION
         # ======================================================
 
-        # For the first steady-state closure test,
-        # combustion heat is NOT distributed into cells yet.
-
-        q_vol = np.zeros(N - 1)
-
-        # ======================================================
-        # WALL TRANSFER
-        # ======================================================
-
-        # Temporarily disabled.
-        q_gw = np.zeros(N - 1)
-        q_ws = np.zeros(N - 1)
-
-        # ======================================================
-        # BOUNDARY CONDITIONS
-        # ======================================================
-
-        # Gas:
-        # inlet  -> N-1
-        # outlet -> 0
-
-        Tg_in = Tg[-1]
-
-        # Solid:
-        # inlet  -> 0
-        # outlet -> N-1
-
-        Ts_in = Ts[0]
-
-        # ======================================================
-        # INLET ENTHALPIES
-        # ======================================================
-
-        Hg_in = (
-            m_dot_g
-            * Cp_g
-            * (Tg_in - T_ref)
+        q_cell = combustion_axial_distribution(
+            Q_total=Q_burning,
+            N=N,
+            center=0.65,
+            sigma=0.20,
         )
+        
+        print("\n--- COMBUSTION DISTRIBUTION CHECK ---")
+        print(f"Q_burning = {Q_burning/1e6:.6f} MW")
+        for i, q in enumerate(q_cell):
+            print(f"cell {i}: Qcomb = {q/1e6:.6f} MW")
+        print(f"Qcomb sum = {np.sum(q_cell)/1e6:.6f} MW")
 
-        Hs_in = (
-            m_dot_s
-            * Cp_s
-            * (Ts_in - T_ref)
+        # ======================================================
+        # WALL THERMAL RESISTANCE
+        # ======================================================
+
+        R_ref, R_conv, R_total = wall_thermal_resistance(
+            refractory_thickness=self.refractory_thickness,
+            refractory_conductivity=self.refractory_conductivity,
+            h_ext=self.h_ext,
+            A_wall_cell=self.A_wall_cell,
         )
 
         # ======================================================
-        # STEADY-STATE LINEAR SYSTEM
+        # STEADY-STATE ITERATION SETTINGS
         # ======================================================
 
-        #
-        # x =
-        #
-        # [ Tg[0], ..., Tg[N-1],
-        #   Ts[0], ..., Ts[N-1] ]
-        #
+        max_iter = 100
+        tol = 1.0e-6
 
-        A = np.zeros(
-            (2 * N, 2 * N)
+        # Under-relaxation
+        relaxation = 0.5
+
+        # ======================================================
+        # INITIAL TEMPERATURE GUESS
+        # ======================================================
+
+        Tg_iter = np.asarray(
+            Tg,
+            dtype=float,
+        ).copy()
+
+        Ts_iter = np.asarray(
+            Ts,
+            dtype=float,
+        ).copy()
+
+        Tw_iter = np.asarray(
+            Tw,
+            dtype=float,
+        ).copy()
+
+        converged = False
+        error = np.inf
+
+        # ======================================================
+        # PICARD ITERATION
+        # ======================================================
+
+        for iteration in range(max_iter):
+
+            # ==================================================
+            # RADIATION
+            #
+            # IMPORTANT:
+            # Radiation physics is handled by the existing
+            # radiation() API.
+            # ==================================================
+
+            q_gs_rad = radiation(
+                Tg_iter,
+                Ts_iter,
+                zone="burning",
+                area=a_gs,
+            )
+
+            q_gw_rad = radiation(
+                Tg_iter,
+                Tw_iter,
+                zone="burning",
+                area=a_gw,
+            )
+
+            q_ws_rad = radiation(
+                Ts_iter,
+                Tw_iter,
+                zone="burning",
+                area=a_ws,
+            )
+
+            # ==================================================
+            # LINEAR SYSTEM
+            # ==================================================
+
+            n_unknowns = 3 * N
+
+            A = np.zeros(
+                (
+                    n_unknowns,
+                    n_unknowns,
+                )
+            )
+
+            b = np.zeros(
+                n_unknowns
+            )
+
+            row = 0
+
+            # ==================================================
+            # CELL EQUATIONS
+            # ==================================================
+
+            for i in range(N):
+
+                Tg_i = i
+                Ts_i = N + i
+                Tw_i = 2 * N + i
+
+                # ==================================================
+                # GAS ENERGY BALANCE
+                #
+                # Cg*(Tg_i - Tg_up)
+                #
+                # + V*K_gs*(Tg_i - Ts_i)
+                # + V*K_gw*(Tg_i - Tw_i)
+                #
+                # + V*q_gs_rad
+                # + V*q_gw_rad
+                #
+                # - Q_comb_i = 0
+                # ==================================================
+
+                A[row, Tg_i] += (
+                    Cg
+                    + V_cell * K_gs
+                    + V_cell * K_gw
+                )
+
+                A[row, Ts_i] += (
+                    -V_cell * K_gs
+                )
+
+                A[row, Tw_i] += (
+                    -V_cell * K_gw
+                )
+
+                radiation_gas_sink = (
+                    V_cell
+                    * (
+                        q_gs_rad[i]
+                        + q_gw_rad[i]
+                    )
+                )
+
+                if i == N - 1:
+
+                    b[row] = (
+                        Cg
+                        * state.Tg_burning_in
+                        + q_cell[i]
+                        - radiation_gas_sink
+                    )
+
+                else:
+
+                    Tg_up_i = i + 1
+
+                    A[row, Tg_up_i] += -Cg
+
+                    b[row] = (
+                        q_cell[i]
+                        - radiation_gas_sink
+                    )
+
+                row += 1
+
+                # ==================================================
+                # SOLID ENERGY BALANCE
+                #
+                # Cs*(Ts_i - Ts_up)
+                #
+                # - V*K_gs*(Tg_i - Ts_i)
+                # + V*K_ws*(Ts_i - Tw_i)
+                #
+                # - V*q_gs_rad
+                # + V*q_ws_rad
+                #
+                # = 0
+                # ==================================================
+
+                A[row, Ts_i] += (
+                    Cs
+                    + V_cell * K_gs
+                    + V_cell * K_ws
+                )
+
+                A[row, Tg_i] += (
+                    -V_cell * K_gs
+                )
+
+                A[row, Tw_i] += (
+                    -V_cell * K_ws
+                )
+
+                radiation_solid_source = (
+                    V_cell
+                    * (
+                        q_gs_rad[i]
+                        - q_ws_rad[i]
+                    )
+                )
+
+                if i == 0:
+
+                    b[row] = (
+                        Cs
+                        * state.Ts_burning_in
+                        + radiation_solid_source
+                    )
+
+                else:
+
+                    Ts_up_i = N + i - 1
+
+                    A[row, Ts_up_i] += -Cs
+
+                    b[row] = (
+                        radiation_solid_source
+                    )
+
+                row += 1
+
+                # ==================================================
+                # WALL ENERGY BALANCE
+                #
+                # V*K_gw*(Tg_i - Tw_i)
+                # + V*K_ws*(Ts_i - Tw_i)
+                #
+                # + V*q_gw_rad
+                # + V*q_ws_rad
+                #
+                # - Q_loss = 0
+                # ==================================================
+
+                A[row, Tg_i] += (
+                    V_cell * K_gw
+                )
+
+                A[row, Ts_i] += (
+                    V_cell * K_ws
+                )
+
+                A[row, Tw_i] += (
+                    -V_cell * K_gw
+                    -V_cell * K_ws
+                    -1.0 / R_total
+                )
+
+                radiation_wall_source = (
+                    V_cell
+                    * (
+                        q_gw_rad[i]
+                        + q_ws_rad[i]
+                    )
+                )
+
+                b[row] = (
+                    -self.T_amb / R_total
+                    - radiation_wall_source
+                )
+
+                row += 1
+
+            # ==================================================
+            # SOLVE
+            # ==================================================
+
+            x_solution = np.linalg.solve(
+                A,
+                b,
+            )
+
+            Tg_new = x_solution[:N]
+
+            Ts_new = x_solution[N:2 * N]
+
+            Tw_new = x_solution[2 * N:3 * N]
+
+            # ==================================================
+            # CONVERGENCE ERROR
+            # ==================================================
+
+            error = max(
+                np.max(
+                    np.abs(
+                        Tg_new - Tg_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Ts_new - Ts_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Tw_new - Tw_iter
+                    )
+                ),
+            )
+
+            # ==================================================
+            # UNDER-RELAXATION
+            # ==================================================
+
+            Tg_iter = (
+                relaxation * Tg_new
+                + (1.0 - relaxation) * Tg_iter
+            )
+
+            Ts_iter = (
+                relaxation * Ts_new
+                + (1.0 - relaxation) * Ts_iter
+            )
+
+            Tw_iter = (
+                relaxation * Tw_new
+                + (1.0 - relaxation) * Tw_iter
+            )
+
+            # ==================================================
+            # CONVERGENCE CHECK
+            # ==================================================
+
+            if error < tol:
+
+                converged = True
+
+                break
+
+        # ======================================================
+        # CONVERGENCE WARNING
+        # ======================================================
+
+        if not converged:
+
+            print(
+                "WARNING: Burning radiation iteration "
+                f"did not converge after {max_iter} iterations. "
+                f"Final error = {error:.6e} K"
+            )
+
+        # ======================================================
+        # FINAL STEADY-STATE TEMPERATURES
+        # ======================================================
+
+        Tg_ss = Tg_iter
+        Ts_ss = Ts_iter
+        Tw_ss = Tw_iter
+
+        # ======================================================
+        # FINAL RADIATION
+        # ======================================================
+
+        q_gs_rad = radiation(
+            Tg_ss,
+            Ts_ss,
+            zone="burning",
+            area=a_gs,
         )
 
-        b = np.zeros(2 * N)
+        q_gw_rad = radiation(
+            Tg_ss,
+            Tw_ss,
+            zone="burning",
+            area=a_gw,
+        )
 
-        row = 0
-
-        # ======================================================
-        # GAS INLET BOUNDARY
-        # ======================================================
-
-        A[row, N - 1] = 1.0
-        b[row] = Tg_in
-
-        row += 1
-
-        # ======================================================
-        # SOLID INLET BOUNDARY
-        # ======================================================
-
-        A[row, N] = 1.0
-        b[row] = Ts_in
-
-        row += 1
+        q_ws_rad = radiation(
+            Ts_ss,
+            Tw_ss,
+            zone="burning",
+            area=a_ws,
+        )
 
         # ======================================================
-        # CELL EQUATIONS
+        # CONVECTIVE HEAT TRANSFER
         # ======================================================
 
-        for j in range(N - 1):
-
-            # --------------------------------------------------
-            # GLOBAL INDICES
-            # --------------------------------------------------
-
-            Tg_j = j
-            Tg_j1 = j + 1
-
-            Ts_j = N + j
-            Ts_j1 = N + j + 1
-
-            # --------------------------------------------------
-            # GAS ENERGY BALANCE
-            # --------------------------------------------------
-
-            #
-            # Cg (Tg_j - Tg_j1)
-            #
-            #       = - V_cell q_gs,j
-            #
-            # q_gs,j =
-            #
-            # K/2 *
-            # [
-            #   Tg_j + Tg_j1
-            #   - Ts_j - Ts_j1
-            # ]
-            #
-
-            A[row, Tg_j] += (
-                Cg
-                + 0.5 * V_cell * K
+        q_gs_conv = (
+            K_gs
+            * (
+                Tg_ss
+                - Ts_ss
             )
+        )
 
-            A[row, Tg_j1] += (
-                -Cg
-                + 0.5 * V_cell * K
+        q_gw_conv = (
+            K_gw
+            * (
+                Tg_ss
+                - Tw_ss
             )
+        )
 
-            A[row, Ts_j] += (
-                -0.5 * V_cell * K
+        q_ws_conv = (
+            K_ws
+            * (
+                Ts_ss
+                - Tw_ss
             )
-
-            A[row, Ts_j1] += (
-                -0.5 * V_cell * K
-            )
-
-            b[row] = (
-                -V_cell * q_vol[j]
-            )
-
-            row += 1
-
-            # --------------------------------------------------
-            # SOLID ENERGY BALANCE
-            # --------------------------------------------------
-
-            #
-            # Cs (Ts_j1 - Ts_j)
-            #
-            #       = + V_cell q_gs,j
-            #
-
-            A[row, Ts_j1] += (
-                Cs
-                + 0.5 * V_cell * K
-            )
-
-            A[row, Ts_j] += (
-                -Cs
-                + 0.5 * V_cell * K
-            )
-
-            A[row, Tg_j] += (
-                -0.5 * V_cell * K
-            )
-
-            A[row, Tg_j1] += (
-                -0.5 * V_cell * K
-            )
-
-            b[row] = (
-                V_cell * q_vol[j]
-            )
-
-            row += 1
+        )
 
         # ======================================================
-        # SOLVE
-        # ======================================================
-
-        x = np.linalg.solve(A, b)
-
-        Tg_ss = x[:N]
-        Ts_ss = x[N:]
-
-        # ======================================================
-        # CELL CENTER TEMPERATURES
-        # ======================================================
-
-        Tg_cell = (
-            Tg_ss[:-1]
-            + Tg_ss[1:]
-        ) * 0.5
-
-        Ts_cell = (
-            Ts_ss[:-1]
-            + Ts_ss[1:]
-        ) * 0.5
-
-        # ======================================================
-        # GAS-SOLID HEAT TRANSFER
+        # TOTAL HEAT TRANSFER
+        #
+        # CONVECTION + RADIATION
         # ======================================================
 
         q_gs_cell = (
-            K
-            * (Tg_cell - Ts_cell)
+            q_gs_conv
+            + q_gs_rad
         )
+
+        q_gw_cell = (
+            q_gw_conv
+            + q_gw_rad
+        )
+
+        q_ws_cell = (
+            q_ws_conv
+            + q_ws_rad
+        )
+
+        # ======================================================
+        # WALL LOSS
+        # ======================================================
+
+        Q_loss_cell = (
+            Tw_ss
+            - self.T_amb
+        ) / R_total
+
+        # ======================================================
+        # TOTAL HEAT TRANSFER
+        # ======================================================
 
         Q_gs = (
             V_cell
             * np.sum(q_gs_cell)
+        )
+
+        Q_gw = (
+            V_cell
+            * np.sum(q_gw_cell)
+        )
+
+        Q_ws = (
+            V_cell
+            * np.sum(q_ws_cell)
+        )
+
+        Q_wall_loss = np.sum(
+            Q_loss_cell
+        )
+
+        # ======================================================
+        # RADIATION DIAGNOSTICS
+        # ======================================================
+
+        Q_gs_rad = (
+            V_cell
+            * np.sum(q_gs_rad)
+        )
+
+        Q_gw_rad = (
+            V_cell
+            * np.sum(q_gw_rad)
+        )
+
+        Q_ws_rad = (
+            V_cell
+            * np.sum(q_ws_rad)
         )
 
         # ======================================================
@@ -383,7 +787,36 @@ class Burning:
         # ======================================================
 
         Tg_out = Tg_ss[0]
+
         Ts_out = Ts_ss[-1]
+
+        Tw_out = Tw_ss[-1]
+
+        # ======================================================
+        # INLET ENTHALPIES
+        # ======================================================
+
+        Tg_in = state.Tg_burning_in
+
+        Ts_in = state.Ts_burning_in
+
+        Hg_in = (
+            m_dot_g
+            * Cp_g
+            * (
+                Tg_in
+                - T_ref
+            )
+        )
+
+        Hs_in = (
+            m_dot_s
+            * Cp_s
+            * (
+                Ts_in
+                - T_ref
+            )
+        )
 
         # ======================================================
         # OUTLET ENTHALPIES
@@ -392,52 +825,99 @@ class Burning:
         Hg_out = (
             m_dot_g
             * Cp_g
-            * (Tg_out - T_ref)
+            * (
+                Tg_out
+                - T_ref
+            )
         )
 
         Hs_out = (
             m_dot_s
             * Cp_s
-            * (Ts_out - T_ref)
+            * (
+                Ts_out
+                - T_ref
+            )
         )
 
         # ======================================================
-        # ENERGY DIAGNOSTICS
+        # ENERGY CHANGES
         # ======================================================
 
         gas_energy_change = (
-            Hg_out - Hg_in
+            Hg_out
+            - Hg_in
         )
 
         solid_energy_change = (
-            Hs_out - Hs_in
+            Hs_out
+            - Hs_in
+        )
+        
+        # ======================================================
+        # SOLID THERMAL CAPACITY DEBUG
+        # ======================================================
+
+        print(
+            "\n--- SOLID THERMAL CAPACITY ---"
         )
 
-        expected_gas_change = -Q_gs
-        expected_solid_change = +Q_gs
+        print(
+            f"m_dot_s = {m_dot_s:.6f} kg/s"
+        )
+
+        print(
+            f"Cp_s    = {Cp_s:.3f} J/(kg K)"
+        )
+
+        print(
+            f"Cs      = {Cs:.3f} W/K"
+        )
+
+        print(
+            f"Q_gs - Q_ws = "
+            f"{(Q_gs - Q_ws) / 1e6:.6f} MW"
+        )
+
+        print(
+            f"Delta_H_s = "
+            f"{solid_energy_change / 1e6:.6f} MW"
+        )
+
+        print(
+            f"Delta_Ts = "
+            f"{(Ts_out - Ts_in):.3f} K"
+        )
+
+        print(
+            f"Delta_Ts_expected = "
+            f"{solid_energy_change / Cs:.3f} K"
+        )
+
+        # ======================================================
+        # ENERGY BALANCES
+        # ======================================================
+
+        gas_expected = (
+            Q_burning
+            - Q_gs
+            - Q_gw
+        )
+
+        solid_expected = (
+            Q_gs
+            - Q_ws
+        )
 
         gas_energy_balance = (
             gas_energy_change
-            - expected_gas_change
+            - gas_expected
         )
 
         solid_energy_balance = (
             solid_energy_change
-            - expected_solid_change
+            - solid_expected
         )
-
-        # ======================================================
-        # WALL ENERGY
-        # ======================================================
-
-        Q_wall = (
-            V_cell * np.sum(q_gw)
-            + V_cell * np.sum(q_ws)
-        )
-
-        # ======================================================
-        # TOTAL BURNING ZONE BALANCE
-        # ======================================================
 
         total_energy_balance = (
             Hg_in
@@ -445,22 +925,84 @@ class Burning:
             + Q_burning
             - Hg_out
             - Hs_out
-            - Q_wall
+            - Q_wall_loss
         )
 
         # ======================================================
-        # DEBUG PRINT
+        # DEBUG
         # ======================================================
 
-        print("\n========== BURNING STEADY STATE ==========")
+        print(
+            "\n========== BURNING STEADY STATE =========="
+        )
 
-        print(f"Tg_in  = {Tg_in:.3f} K")
-        print(f"Tg_out = {Tg_out:.3f} K")
+        print(
+            f"Tg_in       = {Tg_in:.3f} K"
+        )
 
-        print(f"Ts_in  = {Ts_in:.3f} K")
-        print(f"Ts_out = {Ts_out:.3f} K")
+        print(
+            f"Tg_out      = {Tg_out:.3f} K"
+        )
 
-        print(f"Q_gs   = {Q_gs:.3f} W")
+        print(
+            f"Ts_in       = {Ts_in:.3f} K"
+        )
+
+        print(
+            f"Ts_out      = {Ts_out:.3f} K"
+        )
+
+        print(
+            f"Tw_out      = {Tw_out:.3f} K"
+        )
+
+        print(
+            f"Q_burning   = {Q_burning:.3f} W"
+        )
+
+        print(
+            f"Q_gs        = {Q_gs:.3f} W"
+        )
+
+        print(
+            f"Q_gw        = {Q_gw:.3f} W"
+        )
+
+        print(
+            f"Q_ws        = {Q_ws:.3f} W"
+        )
+
+        print(
+            f"Q_wall_loss = {Q_wall_loss:.3f} W"
+        )
+
+        print(
+            "\n--- RADIATION ---"
+        )
+
+        print(
+            f"Q_gs_rad    = {Q_gs_rad:.3f} W"
+        )
+
+        print(
+            f"Q_gw_rad    = {Q_gw_rad:.3f} W"
+        )
+
+        print(
+            f"Q_ws_rad    = {Q_ws_rad:.3f} W"
+        )
+
+        print(
+            f"Iterations   = {iteration + 1}"
+        )
+
+        print(
+            f"Rad. error   = {error:.6e} K"
+        )
+
+        print(
+            "\n--- ENERGY BALANCE ---"
+        )
 
         print(
             f"Gas balance   = "
@@ -477,16 +1019,55 @@ class Burning:
             f"{total_energy_balance:.6e} W"
         )
 
-        print("===========================================\n")
+        # ======================================================
+        # CELL DIAGNOSTICS
+        # ======================================================
 
-        # ======================================================
-        # RETURN
-        # ======================================================
+        print(
+            "\n--- CELL TEMPERATURES ---"
+        )
+
+        for i in range(N):
+
+            Qcomb_i = q_cell[i]
+
+            Qgs_i = (
+                V_cell
+                * q_gs_cell[i]
+            )
+
+            Qgw_i = (
+                V_cell
+                * q_gw_cell[i]
+            )
+
+            Qws_i = (
+                V_cell
+                * q_ws_cell[i]
+            )
+
+            Qloss_i = Q_loss_cell[i]
+
+            print(
+                f"cell {i}: "
+                f"Tg={Tg_ss[i]:.2f} K, "
+                f"Ts={Ts_ss[i]:.2f} K, "
+                f"Tw={Tw_ss[i]:.2f} K, "
+                f"Qcomb={Qcomb_i / 1e6:.3f} MW, "
+                f"Qgs={Qgs_i / 1e6:.3f} MW, "
+                f"Qgw={Qgw_i / 1e6:.3f} MW, "
+                f"Qws={Qws_i / 1e6:.3f} MW, "
+                f"Qloss={Qloss_i / 1e6:.3f} MW"
+            )
+
+        print(
+            "===========================================\n"
+        )
 
         return (
             Tg_ss,
             Ts_ss,
-            Tw,
+            Tw_ss,
             Q_petcoke,
             Q_coal,
             Q_RDF,
@@ -507,10 +1088,16 @@ class Burning:
         if not isinstance(state.Tg_burning, np.ndarray):
             raise TypeError("Tg_burning must be np.ndarray")
 
-        if state.Tg_burning.shape != (5,):
+        if state.Tg_burning.shape != (self.N,):
             raise ValueError(
                 f"Burning shape corrupted: {state.Tg_burning.shape}"
             )
+
+        # ======================================================
+        # INPUTS
+        # ======================================================
+        fuel_rate_total = inputs.get("Fuel_rate_total", 0.0)
+        O2 = inputs.get("O2", 3.5)
 
         # ======================================================
         # SOLID MOTION
@@ -555,14 +1142,8 @@ class Burning:
         # GAS MASS FLOW
         # ======================================================
         m_dot_g = gas_mass_balance(
-            fuel_rate_total=inputs.get(
-                "Fuel_rate_total",
-                1.0,
-            ),
-            O2=inputs.get(
-                "O2",
-                3.5,
-            ),
+            fuel_rate_total=fuel_rate_total,
+            O2=O2,
             eps=self.eps,
         )
 
@@ -629,19 +1210,13 @@ class Burning:
         state.Hg_burning = (
             state.m_dot_g
             * self.Cp_g
-            * (
-                state.Tg_burning
-                - self.T_ref
-            )
+            * (state.Tg_burning - self.T_ref)
         )
 
         state.Hs_burning = (
             state.m_dot_s
             * self.Cp_s
-            * (
-                state.Ts_burning
-                - self.T_ref
-            )
+            * (state.Ts_burning - self.T_ref)
         )
 
         # ======================================================
