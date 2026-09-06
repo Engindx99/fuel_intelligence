@@ -1,5 +1,57 @@
 import numpy as np
 
+ZONE_ENERGY_WEIGHTS = {
+    "burning": {
+        "axial": [
+            0.05,
+            0.10,
+            0.20,
+            0.35,
+            0.30,
+        ],
+    },
+
+    "transition": {
+        "axial": [
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+        ],
+    },
+
+    "calciner": {
+        "axial": [
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+        ],
+    },
+
+    "preheater": {
+        "axial": [
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+        ],
+    },
+
+    "cooler": {
+        "axial": [
+            0.30,
+            0.25,
+            0.20,
+            0.15,
+            0.10,
+        ],
+    },
+}
+
 
 # ======================================================
 # FLOW
@@ -292,32 +344,33 @@ def fuel_heat_release(
 
 def combustion_axial_distribution(
     Q_total,
-    N,
-    center=0.65,
-    sigma=0.20,
+    weights,
 ):
     """
-    Burning zone içerisinde toplam yanma ısısının
-    eksenel dağılımı.
+    Toplam yanma ısısının eksenel ağırlıklara göre dağıtılması.
 
     Q_total : toplam yanma ısısı [W]
-    N       : hücre sayısı
-    center  : normalize edilmiş yanma merkezi [0-1]
-    sigma   : dağılım genişliği
+    weights : hücre ağırlıkları [-]
+
+    Returns
+    -------
+    q_cell : hücre başına yanma ısısı [W]
     """
 
-    # Cell-center coordinates
-    x = (np.arange(N) + 0.5) / N
+    weights = np.asarray(weights, dtype=float)
 
-    weights = np.exp(
-        -0.5
-        * (
-            (x - center) / sigma
-        ) ** 2
-    )
+    if len(weights) == 0:
+        raise ValueError("Combustion weights cannot be empty.")
 
-    # Energy conservation
-    weights /= np.sum(weights)
+    if np.any(weights < 0.0):
+        raise ValueError("Combustion weights must be non-negative.")
+
+    weight_sum = np.sum(weights)
+
+    if weight_sum <= 0.0:
+        raise ValueError("Combustion weights must have a positive sum.")
+
+    weights = weights / weight_sum
 
     q_cell = Q_total * weights
 

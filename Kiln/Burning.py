@@ -20,6 +20,7 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from physics.physics import ZONE_ENERGY_WEIGHTS
 from physics.physics import ZONE_HT_CONFIG
 from chemistry.reactions import ChemistryModel
 from physics.physics import wall_thermal_resistance
@@ -291,11 +292,17 @@ class Burning:
         # COMBUSTION DISTRIBUTION
         # ======================================================
 
+        weights = ZONE_ENERGY_WEIGHTS["burning"]["axial"]
+
+        if len(weights) != N:
+            raise ValueError(
+                f"Burning axial weights length ({len(weights)}) "
+                f"must match N ({N})."
+            )
+
         q_cell = combustion_axial_distribution(
             Q_total=Q_burning,
-            N=N,
-            center=0.65,
-            sigma=0.20
+            weights=weights,
         )
 
         # ======================================================
@@ -955,20 +962,57 @@ class Burning:
 
         for i in range(N):
 
+            # ==================================================
+            # GAS -> SOLID
+            # ==================================================
+
+            Qgs_conv_cell = Qgs_conv[i]
+
+            Qgs_rad_cell = (
+                V_cell
+                * q_gs_rad_final[i]
+            )
+
             Qgs_cell = (
-                Qgs_conv[i]
-                + V_cell * q_gs_rad_final[i]
+                Qgs_conv_cell
+                + Qgs_rad_cell
+            )
+
+            # ==================================================
+            # GAS -> WALL
+            # ==================================================
+
+            Qgw_conv_cell = Qgw_conv[i]
+
+            Qgw_rad_cell = (
+                V_cell
+                * q_gw_rad_final[i]
             )
 
             Qgw_cell = (
-                Qgw_conv[i]
-                + V_cell * q_gw_rad_final[i]
+                Qgw_conv_cell
+                + Qgw_rad_cell
+            )
+
+            # ==================================================
+            # SOLID -> WALL
+            # ==================================================
+
+            Qws_conv_cell = Qws_conv[i]
+
+            Qws_rad_cell = (
+                V_cell
+                * q_ws_rad_final[i]
             )
 
             Qws_cell = (
-                Qws_conv[i]
-                + V_cell * q_ws_rad_final[i]
+                Qws_conv_cell
+                + Qws_rad_cell
             )
+
+            # ==================================================
+            # WALL LOSS
+            # ==================================================
 
             Qloss_cell = (
                 (
@@ -978,15 +1022,30 @@ class Burning:
                 / R_total
             )
 
+            # ==================================================
+            # DEBUG OUTPUT
+            # ==================================================
+
             print(
                 f"cell {i}: "
                 f"Tg={Tg_ss[i]:.2f} K, "
                 f"Ts={Ts_ss[i]:.2f} K, "
                 f"Tw={Tw_ss[i]:.2f} K, "
+
                 f"Qcomb={q_cell[i]/1e6:.3f} MW, "
+
                 f"Qgs={Qgs_cell/1e6:.3f} MW, "
+                f"Qgs_conv={Qgs_conv_cell/1e6:.3f} MW, "
+                f"Qgs_rad={Qgs_rad_cell/1e6:.3f} MW, "
+
                 f"Qgw={Qgw_cell/1e6:.3f} MW, "
+                f"Qgw_conv={Qgw_conv_cell/1e6:.3f} MW, "
+                f"Qgw_rad={Qgw_rad_cell/1e6:.3f} MW, "
+
                 f"Qws={Qws_cell/1e6:.3f} MW, "
+                f"Qws_conv={Qws_conv_cell/1e6:.3f} MW, "
+                f"Qws_rad={Qws_rad_cell/1e6:.3f} MW, "
+
                 f"Qloss={Qloss_cell/1e6:.3f} MW"
             )
 
@@ -1144,8 +1203,10 @@ class Burning:
         # ======================================================
         state.Hg_burning = (
             state.m_dot_g
-            * self.Cp_g
-            * (state.Tg_burning - self.T_ref)
+            * h_gas(
+                state.Tg_burning,
+                self.T_ref
+            )
         )
 
         state.Hs_burning = (

@@ -1171,29 +1171,17 @@ class Transition:
 
         m_dot_g = state.m_dot_g
 
-        if m_dot_g <= 0.0:
+        if m_dot_g <= self.eps:
             return self.T_ref
 
-        # Specific enthalpy [J/kg]
         h_target = H / m_dot_g
 
-        # --------------------------------------------------
-        # Solve:
-        #
-        # h_gas(T, T_ref) = h_target
-        #
-        # using bisection
-        # --------------------------------------------------
-
-        T_low = 300.0
-        T_high = 5000.0
+        T_low = self.T_ref
+        T_high = 4000.0
 
         for _ in range(100):
 
-            T_mid = 0.5 * (
-                T_low
-                + T_high
-            )
+            T_mid = 0.5 * (T_low + T_high)
 
             h_mid = h_gas(
                 T_mid,
@@ -1201,17 +1189,11 @@ class Transition:
             )
 
             if h_mid < h_target:
-
                 T_low = T_mid
-
             else:
-
                 T_high = T_mid
 
-        return 0.5 * (
-            T_low
-            + T_high
-        )
+        return 0.5 * (T_low + T_high)
 
 
     def solid_inlet_temperature_from_enthalpy(
