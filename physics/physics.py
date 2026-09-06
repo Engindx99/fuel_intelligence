@@ -6,10 +6,64 @@ import numpy as np
 # ======================================================
 
 def solid_mass_flow(feed_rate):
+    """
+    Solid mass flow rate.
 
-    m_dot_s = feed_rate # Solid feed rate [kg/s]
+    SI:
+        feed_rate : kg/s
+        m_dot_s   : kg/s
+    """
+    m_dot_s = feed_rate
 
     return m_dot_s
+
+
+# ======================================================
+# GAS THERMODYNAMIC PROPERTIES
+# ======================================================
+
+def cp_gas(T):
+    """
+    Temperature-dependent representative combustion-gas Cp.
+
+    SI units:
+        T  : K
+        Cp : J/(kg K)
+
+    Temporary thermodynamic closure.
+    Later this can be replaced by species-based Cp.
+    """
+
+    T = np.asarray(T, dtype=float)
+
+    Cp = (
+        1050.0
+        + 0.18 * T
+        - 3.0e-5 * T**2
+    )
+
+    return np.maximum(Cp, 1050.0)
+
+
+def h_gas(T, T_ref):
+    """
+    Gas sensible enthalpy relative to T_ref.
+
+    SI units:
+        T     : K
+        T_ref : K
+        h     : J/kg
+    """
+
+    T = np.asarray(T, dtype=float)
+
+    h = (
+        1050.0 * (T - T_ref)
+        + 0.09 * (T**2 - T_ref**2)
+        - 1.0e-5 * (T**3 - T_ref**3)
+    )
+
+    return h
 
 
 def gas_mass_balance(
@@ -244,7 +298,7 @@ def combustion_axial_distribution(
 ):
     """
     Burning zone içerisinde toplam yanma ısısının
-    eksenel dağılımını oluşturur.
+    eksenel dağılımı.
 
     Q_total : toplam yanma ısısı [W]
     N       : hücre sayısı
@@ -252,11 +306,8 @@ def combustion_axial_distribution(
     sigma   : dağılım genişliği
     """
 
-    x = np.linspace(
-        0.0,
-        1.0,
-        N,
-    )
+    # Cell-center coordinates
+    x = (np.arange(N) + 0.5) / N
 
     weights = np.exp(
         -0.5
@@ -265,7 +316,7 @@ def combustion_axial_distribution(
         ) ** 2
     )
 
-    # Enerji korunumu
+    # Energy conservation
     weights /= np.sum(weights)
 
     q_cell = Q_total * weights

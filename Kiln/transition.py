@@ -1,6 +1,7 @@
 import numpy as np
 from physics.physics import solid_mass_flow
 from physics.physics import fuel_heat_release
+from physics.physics import cp_gas, h_gas
 from physics.physics import wall_thermal_resistance
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
@@ -107,11 +108,16 @@ class Transition:
         m_dot_g = state.m_dot_g
         m_dot_s = state.m_dot_s
 
-        Cp_g = self.Cp_g
+        # ======================================================
+        # SOLID THERMAL CAPACITY
+        # ======================================================
+
         Cp_s = self.Cp_s
 
-        Cg = m_dot_g * Cp_g
-        Cs = m_dot_s * Cp_s
+        Cs = (
+            m_dot_s
+            * Cp_s
+        )
 
         # ======================================================
         # INLET TEMPERATURES FROM ENTHALPY
@@ -241,19 +247,53 @@ class Transition:
                 Tw_i = 2 * N + i
 
                 # ==================================================
+                # GAS LOCAL THERMODYNAMIC PROPERTIES
+                # ==================================================
+
+                Cp_g_i = cp_gas(
+                    Tg_iter[i]
+                )
+
+                Cg_i = (
+                    m_dot_g
+                    * Cp_g_i
+                )
+
+                # ==================================================
                 # GAS ENERGY BALANCE
                 #
                 # Gas flow:
                 #
                 # N-1 -> N-2 -> ... -> 1 -> 0
                 #
-                # Therefore:
-                # inlet  = N-1
-                # outlet = 0
+                # Inlet  = N-1
+                # Outlet = 0
+                #
+                # Enthalpy formulation:
+                #
+                # m_dot_g [h(Tg_i) - h(Tg_up)]
+                # + Q_gs
+                # + Q_gw
+                # = 0
                 # ==================================================
 
+                h_i_iter = h_gas(
+                    Tg_iter[i],
+                    self.T_ref
+                )
+
+                h_linear_const_i = (
+                    h_i_iter
+                    - Cp_g_i * Tg_iter[i]
+                )
+
+                # --------------------------------------------------
+                # GAS -> SOLID
+                # GAS -> WALL
+                # --------------------------------------------------
+
                 A[row, Tg_i] += (
-                    Cg
+                    Cg_i
                     + V_cell * K_gs
                     + V_cell * K_gw
                 )
@@ -266,6 +306,10 @@ class Transition:
                     -V_cell * K_gw
                 )
 
+                # --------------------------------------------------
+                # RADIATION GAS SINK
+                # --------------------------------------------------
+
                 radiation_gas_sink = (
                     V_cell
                     * (
@@ -274,31 +318,61 @@ class Transition:
                     )
                 )
 
+                # --------------------------------------------------
+                # GAS INLET / UPSTREAM CELL
+                # --------------------------------------------------
+
                 if i == N - 1:
 
-                    # ------------------------------------------
+                    # ----------------------------------------------
                     # GAS INLET FROM BURNING
-                    # ------------------------------------------
+                    # ----------------------------------------------
+
+                    h_in = h_gas(
+                        Tg_in,
+                        self.T_ref
+                    )
 
                     b[row] = (
-                        Cg * Tg_in
-                        - radiation_gas_sink
+                        -radiation_gas_sink
+                        + m_dot_g * h_in
+                        - m_dot_g * h_linear_const_i
                     )
 
                 else:
 
-                    # ------------------------------------------
+                    # ----------------------------------------------
                     # UPSTREAM GAS CELL
                     #
-                    # Gas moves from i+1 -> i
-                    # ------------------------------------------
+                    # Gas moves:
+                    #
+                    # i+1 -> i
+                    # ----------------------------------------------
 
                     Tg_up_i = i + 1
 
-                    A[row, Tg_up_i] += -Cg
+                    Cp_g_up = cp_gas(
+                        Tg_iter[i + 1]
+                    )
+
+                    h_up_iter = h_gas(
+                        Tg_iter[i + 1],
+                        self.T_ref
+                    )
+
+                    h_linear_const_up = (
+                        h_up_iter
+                        - Cp_g_up * Tg_iter[i + 1]
+                    )
+
+                    A[row, Tg_up_i] += (
+                        -m_dot_g * Cp_g_up
+                    )
 
                     b[row] = (
                         -radiation_gas_sink
+                        - m_dot_g * h_linear_const_i
+                        + m_dot_g * h_linear_const_up
                     )
 
                 row += 1
@@ -310,9 +384,8 @@ class Transition:
                 #
                 # 0 -> 1 -> ... -> N-2 -> N-1
                 #
-                # Therefore:
-                # inlet  = 0
-                # outlet = N-1
+                # Inlet  = 0
+                # Outlet = N-1
                 # ==================================================
 
                 A[row, Ts_i] += (
@@ -329,6 +402,10 @@ class Transition:
                     -V_cell * K_ws
                 )
 
+                # --------------------------------------------------
+                # RADIATION SOLID SOURCE
+                # --------------------------------------------------
+
                 radiation_solid_source = (
                     V_cell
                     * (
@@ -337,11 +414,15 @@ class Transition:
                     )
                 )
 
+                # --------------------------------------------------
+                # SOLID INLET / UPSTREAM CELL
+                # --------------------------------------------------
+
                 if i == 0:
 
-                    # ------------------------------------------
+                    # ----------------------------------------------
                     # SOLID INLET FROM BURNING
-                    # ------------------------------------------
+                    # ----------------------------------------------
 
                     b[row] = (
                         Cs * Ts_in
@@ -350,15 +431,19 @@ class Transition:
 
                 else:
 
-                    # ------------------------------------------
+                    # ----------------------------------------------
                     # UPSTREAM SOLID CELL
                     #
-                    # Solid moves from i-1 -> i
-                    # ------------------------------------------
+                    # Solid moves:
+                    #
+                    # i-1 -> i
+                    # ----------------------------------------------
 
                     Ts_up_i = N + i - 1
 
-                    A[row, Ts_up_i] += -Cs
+                    A[row, Ts_up_i] += (
+                        -Cs
+                    )
 
                     b[row] = (
                         radiation_solid_source
@@ -383,6 +468,10 @@ class Transition:
                     -V_cell * K_ws
                     -1.0 / R_total
                 )
+
+                # --------------------------------------------------
+                # WALL RADIATION SOURCE
+                # --------------------------------------------------
 
                 radiation_wall_source = (
                     V_cell
@@ -637,10 +726,9 @@ class Transition:
 
         Hg_out = (
             m_dot_g
-            * Cp_g
-            * (
-                Tg_ss[0]
-                - self.T_ref
+            * h_gas(
+                Tg_ss[0],
+                self.T_ref
             )
         )
 
@@ -1081,17 +1169,49 @@ class Transition:
         state,
     ):
 
-        Tin = (
-            H
-            / (
-                state.m_dot_g
-                * self.Cp_g
-                + self.eps
-            )
-            + self.T_ref
-        )
+        m_dot_g = state.m_dot_g
 
-        return Tin
+        if m_dot_g <= 0.0:
+            return self.T_ref
+
+        # Specific enthalpy [J/kg]
+        h_target = H / m_dot_g
+
+        # --------------------------------------------------
+        # Solve:
+        #
+        # h_gas(T, T_ref) = h_target
+        #
+        # using bisection
+        # --------------------------------------------------
+
+        T_low = 300.0
+        T_high = 5000.0
+
+        for _ in range(100):
+
+            T_mid = 0.5 * (
+                T_low
+                + T_high
+            )
+
+            h_mid = h_gas(
+                T_mid,
+                self.T_ref
+            )
+
+            if h_mid < h_target:
+
+                T_low = T_mid
+
+            else:
+
+                T_high = T_mid
+
+        return 0.5 * (
+            T_low
+            + T_high
+        )
 
 
     def solid_inlet_temperature_from_enthalpy(
