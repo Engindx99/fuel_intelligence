@@ -66,11 +66,12 @@ class ChemistryModel:
     # CALCINER CHEMISTRY
     # ======================================================
 
-    def apply_calciner(self, state, tau):
+    def apply_calciner(self, state, dz, u_s):
 
         state = self.calcination.apply(
             state,
-            tau,
+            dz,
+            u_s,
         )
 
         state.Calciner_Q_sink = (

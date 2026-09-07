@@ -349,9 +349,21 @@ class MassTransport:
         # CLINKER DISCHARGE
         # ======================================================
 
-        self.discharge_clinker(
+        state = self.discharge_clinker(
             state,
             fraction,
+        )
+
+        # ======================================================
+        # CUMULATIVE MASS ACCOUNTING
+        # ======================================================
+
+        state.Cumulative_feed_mass += (
+            state.feed_mass_in_step
+        )
+
+        state.Cumulative_clinker_mass += (
+            state.clinker_mass_out_step
         )
 
         return state

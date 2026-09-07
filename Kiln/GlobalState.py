@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 import numpy as np
 from typing import Dict
 from chemistry.phases import SolidPhases, GasPhases
@@ -380,6 +380,54 @@ class GlobalState:
             "cooler": build_zone_material(N, make_cell),
         }
         
+        
+        
+        # ======================================================
+        # INITIAL GLOBAL MASS
+        # ======================================================
+
+        initial_solid_mass = 0.0
+
+        for material in self.materials.values():
+
+            for f in fields(SolidPhases):
+
+                values = getattr(
+                    material.solids,
+                    f.name,
+                )
+
+                initial_solid_mass += np.sum(
+                    np.maximum(values, 0.0)
+                )
+
+        initial_gas_mass = 0.0
+
+        for material in self.materials.values():
+
+            for f in fields(GasPhases):
+
+                values = getattr(
+                    material.gases,
+                    f.name,
+                )
+
+                initial_gas_mass += np.sum(
+                    np.maximum(values, 0.0)
+                )
+
+        self.Initial_total_mass = (
+            initial_solid_mass
+            + initial_gas_mass
+        )
+
+        self.Total_solid_inventory = (
+            initial_solid_mass
+        )
+
+        self.Total_gas_inventory = (
+            initial_gas_mass
+        )
 
 
     # ======================================================

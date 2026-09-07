@@ -225,7 +225,6 @@ class Twin:
         # ======================================================
         self.state = self.calciner.apply(
             self.state,
-            self.dt,
         )
 
 
@@ -441,27 +440,6 @@ class Twin:
                 self.state.Initial_total_mass = (
                     total_solid_mass + total_gas_mass
                 )
-
-
-            # ------------------------------------------------------
-            # CUMULATIVE MASS FLOWS
-            # ------------------------------------------------------
-
-            self.state.Cumulative_feed_mass += (
-                getattr(
-                    self.state,
-                    "feed_mass_in_step",
-                    0.0,
-                )
-            )
-
-            self.state.Cumulative_clinker_mass += (
-                getattr(
-                    self.state,
-                    "clinker_mass_out_step",
-                    0.0,
-                )
-            )
 
 
             # ------------------------------------------------------

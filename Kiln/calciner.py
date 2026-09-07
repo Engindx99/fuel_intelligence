@@ -7,6 +7,7 @@ from physics.physics import radiation
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
 from physics.physics import wall_thermal_resistance
+from physics.physics import solid_axial_velocity
 
 from chemistry.reactions import ChemistryModel
 from physics.physics import ZONE_HT_CONFIG
@@ -112,6 +113,7 @@ class Calciner:
         Tg_in,
         Ts_in,
         reaction_sink=0.0,
+        reaction_heat_cells=None,
     ):
 
         # ======================================================
@@ -183,14 +185,49 @@ class Calciner:
         # ======================================================
         # REACTION DISTRIBUTION
         #
-        # reaction_sink : W
-        # reaction_cell : W/cell
+        # reaction_heat_cells[i] : W
+        #
+        # Each cell receives the actual local
+        # calcination heat sink.
         # ======================================================
 
-        reaction_cell = (
-            reaction_sink
-            / N
-        )
+        if reaction_heat_cells is None:
+
+            reaction_heat_cells = np.zeros(N)
+
+        else:
+
+            reaction_heat_cells = np.asarray(
+                reaction_heat_cells,
+                dtype=float,
+            )
+
+            if reaction_heat_cells.shape != (N,):
+
+                raise ValueError(
+                    "reaction_heat_cells must have "
+                    f"shape ({N},)."
+                )
+
+            if not np.all(
+                np.isfinite(
+                    reaction_heat_cells
+                )
+            ):
+
+                raise ValueError(
+                    "reaction_heat_cells contains "
+                    "non-finite values."
+                )
+
+            if np.any(
+                reaction_heat_cells < 0.0
+            ):
+
+                raise ValueError(
+                    "reaction_heat_cells cannot "
+                    "contain negative values."
+                )
 
         # ======================================================
         # PICARD ITERATION
@@ -476,7 +513,7 @@ class Calciner:
                     b[row] = (
                         Cs * Ts_in
                         + radiation_solid_source
-                        - reaction_cell
+                        - reaction_heat_cells[i]
                     )
 
                 # --------------------------------------------------
@@ -495,7 +532,7 @@ class Calciner:
 
                     b[row] = (
                         radiation_solid_source
-                        - reaction_cell
+                        - reaction_heat_cells[i]
                     )
 
                 row += 1
@@ -977,7 +1014,7 @@ class Calciner:
     # ======================================================
     # STATE UPDATE
     # ======================================================
-    def apply(self, state, dt):
+    def apply(self, state):
 
         # ======================================================
         # STATE INTEGRITY CHECK
@@ -1036,77 +1073,355 @@ class Calciner:
                 state,
             )
         )
-
+        
         # ======================================================
-        # CaCO3 BEFORE REACTION
-        # ======================================================
-        CaCO3_before = state.materials["calciner"].solids.CaCO3.copy()
-
-        print("\n========== CALCINER CaCO3 BEFORE ==========")
-        print("cells =", CaCO3_before)
-        print("total =", np.sum(CaCO3_before))
-
-        # ======================================================
-        # CHEMISTRY
-        # ======================================================
-        state.dt = dt
-
-        state = self.chemistry.apply_calciner(
-            state,
-            state.residence_time,
-        )
-
-        # ======================================================
-        # CaCO3 AFTER REACTION
-        # ======================================================
-        CaCO3_after = state.materials["calciner"].solids.CaCO3
-
-        print("\n========== CALCINER CaCO3 AFTER ==========")
-        print("cells =", CaCO3_after)
-        print("total =", np.sum(CaCO3_after))
-
-        print("\n========== CALCINER CaCO3 REACTED ==========")
-        print("cells =", CaCO3_before - CaCO3_after)
-        print("total =", np.sum(CaCO3_before - CaCO3_after))
-        print(
-            "Q_calcination =",
-            state.Calcination_Q_sink,
-            "W"
-        )
-
-        # ======================================================
-        # THERMAL STEP
+        # CALCINER SOLID AXIAL VELOCITY
         #
-        # Reaction is a solid-phase energy sink.
+        # Steady-state spatial reaction:
         #
-        # IMPORTANT:
-        # No dt is passed to thermal_step().
+        #     u_s * dm/dz = -r
+        #
+        # No residence-time chemistry is used here.
         # ======================================================
 
-        Tg, Ts, Tw, wall_loss, wall_debug = (
-            self.thermal_step(
-                state.Tg_calciner,
-                state.Ts_calciner,
-                state.Tw_calciner,
+        rpm = float(
+            getattr(
                 state,
-                Tg_in,
-                Ts_in,
-                reaction_sink=(
-                    state.Calcination_Q_sink
-                ),
+                "rpm",
+                self.rpm,
             )
         )
 
+        self.u_s = solid_axial_velocity(
+            L=self.L,
+            D=self.D,
+            slope_deg=self.slope_deg,
+            fill_fraction=self.fill_fraction,
+            rpm=rpm,
+            eps=self.eps,
+        )
+
+        self.u_s = max(
+            float(self.u_s),
+            self.eps,
+        )
+
+
         # ======================================================
-        # UPDATE TEMPERATURE STATES
+        # CHEMISTRY <-> THERMAL STEADY-STATE ITERATION
+        #
+        # Spatial chemistry:
+        #
+        #     Ts(z)
+        #       ↓
+        #     k(T)
+        #       ↓
+        #     X(z)
+        #       ↓
+        #     Q_reaction(z)
+        #       ↓
+        #     thermal_step()
+        #       ↓
+        #     new Ts(z)
+        #
+        # No dt is used.
         # ======================================================
 
-        state.Tg_calciner = Tg
-        state.Ts_calciner = Ts
-        state.Tw_calciner = Tw
+        max_coupling_iter = 50
+        coupling_tol = 1.0e-5
+        coupling_relaxation = 0.5
+
+        # ------------------------------------------------------
+        # INITIAL GUESS
+        # ------------------------------------------------------
+
+        Tg_iter = (
+            np.asarray(
+                state.Tg_calciner,
+                dtype=float,
+            )
+            .copy()
+        )
+
+        Ts_iter = (
+            np.asarray(
+                state.Ts_calciner,
+                dtype=float,
+            )
+            .copy()
+        )
+
+        Tw_iter = (
+            np.asarray(
+                state.Tw_calciner,
+                dtype=float,
+            )
+            .copy()
+        )
+
+        previous_Q_reaction = 0.0
+
+        coupling_converged = False
+
+        # ======================================================
+        # OUTER STEADY-STATE ITERATION
+        # ======================================================
+
+        for coupling_iteration in range(
+            max_coupling_iter
+        ):
+
+            # ==================================================
+            # 1. UPDATE REACTION TEMPERATURE FIELD
+            # ==================================================
+
+            state.Ts_calciner = (
+                Ts_iter.copy()
+            )
+
+            # ==================================================
+            # 2. SPATIAL CHEMISTRY
+            # ==================================================
+
+            state = (
+                self.chemistry.apply_calciner(
+                    state,
+                    self.dz,
+                    self.u_s,
+                )
+            )
+
+            Q_reaction = float(
+                state.Calcination_Q_sink
+            )
+
+            # ==================================================
+            # 3. THERMAL SOLUTION
+            # ==================================================
+
+            (
+                Tg_new,
+                Ts_new,
+                Tw_new,
+                wall_loss_new,
+                wall_debug_new,
+            ) = self.thermal_step(
+                Tg_iter,
+                Ts_iter,
+                Tw_iter,
+                state,
+                Tg_in,
+                Ts_in,
+                reaction_sink=Q_reaction,
+                reaction_heat_cells=(
+                    state.Calcination_Q_cells
+                ),
+            )
+
+            # ==================================================
+            # 4. RELAXATION
+            # ==================================================
+
+            Tg_relaxed = (
+                coupling_relaxation
+                * Tg_new
+                +
+                (1.0 - coupling_relaxation)
+                * Tg_iter
+            )
+
+            Ts_relaxed = (
+                coupling_relaxation
+                * Ts_new
+                +
+                (1.0 - coupling_relaxation)
+                * Ts_iter
+            )
+
+            Tw_relaxed = (
+                coupling_relaxation
+                * Tw_new
+                +
+                (1.0 - coupling_relaxation)
+                * Tw_iter
+            )
+
+            # ==================================================
+            # 5. CONVERGENCE ERRORS
+            # ==================================================
+
+            temperature_error = max(
+                np.max(
+                    np.abs(
+                        Tg_relaxed
+                        - Tg_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Ts_relaxed
+                        - Ts_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Tw_relaxed
+                        - Tw_iter
+                    )
+                ),
+            )
+
+            reaction_error = abs(
+                Q_reaction
+                - previous_Q_reaction
+            )
+
+            reaction_scale = max(
+                abs(Q_reaction),
+                1.0,
+            )
+
+            reaction_relative_error = (
+                reaction_error
+                / reaction_scale
+            )
+
+            # ==================================================
+            # 6. UPDATE ITERATION STATES
+            # ==================================================
+
+            Tg_iter = Tg_relaxed
+            Ts_iter = Ts_relaxed
+            Tw_iter = Tw_relaxed
+
+            previous_Q_reaction = (
+                Q_reaction
+            )
+
+            # ==================================================
+            # 7. STEADY-STATE CONVERGENCE
+            # ==================================================
+
+            if (
+                temperature_error
+                < coupling_tol
+                and
+                reaction_relative_error
+                < coupling_tol
+            ):
+
+                coupling_converged = True
+
+                break
+
+        # ======================================================
+        # FINAL STATE
+        # ======================================================
+
+        state.Tg_calciner = Tg_iter
+        state.Ts_calciner = Ts_iter
+        state.Tw_calciner = Tw_iter
+
+        state.Wall_loss_calciner = float(
+            wall_loss_new
+        )
+
+        state.Calciner_coupling_iterations = (
+            coupling_iteration + 1
+        )
+
+        state.Calciner_coupling_converged = (
+            coupling_converged
+        )
+
+        state.Calciner_coupling_temperature_error = (
+            float(temperature_error)
+        )
+
+        state.Calciner_coupling_reaction_error = (
+            float(reaction_relative_error)
+        )
+
+        # ======================================================
+        # FINAL CALCINER REACTION REPORT
+        # ======================================================
+
+        print(
+            "\n========== CALCINER REACTION =========="
+        )
+
+        print(
+            f"Coupling iterations    = "
+            f"{state.Calciner_coupling_iterations}"
+        )
+
+        print(
+            f"Coupling converged     = "
+            f"{state.Calciner_coupling_converged}"
+        )
+
+        print(
+            f"Temperature error      = "
+            f"{state.Calciner_coupling_temperature_error:.6e} K"
+        )
+
+        print(
+            f"Reaction relative err  = "
+            f"{state.Calciner_coupling_reaction_error:.6e}"
+        )
+
+        print(
+            f"CaCO3 inlet flow       = "
+            f"{state.m_dot_CaCO3_in_calciner:.6f} kg/s"
+        )
+
+        print(
+            f"CaCO3 reacted flow     = "
+            f"{state.m_dot_CaCO3_reacted_calciner:.6f} kg/s"
+        )
+
+        print(
+            f"CaCO3 outlet flow      = "
+            f"{state.m_dot_CaCO3_out_calciner:.6f} kg/s"
+        )
+
+        print(
+            f"Calcination conversion = "
+            f"{state.X_calcination:.6f}"
+        )
+
+        print(
+            f"Calcination heat       = "
+            f"{state.Calcination_Q_sink:.6e} W"
+        )
+
+        print("----------------------------------------")
+
+        print(
+            "Cell conversion        =",
+            state.X_CaCO3_cells
+        )
+
+        print(
+            "Cell reacted flow      =",
+            state.m_dot_CaCO3_reacted_cells
+        )
+
+        print(
+            "Cell inlet flow        =",
+            state.m_dot_CaCO3_in_cells
+        )
+
+        print(
+            "Cell outlet flow       =",
+            state.m_dot_CaCO3_out_cells
+        )
+
+        print("========================================")
+        state.Tw_calciner = Tw_iter
 
         state.Wall_loss_calciner = (
-            float(wall_loss)
+            float(wall_loss_new)
         )
 
         # ======================================================

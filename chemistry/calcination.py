@@ -1,287 +1,298 @@
 import numpy as np
 
 from chemistry.base import ReactionBase
+from chemistry.composition import RAW_MEAL_COMPOSITION
 
 
 class CalcinationModel(ReactionBase):
 
     def __init__(self):
-
         super().__init__()
 
-        # ==================================================
+        # ======================================================
         # KINETICS
-        # ==================================================
-        self.prefactor = 1.0e3          # 1/s
-        self.activation_energy = 1.5e5  # J/mol
+        # ======================================================
 
-        # ==================================================
-        # THERMODYNAMICS
-        # ==================================================
-        self.deltaH = 1.78e6            # J/kg CaCO3
+        self.prefactor = 12.0             # 1/s
+        self.activation_energy = 1.5e5      # J/mol
+        self.deltaH = 1.78e6                # J/kg CaCO3
 
-        # ==================================================
+        # ======================================================
         # STOICHIOMETRY
-        # ==================================================
+        # CaCO3 -> CaO + CO2
+        # ======================================================
+
         self.CaO_ratio = 56.08 / 100.09
         self.CO2_ratio = 44.01 / 100.09
 
-        # ==================================================
+        # ======================================================
         # TEMPERATURE WINDOW
+        # ======================================================
+
+        self.T_start = 1073.0               # K
+        self.T_end = 1300.0                 # K
+
+        # ======================================================
+        # RAW MEAL COMPOSITION
+        # ======================================================
+
+        self.CaCO3_mass_fraction = (
+            RAW_MEAL_COMPOSITION["CaCO3"] / 100000.0
+        )
+
+    # ======================================================
+    # STEADY-STATE SPATIAL REACTION
+    # ======================================================
+
+    def apply(self, state, dz, u_s):
+
         # ==================================================
-        self.T_start = 1073.0           # K
-        self.T_end = 1300.0             # K
+        # INPUTS
+        # ==================================================
 
-    # ======================================================
-    # STEADY-STATE CALCINATION
-    # ======================================================
-    def apply(self, state, tau):
-
-        mat = state.materials["calciner"]
-
-        # ======================================================
-        # TIME
-        # ======================================================
-
-        tau = max(float(tau), 1.0e-9)
-
-        dt = max(
-            float(state.dt),
-            1.0e-9,
+        T = np.asarray(
+            state.Ts_calciner,
+            dtype=float,
         )
 
-        # ======================================================
-        # TEMPERATURE
-        # ======================================================
-
-        T = np.maximum(
-            np.asarray(
-                state.Ts_calciner,
-                dtype=float,
-            ),
-            1.0,
-        )
-
-        # ======================================================
-        # REACTION RATE
-        #
-        # k(T) -> 1/s
-        # ======================================================
-
-        rate = self.reaction_rate(T)
-
-        # ======================================================
-        # CONVERSION
-        #
-        # X = 1 - exp(-k * tau)
-        # ======================================================
-
-        conversion = (
-            1.0
-            - np.exp(
-                -rate * tau
+        if T.ndim != 1:
+            raise ValueError(
+                "Ts_calciner must be a 1D array."
             )
-        )
 
-        conversion = np.clip(
-            conversion,
-            0.0,
-            1.0,
-        )
+        N = len(T)
 
-        # ======================================================
-        # SOLID INVENTORY
-        # ======================================================
+        if N == 0:
+            raise ValueError(
+                "Calciner reaction requires at least one cell."
+            )
 
-        CaCO3 = np.maximum(
-            np.asarray(
-                mat.solids.CaCO3,
-                dtype=float,
-            ),
+        dz = float(dz)
+
+        if not np.isfinite(dz) or dz <= 0.0:
+            raise ValueError(
+                "Calciner spatial step dz must be > 0."
+            )
+
+        u_s = float(u_s)
+
+        if not np.isfinite(u_s) or u_s <= 0.0:
+            raise ValueError(
+                "Calciner solid velocity u_s must be > 0."
+            )
+
+        m_dot_s = max(
+            float(state.m_dot_s),
             0.0,
         )
 
-        # ======================================================
-        # TOTAL SOLID INVENTORY
-        # ======================================================
+        # ==================================================
+        # INLET CaCO3 MASS FLOW
+        # ==================================================
 
-        solid_mass = 0.0
+        m_dot_CaCO3_in = (
+            m_dot_s
+            * self.CaCO3_mass_fraction
+        )
 
-        for name in mat.solids.__dataclass_fields__:
+        # ==================================================
+        # SPATIAL ARRAYS
+        # ==================================================
 
-            values = np.asarray(
-                getattr(
-                    mat.solids,
-                    name,
-                ),
-                dtype=float,
+        m_dot_CaCO3_in_cells = np.zeros(N)
+        m_dot_CaCO3_reacted_cells = np.zeros(N)
+        m_dot_CaCO3_out_cells = np.zeros(N)
+
+        reaction_rate_cells = np.zeros(N)
+        reaction_heat_cells = np.zeros(N)
+        conversion_cells = np.zeros(N)
+
+        # ==================================================
+        # INITIAL CONDITION
+        #
+        # Solid flows from cell 0 -> cell N-1
+        # ==================================================
+
+        m_dot_CaCO3_in_cells[0] = (
+            m_dot_CaCO3_in
+        )
+
+        # ==================================================
+        # SPACE MARCHING
+        #
+        # u_s * dm/dz = -k(T) * m
+        #
+        # dm/dz = -(k/u_s) * m
+        #
+        # Exact cell integration:
+        #
+        # m_out = m_in * exp[-k*dz/u_s]
+        # ==================================================
+
+        for i in range(N):
+
+            m_in = max(
+                float(m_dot_CaCO3_in_cells[i]),
+                0.0,
             )
 
-            solid_mass += np.sum(
-                np.maximum(
-                    values,
-                    0.0,
+            T_i = max(
+                float(T[i]),
+                1.0,
+            )
+
+            # --------------------------------------------------
+            # LOCAL KINETIC RATE
+            # --------------------------------------------------
+
+            k_i = float(
+                self.reaction_rate(T_i)
+            )
+
+            reaction_rate_cells[i] = k_i
+
+            # --------------------------------------------------
+            # SPATIAL REACTION EXPONENT
+            # --------------------------------------------------
+
+            spatial_exponent = (
+                k_i
+                * dz
+                / u_s
+            )
+
+            # --------------------------------------------------
+            # OUTLET CaCO3 FLOW
+            # --------------------------------------------------
+
+            m_out = (
+                m_in
+                * np.exp(-spatial_exponent)
+            )
+
+            m_out = np.clip(
+                m_out,
+                0.0,
+                m_in,
+            )
+
+            # --------------------------------------------------
+            # REACTED CaCO3 FLOW
+            # --------------------------------------------------
+
+            m_reacted = (
+                m_in
+                - m_out
+            )
+
+            # --------------------------------------------------
+            # LOCAL CONVERSION
+            # --------------------------------------------------
+
+            if m_in > 1.0e-12:
+                X_i = (
+                    m_reacted
+                    / m_in
                 )
+            else:
+                X_i = 0.0
+
+            X_i = np.clip(
+                X_i,
+                0.0,
+                1.0,
             )
 
-        CaCO3_mass = np.sum(CaCO3)
+            # --------------------------------------------------
+            # STORE CELL RESULTS
+            # --------------------------------------------------
 
-        CaCO3_fraction = (
-            CaCO3_mass
+            m_dot_CaCO3_reacted_cells[i] = (
+                m_reacted
+            )
+
+            m_dot_CaCO3_out_cells[i] = (
+                m_out
+            )
+
+            conversion_cells[i] = X_i
+
+            reaction_heat_cells[i] = (
+                m_reacted
+                * self.deltaH
+            )
+
+            # --------------------------------------------------
+            # NEXT CELL
+            # --------------------------------------------------
+
+            if i + 1 < N:
+
+                m_dot_CaCO3_in_cells[i + 1] = (
+                    m_out
+                )
+
+        # ==================================================
+        # TOTAL REACTION
+        # ==================================================
+
+        m_dot_CaCO3_reacted = np.sum(
+            m_dot_CaCO3_reacted_cells
+        )
+
+        m_dot_CaCO3_out = (
+            m_dot_CaCO3_in
+            - m_dot_CaCO3_reacted
+        )
+
+        m_dot_CaCO3_out = max(
+            float(m_dot_CaCO3_out),
+            0.0,
+        )
+
+        # ==================================================
+        # PRODUCTS
+        # ==================================================
+
+        m_dot_CaO_generated = (
+            m_dot_CaCO3_reacted
+            * self.CaO_ratio
+        )
+
+        m_dot_CO2_generated = (
+            m_dot_CaCO3_reacted
+            * self.CO2_ratio
+        )
+
+        # ==================================================
+        # TOTAL CALCINATION HEAT
+        # ==================================================
+
+        Q_calcination = np.sum(
+            reaction_heat_cells
+        )
+
+        # ==================================================
+        # OVERALL CONVERSION
+        # ==================================================
+
+        X_total = (
+            m_dot_CaCO3_reacted
             / max(
-                solid_mass,
+                m_dot_CaCO3_in,
                 1.0e-12,
             )
         )
 
-        CaCO3_fraction = np.clip(
-            CaCO3_fraction,
+        X_total = np.clip(
+            X_total,
             0.0,
             1.0,
         )
 
-        # ======================================================
-        # CaCO3 INLET MASS FLOW
-        # ======================================================
-
-        m_dot_CaCO3_total = (
-            state.m_dot_s
-            * CaCO3_fraction
-        )
-
-        # ======================================================
-        # DISTRIBUTE CaCO3 FLOW OVER CELLS
-        # ACCORDING TO CURRENT INVENTORY
-        # ======================================================
-
-        CaCO3_inventory_total = np.sum(CaCO3)
-
-        if CaCO3_inventory_total > 1.0e-12:
-
-            inventory_fraction = (
-                CaCO3
-                / CaCO3_inventory_total
-            )
-
-        else:
-
-            inventory_fraction = (
-                np.zeros_like(CaCO3)
-            )
-
-        m_dot_CaCO3 = (
-            m_dot_CaCO3_total
-            * inventory_fraction
-        )
-
-        # ======================================================
-        # REACTED CaCO3 MASS FLOW
-        # ======================================================
-
-        m_dot_reacted = (
-            m_dot_CaCO3
-            * conversion
-        )
-
-        m_dot_reacted_total = np.sum(
-            m_dot_reacted
-        )
-
-        # ======================================================
-        # SAFETY CHECK
-        # ======================================================
-
-        if (
-            m_dot_reacted_total
-            > m_dot_CaCO3_total + 1.0e-9
-        ):
-
-            raise ValueError(
-                "Calciner: reacted CaCO3 flow "
-                "exceeds CaCO3 inlet flow"
-            )
-
-        # ======================================================
-        # MASS REACTION DURING THIS TIMESTEP
-        #
-        # kg/s * s = kg
-        # ======================================================
-
-        dm_CaCO3 = (
-            m_dot_reacted
-            * dt
-        )
-
-        # ======================================================
-        # LIMIT REACTION TO AVAILABLE INVENTORY
-        # ======================================================
-
-        dm_CaCO3 = np.minimum(
-            dm_CaCO3,
-            CaCO3,
-        )
-
-        dm_CaCO3_total = np.sum(
-            dm_CaCO3
-        )
-
-        # ======================================================
-        # STOICHIOMETRIC PRODUCTS
-        #
-        # CaCO3 -> CaO + CO2
-        # ======================================================
-
-        dm_CaO = (
-            dm_CaCO3
-            * self.CaO_ratio
-        )
-
-        dm_CO2 = (
-            dm_CaCO3
-            * self.CO2_ratio
-        )
-
-        # ======================================================
-        # UPDATE SOLID PHASES
-        # ======================================================
-
-        mat.solids.CaCO3 -= dm_CaCO3
-
-        mat.solids.CaO += dm_CaO
-
-        # ======================================================
-        # UPDATE GAS PHASE
-        # ======================================================
-
-        mat.gases.CO2 += dm_CO2
-
-        # ======================================================
-        # NUMERICAL CLEANUP
-        # ======================================================
-
-        mat.solids.CaCO3 = np.maximum(
-            mat.solids.CaCO3,
-            0.0,
-        )
-
-        # ======================================================
-        # REACTION HEAT
-        #
-        # kg/s * J/kg = W
-        # ======================================================
-
-        Q_calcination = (
-            m_dot_reacted
-            * self.deltaH
-        )
-
-        Q_calcination = np.sum(
-            Q_calcination
-        )
-
-        # ======================================================
+        # ==================================================
         # STATE OUTPUTS
-        # ======================================================
+        # ==================================================
 
         state.Calcination_Q_sink = float(
             Q_calcination
@@ -292,43 +303,100 @@ class CalcinationModel(ReactionBase):
         )
 
         state.X_CaCO3_calciner = float(
-            np.mean(conversion)
+            X_total
         )
 
         state.X_calcination = float(
-            np.mean(conversion)
+            X_total
         )
 
-        state.tau_calciner = float(
-            tau
+        # ==================================================
+        # MASS FLOWS
+        # ==================================================
+
+        state.m_dot_CaCO3_in_calciner = float(
+            m_dot_CaCO3_in
         )
 
         state.m_dot_CaCO3_reacted_calciner = float(
-            m_dot_reacted_total
+            m_dot_CaCO3_reacted
         )
 
-        # ======================================================
-        # MASS REACTION DEBUG
-        # ======================================================
+        state.m_dot_CaCO3_out_calciner = float(
+            m_dot_CaCO3_out
+        )
 
         state.m_dot_CaO_generated_calciner = float(
-            np.sum(dm_CaO) / dt
+            m_dot_CaO_generated
         )
 
         state.m_dot_CO2_generated_calciner = float(
-            np.sum(dm_CO2) / dt
+            m_dot_CO2_generated
         )
 
-        state.dm_CaCO3_reacted_calciner = float(
-            dm_CaCO3_total
+        # ==================================================
+        # CELL RESULTS
+        # ==================================================
+
+        state.X_CaCO3_cells = (
+            conversion_cells.copy()
         )
 
-        state.dm_CaO_generated_calciner = float(
-            np.sum(dm_CaO)
+        state.reaction_rate_CaCO3_cells = (
+            reaction_rate_cells.copy()
         )
 
-        state.dm_CO2_generated_calciner = float(
-            np.sum(dm_CO2)
+        state.m_dot_CaCO3_in_cells = (
+            m_dot_CaCO3_in_cells.copy()
         )
+
+        state.m_dot_CaCO3_reacted_cells = (
+            m_dot_CaCO3_reacted_cells.copy()
+        )
+
+        state.m_dot_CaCO3_out_cells = (
+            m_dot_CaCO3_out_cells.copy()
+        )
+
+        state.Calcination_Q_cells = (
+            reaction_heat_cells.copy()
+        )
+
+        # ==================================================
+        # STEADY-STATE MASS BALANCE
+        # ==================================================
+
+        state.CaCO3_steady_state_balance = float(
+            m_dot_CaCO3_in
+            - m_dot_CaCO3_reacted
+            - m_dot_CaCO3_out
+        )
+
+        # ==================================================
+        # NUMERICAL CHECKS
+        # ==================================================
+
+        if not np.all(
+            np.isfinite(
+                m_dot_CaCO3_out_cells
+            )
+        ):
+            raise FloatingPointError(
+                "Non-finite CaCO3 spatial solution."
+            )
+
+        if not np.all(
+            np.isfinite(
+                reaction_heat_cells
+            )
+        ):
+            raise FloatingPointError(
+                "Non-finite calcination heat distribution."
+            )
+
+        if not np.isfinite(Q_calcination):
+            raise FloatingPointError(
+                "Non-finite total calcination heat."
+            )
 
         return state
