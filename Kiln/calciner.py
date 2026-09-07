@@ -85,7 +85,15 @@ class Calciner:
 
         # ================= FLOW =================
         self.u_g = 0.0
-        self.u_s = 0.0
+
+        self.u_s = solid_axial_velocity(
+            L=self.L,
+            D=self.D,
+            slope_deg=self.slope_deg,
+            fill_fraction=self.fill_fraction,
+            rpm=self.rpm,
+            eps=self.eps,
+        )
 
         # ================= HEAT TRANSFER =================
         cfg = ZONE_HT_CONFIG[self.zone]
@@ -1183,16 +1191,26 @@ class Calciner:
             # 2. SPATIAL CHEMISTRY
             # ==================================================
 
-            state = (
-                self.chemistry.apply_calciner(
-                    state,
-                    self.dz,
-                    self.u_s,
-                )
+            state = self.chemistry.apply_calciner(
+                state,
+                self.dz,
+                self.u_s,
             )
+
+            print("\n========== ILC CHEMISTRY DEBUG ==========")
+            #print(f"CaCO3 in      = {state.m_dot_CaCO3_in_calciner:.6f} kg/s")
+            #print(f"CaCO3 reacted = {state.m_dot_CaCO3_reacted_calciner:.6f} kg/s")
+            #print(f"CaCO3 out     = {state.m_dot_CaCO3_out_calciner:.6f} kg/s")
+            #print(f"Conversion    = {state.X_CaCO3_calciner:.6f}")
 
             Q_reaction = float(
                 state.Calcination_Q_sink
+            )
+            
+            print(
+                f"[CALCINER -> TRANSITION] "
+                f"CaCO3_out = "
+                f"{state.m_dot_CaCO3_out_calciner:.6f} kg/s"
             )
 
             # ==================================================
@@ -1370,20 +1388,13 @@ class Calciner:
             f"{state.Calciner_coupling_reaction_error:.6e}"
         )
 
-        print(
-            f"CaCO3 inlet flow       = "
-            f"{state.m_dot_CaCO3_in_calciner:.6f} kg/s"
-        )
 
-        print(
-            f"CaCO3 reacted flow     = "
-            f"{state.m_dot_CaCO3_reacted_calciner:.6f} kg/s"
-        )
+        #print(
+        #    f"CaCO3 reacted flow     = "
+        #    f"{state.m_dot_CaCO3_reacted_calciner:.6f} kg/s"
+        #)
 
-        print(
-            f"CaCO3 outlet flow      = "
-            f"{state.m_dot_CaCO3_out_calciner:.6f} kg/s"
-        )
+   
 
         print(
             f"Calcination conversion = "
@@ -1540,10 +1551,6 @@ class Calciner:
 
         print(
             "\n========== CALCINER FLOW DEBUG =========="
-        )
-
-        print(
-            f"u_g = {state.u_g:.6e} m/s"
         )
 
         print(
@@ -1744,6 +1751,12 @@ class Calciner:
 
         print(
             "============================================"
+        )
+        
+        print(
+            "[CALCINER FINAL CHECK] "
+            f"m_dot_CaCO3_out_calciner = "
+            f"{getattr(state, 'm_dot_CaCO3_out_calciner', 'MISSING')}"
         )
 
         return state

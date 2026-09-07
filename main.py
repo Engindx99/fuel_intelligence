@@ -61,6 +61,12 @@ class Twin:
         self.eps = 1e-9
 
         # ======================================================
+        # STEADY-STATE TRANSPORT VARIABLES
+        # ======================================================
+        self.state.u_s = self.calciner.u_s
+
+
+        # ======================================================
         # MPC (optional)
         # ======================================================
         # self.mpc = MasterMPC(mpc_cfg, self.burning)
@@ -202,14 +208,11 @@ class Twin:
         inputs["rho_g"] = getattr(self.state, "rho_g", 1.2)
 
         # ======================================================
-        # BURNING
+        # CALCINER / ILC
         # ======================================================
-        self.state = self.burning.apply(
+        self.state = self.calciner.apply(
             self.state,
-            inputs,
-            self.dt,
         )
-
 
         # ======================================================
         # TRANSITION
@@ -219,12 +222,13 @@ class Twin:
             self.dt,
         )
 
-
         # ======================================================
-        # CALCINER
+        # BURNING
         # ======================================================
-        self.state = self.calciner.apply(
+        self.state = self.burning.apply(
             self.state,
+            inputs,
+            self.dt,
         )
 
 

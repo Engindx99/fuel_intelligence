@@ -14,7 +14,9 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+from chemistry.calcination import CalcinationModel
 from physics.physics import ZONE_HT_CONFIG
+
 
 class Transition:
 
@@ -23,6 +25,8 @@ class Transition:
         self.N = N
         self.L = L
         self.dz = L / N
+        
+        self.chemistry = CalcinationModel()
 
         # ================= ZONE =================
         self.zone = "transition"
@@ -983,14 +987,21 @@ class Transition:
         )
 
         # ======================================================
-        # INLET ENTHALPY FROM BURNING
+        # INLET ENTHALPY
+        #
+        # GAS:
+        # Burning -> Transition
+        #
+        # SOLID:
+        # ILC -> Transition
         # ======================================================
+
         state.Hgas_transition_in = (
             state.Hgas_burning_out
         )
 
         state.Hsolid_transition_in = (
-            state.Hsolid_burning_out
+            state.Hsolid_calciner_out
         )
 
         # ======================================================
@@ -1038,8 +1049,25 @@ class Transition:
         # ======================================================
         # TRANSITION CHEMISTRY
         # ======================================================
-        # Eğer transition reaksiyonları eklenecekse burada çalışacak.
-        # state = self.chemistry.apply_transition(state)
+        m_dot_CaCO3_transition_in = getattr(
+            state,
+            "m_dot_CaCO3_out_calciner",
+            None,
+        )
+
+        if m_dot_CaCO3_transition_in is None:
+            raise AttributeError(
+                "Transition: ILC çıkışındaki "
+                "m_dot_CaCO3_out_calciner state üzerinde bulunmuyor."
+            )
+
+        state = self.chemistry.apply(
+            state,
+            dz=self.dz,
+            u_s=state.u_s,
+            m_dot_CaCO3_in=m_dot_CaCO3_transition_in,
+        )
+
 
         # ======================================================
         # UPDATE ENTHALPY STATES

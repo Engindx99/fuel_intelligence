@@ -13,7 +13,7 @@ class CalcinationModel(ReactionBase):
         # KINETICS
         # ======================================================
 
-        self.prefactor = 12.0             # 1/s
+        self.prefactor = 30.0             # 1/s
         self.activation_energy = 1.5e5      # J/mol
         self.deltaH = 1.78e6                # J/kg CaCO3
 
@@ -44,7 +44,7 @@ class CalcinationModel(ReactionBase):
     # STEADY-STATE SPATIAL REACTION
     # ======================================================
 
-    def apply(self, state, dz, u_s):
+    def apply(self, state, dz, u_s, m_dot_CaCO3_in=None):
 
         # ==================================================
         # INPUTS
@@ -90,10 +90,23 @@ class CalcinationModel(ReactionBase):
         # INLET CaCO3 MASS FLOW
         # ==================================================
 
-        m_dot_CaCO3_in = (
-            m_dot_s
-            * self.CaCO3_mass_fraction
-        )
+        if m_dot_CaCO3_in is None:
+
+            # ILC / Calciner:
+            # CaCO3 comes from raw-meal composition.
+            m_dot_CaCO3_in = (
+                m_dot_s
+                * self.CaCO3_mass_fraction
+            )
+
+        else:
+
+            # Downstream zone:
+            # CaCO3 comes from the previous zone.
+            m_dot_CaCO3_in = max(
+                float(m_dot_CaCO3_in),
+                0.0,
+            )
 
         # ==================================================
         # SPATIAL ARRAYS
