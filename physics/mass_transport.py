@@ -235,9 +235,24 @@ class MassTransport:
     # ======================================================
     def feed_raw_meal(self, state, dt):
 
-        feed = state.Feed_rate * dt
+        feed = (
+            state.Feed_rate
+            * dt
+        )
 
-        solids = state.materials["preheater"].solids
+        state.feed_mass_in_step = (
+            feed
+        )
+
+        state.feed_mass_in_rate = (
+            state.Feed_rate
+        )
+
+        solids = (
+            state.materials[
+                "preheater"
+            ].solids
+        )
 
         for f in fields(SolidPhases):
 
@@ -256,67 +271,84 @@ class MassTransport:
     #
     # Cooler[-1] -> clinker outlet
     # ======================================================
-    def discharge_clinker(
-        self,
-        state,
-        fraction,
-    ):
+    def discharge_clinker(self, state, fraction):
 
         solids = state.materials["cooler"].solids
+
+        clinker_mass = 0.0
 
         for f in fields(SolidPhases):
 
             values = getattr(solids, f.name)
 
-            values[-1] = 0.0
+            moved = max(float(values[-1]), 0.0) * fraction
+
+            clinker_mass += moved
+
+            values[-1] -= moved
+
+        state.clinker_mass_out_step = clinker_mass
+
+        state.clinker_mass_out_rate = (
+            clinker_mass / max(state.dt, 1.0e-12)
+        )
+
+        return state
 
     # ======================================================
     # APPLY
     # ======================================================
     def apply(self, state, dt):
 
+        state.dt = dt
+
         fraction = np.clip(
-            dt / max(state.residence_time, 1e-9),
+            dt
+            / max(
+                state.residence_time,
+                1.0e-9,
+            ),
             0.0,
             1.0,
         )
 
-        # --------------------------------------------------
-        # 1. MOVE MATERIAL INSIDE ZONES
-        # --------------------------------------------------
+        # ======================================================
+        # INTERNAL TRANSPORT
+        # ======================================================
+
         self.move_inside_all_zones(
             state,
             state.residence_time,
             dt,
         )
 
-        # --------------------------------------------------
-        # 2. SOLID ZONE TRANSFERS
-        # --------------------------------------------------
+        # ======================================================
+        # ZONE TRANSFER
+        # ======================================================
+
         self.transfer_solid_between_zones(
             state,
             fraction,
         )
 
-        # --------------------------------------------------
-        # 3. KILN GAS ZONE TRANSFERS
-        # --------------------------------------------------
         self.transfer_gas_between_zones(
             state,
             fraction,
         )
 
-        # --------------------------------------------------
-        # 4. RAW MEAL FEED
-        # --------------------------------------------------
+        # ======================================================
+        # FEED
+        # ======================================================
+
         self.feed_raw_meal(
             state,
             dt,
         )
 
-        # --------------------------------------------------
-        # 5. CLINKER DISCHARGE
-        # --------------------------------------------------
+        # ======================================================
+        # CLINKER DISCHARGE
+        # ======================================================
+
         self.discharge_clinker(
             state,
             fraction,

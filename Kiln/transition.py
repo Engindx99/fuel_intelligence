@@ -1044,12 +1044,12 @@ class Transition:
         # ======================================================
         # UPDATE ENTHALPY STATES
         # ======================================================
+
         state.Hg_transition = (
             state.m_dot_g
-            * self.Cp_g
-            * (
-                state.Tg_transition
-                - self.T_ref
+            * h_gas(
+                state.Tg_transition,
+                self.T_ref,
             )
         )
 
@@ -1155,6 +1155,35 @@ class Transition:
             - state.Hgas_transition_out
             - state.Hsolid_transition_out
             - state.Wall_loss_transition
+        )
+        
+        # ======================================================
+        # TRANSITION HANDOFF DEBUG
+        # ======================================================
+        print("\n========== TRANSITION HANDOFF ==========")
+        print(
+            f"Hgas_transition_in  = "
+            f"{state.Hgas_transition_in:.6e} W"
+        )
+        print(
+            f"Hgas_transition_out = "
+            f"{state.Hgas_transition_out:.6e} W"
+        )
+        print(
+            f"Hsolid_transition_in  = "
+            f"{state.Hsolid_transition_in:.6e} W"
+        )
+        print(
+            f"Hsolid_transition_out = "
+            f"{state.Hsolid_transition_out:.6e} W"
+        )
+        print(
+            f"Wall_loss_transition = "
+            f"{state.Wall_loss_transition:.6e} W"
+        )
+        print(
+            f"Transition balance = "
+            f"{state.Transition_energy_balance:.6e} W"
         )
 
         return state

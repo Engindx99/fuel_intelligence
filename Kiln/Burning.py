@@ -1066,6 +1066,7 @@ class Burning:
             Q_RDF,
             Q_H2,
             Q_burning,
+            total_energy_balance,
         )
 
     
@@ -1176,6 +1177,7 @@ class Burning:
             Q_RDF,
             Q_H2,
             Q_burning,
+            total_energy_balance,
         ) = self.thermal_step(
             state.Tg_burning,
             state.Ts_burning,
@@ -1254,14 +1256,19 @@ class Burning:
         # ======================================================
         # STEADY-STATE ENERGY BALANCE
         # ======================================================
-        state.Burning_energy_balance = (
-            state.Q_burning
-            - state.Hgas_burning_out
-            - state.Hsolid_burning_out
+        Hg_in = state.m_dot_g * h_gas(
+            state.Tg_burning_in,
+            self.T_ref
         )
 
-        return state
+        Hs_in = state.m_dot_s * self.Cp_s * (
+            state.Ts_burning_in - self.T_ref
+        )
 
+
+        state.Burning_energy_balance = total_energy_balance
+
+        return state
 
     
     # ======================================================

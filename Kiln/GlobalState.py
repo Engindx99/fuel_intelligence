@@ -35,6 +35,28 @@ class GlobalState:
     Q_RDF: float = 0.0
     Q_H2: float = 0.0
     Q_burning: float = 0.0
+    
+    
+    # ======================================================
+    # GLOBAL MASS BALANCE
+    # ======================================================
+
+    Initial_total_mass: float = 0.0
+
+    Cumulative_feed_mass: float = 0.0
+    Cumulative_clinker_mass: float = 0.0
+
+    Total_solid_inventory: float = 0.0
+    Total_gas_inventory: float = 0.0
+
+    Global_mass_balance: float = 0.0
+    Global_mass_balance_relative: float = 0.0
+
+    feed_mass_in_step: float = 0.0
+    feed_mass_in_rate: float = 0.0
+
+    clinker_mass_out_step: float = 0.0
+    clinker_mass_out_rate: float = 0.0
 
     # ======================================================
     # GAS / MASS FLOW STATE
@@ -320,26 +342,42 @@ class GlobalState:
     # ======================================================
 
     def __post_init__(self):
-
         N = self.Tg_burning.size
 
-        cell = lambda key: np.full(
-            N,
-            RAW_MEAL_COMPOSITION[key] / N,
-            dtype=float,
+        # ======================================================
+        # TOTAL PYROPROCESS SOLID INVENTORY
+        # ======================================================
+        total_solid_inventory = 100_000.0  # kg
+
+        n_zones = 5
+
+        zone_inventory = (
+            total_solid_inventory / n_zones
         )
 
+        # ======================================================
+        # INITIALIZE MATERIALS
+        # ======================================================
+        def make_cell(key):
+
+            component_mass = (
+                zone_inventory
+                * RAW_MEAL_COMPOSITION[key]
+                / 100_000.0
+            )
+
+            return np.full(
+                N,
+                component_mass / N,
+                dtype=float,
+            )
+
         self.materials = {
-
-            "burning": build_zone_material(N, cell),
-
-            "transition": build_zone_material(N, cell),
-
-            "calciner": build_zone_material(N, cell),
-
-            "preheater": build_zone_material(N, cell),
-
-            "cooler": build_zone_material(N, cell),
+            "burning": build_zone_material(N, make_cell),
+            "transition": build_zone_material(N, make_cell),
+            "calciner": build_zone_material(N, make_cell),
+            "preheater": build_zone_material(N, make_cell),
+            "cooler": build_zone_material(N, make_cell),
         }
         
 

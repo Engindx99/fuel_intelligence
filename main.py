@@ -7,7 +7,7 @@ from kiln.cooler import Cooler
 from controls.mpc import MasterMPC
 from physics.mass_transport import MassTransport
 from dataclasses import fields
-from chemistry.phases import SolidPhases
+from chemistry.phases import SolidPhases, GasPhases
 
 import numpy as np
 import yaml
@@ -333,27 +333,257 @@ class Twin:
             # MASS FLOW
             # ======================================================
             
-            print("\n========== MASS INVENTORY (CaCO3) ==========")
+            # ======================================================
+            # MASS INVENTORY + GLOBAL MASS BALANCE
+            # ======================================================
 
-            for zone in [
+            print("\n========== MASS INVENTORY ==========")
+
+            # ------------------------------------------------------
+            # ZONE CaCO3 INVENTORY
+            # ------------------------------------------------------
+
+            total_CaCO3 = 0.0
+
+            for zone_name in [
                 "preheater",
                 "calciner",
                 "transition",
                 "burning",
                 "cooler",
             ]:
-                print(
-                    f"{zone:11s}: "
-                    f"{np.sum(self.state.materials[zone].solids.CaCO3):10.2f} kg"
+
+                CaCO3 = np.sum(
+                    np.maximum(
+                        self.state.materials[zone_name].solids.CaCO3,
+                        0.0,
+                    )
                 )
-                
-            total_solids = 0.0
 
-            for zone in state.materials.values():
+                total_CaCO3 += CaCO3
+
+                print(
+                    f"{zone_name:11s}: "
+                    f"{CaCO3:10.2f} kg"
+                )
+
+            print(
+                f"TOTAL CaCO3 = "
+                f"{total_CaCO3:.2f} kg"
+            )
+
+
+            # ------------------------------------------------------
+            # TOTAL SOLID INVENTORY
+            # ------------------------------------------------------
+
+            total_solid_mass = 0.0
+
+            for material in self.state.materials.values():
+
                 for f in fields(SolidPhases):
-                    total_solids += np.sum(getattr(zone.solids, f.name))
 
-            print(f"TOTAL SOLIDS = {total_solids:.2f} kg")
+                    values = getattr(
+                        material.solids,
+                        f.name,
+                    )
+
+                    total_solid_mass += np.sum(
+                        np.maximum(
+                            values,
+                            0.0,
+                        )
+                    )
+
+            print(
+                f"TOTAL SOLIDS = "
+                f"{total_solid_mass:.2f} kg"
+            )
+
+
+            # ------------------------------------------------------
+            # TOTAL GAS INVENTORY
+            # ------------------------------------------------------
+
+            total_gas_mass = 0.0
+
+            for material in self.state.materials.values():
+
+                for f in fields(GasPhases):
+
+                    values = getattr(
+                        material.gases,
+                        f.name,
+                    )
+
+                    total_gas_mass += np.sum(
+                        np.maximum(
+                            values,
+                            0.0,
+                        )
+                    )
+
+            print(
+                f"TOTAL GAS    = "
+                f"{total_gas_mass:.2f} kg"
+            )
+
+
+            # ======================================================
+            # GLOBAL MASS BALANCE
+            # ======================================================
+
+            # ------------------------------------------------------
+            # INITIAL MASS
+            # ------------------------------------------------------
+
+            if self.state.Initial_total_mass <= 0.0:
+                self.state.Initial_total_mass = (
+                    total_solid_mass + total_gas_mass
+                )
+
+
+            # ------------------------------------------------------
+            # CUMULATIVE MASS FLOWS
+            # ------------------------------------------------------
+
+            self.state.Cumulative_feed_mass += (
+                getattr(
+                    self.state,
+                    "feed_mass_in_step",
+                    0.0,
+                )
+            )
+
+            self.state.Cumulative_clinker_mass += (
+                getattr(
+                    self.state,
+                    "clinker_mass_out_step",
+                    0.0,
+                )
+            )
+
+
+            # ------------------------------------------------------
+            # CURRENT INVENTORIES
+            # ------------------------------------------------------
+
+            self.state.Total_solid_inventory = (
+                total_solid_mass
+            )
+
+            self.state.Total_gas_inventory = (
+                total_gas_mass
+            )
+
+
+            # ------------------------------------------------------
+            # EXPECTED TOTAL MASS
+            #
+            # M_expected =
+            # M_initial
+            # + M_feed
+            # - M_clinker
+            # ------------------------------------------------------
+
+            mass_expected = (
+                self.state.Initial_total_mass
+                + self.state.Cumulative_feed_mass
+                - self.state.Cumulative_clinker_mass
+            )
+
+
+            # ------------------------------------------------------
+            # ACTUAL TOTAL MASS
+            #
+            # Solid + gas
+            # ------------------------------------------------------
+
+            mass_actual = (
+                total_solid_mass
+                + total_gas_mass
+            )
+
+
+            # ------------------------------------------------------
+            # RESIDUAL
+            # ------------------------------------------------------
+
+            self.state.Global_mass_balance = (
+                mass_expected
+                - mass_actual
+            )
+
+
+            # ------------------------------------------------------
+            # RELATIVE RESIDUAL
+            # ------------------------------------------------------
+
+            self.state.Global_mass_balance_relative = (
+                self.state.Global_mass_balance
+                / max(
+                    abs(mass_expected),
+                    1.0e-12,
+                )
+            )
+
+
+            # ======================================================
+            # GLOBAL MASS BALANCE REPORT
+            # ======================================================
+
+            print(
+                "\n========== GLOBAL MASS BALANCE =========="
+            )
+
+            print(
+                f"Initial mass          = "
+                f"{self.state.Initial_total_mass:.6f} kg"
+            )
+
+            print(
+                f"Cumulative feed       = "
+                f"{self.state.Cumulative_feed_mass:.6f} kg"
+            )
+
+            print(
+                f"Cumulative clinker    = "
+                f"{self.state.Cumulative_clinker_mass:.6f} kg"
+            )
+
+            print(
+                f"Current solid mass    = "
+                f"{total_solid_mass:.6f} kg"
+            )
+
+            print(
+                f"Current gas mass      = "
+                f"{total_gas_mass:.6f} kg"
+            )
+
+            print(
+                f"Current total mass    = "
+                f"{mass_actual:.6f} kg"
+            )
+
+            print(
+                f"Expected total mass   = "
+                f"{mass_expected:.6f} kg"
+            )
+
+            print(
+                f"Mass balance residual = "
+                f"{self.state.Global_mass_balance:.6e} kg"
+            )
+
+            print(
+                f"Mass balance relative = "
+                f"{self.state.Global_mass_balance_relative:.6e}"
+            )
+
+            print(
+                "=========================================="
+            )
     
             # ======================================================
             # ZONE TEMPERATURES

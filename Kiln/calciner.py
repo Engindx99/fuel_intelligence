@@ -1,17 +1,13 @@
 import numpy as np
-from physics.physics import solid_mass_flow
-from physics.physics import fuel_heat_release
+
 from physics.physics import residence_time
-from physics.physics import gas_axial_velocity
-from physics.physics import heat_transfer
+from physics.physics import cp_gas
+from physics.physics import h_gas
 from physics.physics import radiation
 from physics.physics import interfacial_areas
 from physics.physics import kiln_geometry
-from physics.physics import solid_axial_velocity
-from physics.physics import thermal_capacities
-from physics.physics import wall_geometry
-from physics.physics import wall_losses
-from physics.physics import gas_mass_balance
+from physics.physics import wall_thermal_resistance
+
 from chemistry.reactions import ChemistryModel
 from physics.physics import ZONE_HT_CONFIG
 
@@ -77,6 +73,14 @@ class Calciner:
         self.Cp_g = 1150.0
         self.Cp_s = 850.0
         self.Cp_wall = 1000.0
+        
+        # ======================================================
+        # CALCINER OPERATING PARAMETERS
+        # ======================================================
+
+        self.slope_deg = 3.0
+        self.fill_fraction = 0.10
+        self.rpm = 3.0
 
         # ================= FLOW =================
         self.u_g = 0.0
@@ -99,81 +103,876 @@ class Calciner:
         self._rho_wall_Vwall_cell_Cp = self.rho_wall * self.V_wall_cell * self.Cp_wall
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, state, dt, reaction_sink=0.0):
+    def thermal_step(
+        self,
+        Tg,
+        Ts,
+        Tw,
+        state,
+        Tg_in,
+        Ts_in,
+        reaction_sink=0.0,
+    ):
 
         # ======================================================
-        # FLOW FIELDS (READ ONLY)
+        # INPUTS
         # ======================================================
-        u_g = state.u_g
-        u_s = state.u_s 
 
-        # ======================================================
-        # GRADIENTS (NO ALLOCATION)
-        # ======================================================
-        dTg_dz = self._dTg_dz
-        dTs_dz = self._dTs_dz
+        T_ref = self.T_ref
 
-        dTg_dz[1:] = (Tg[1:] - Tg[:-1]) / self.dz
-        dTs_dz[1:] = (Ts[1:] - Ts[:-1]) / self.dz
-
-        dTg_dz[0] = dTg_dz[1]
-        dTs_dz[0] = dTs_dz[1]
-
-
-        q_vol = -reaction_sink / (self.V_total + self.eps)
+        m_dot_g = state.m_dot_g
+        m_dot_s = state.m_dot_s
 
         # ======================================================
-        # HEAT TRANSFER (CONVECTION + RADIATION)
+        # SOLID THERMAL CAPACITY
         # ======================================================
-        q_gs, q_gw, q_ws = heat_transfer(
-            Tg=Tg,
-            Ts=Ts,
-            Tw=Tw,
-            hv_gs=self.hv_gs,
-            hv_gw=self.hv_gw,
-            hv_ws=self.hv_ws,
-            a_gs=self.a_gs,
-            a_gw=self.a_gw,
-            a_ws=self.a_ws,
-            zone=self.zone,
+
+        Cp_s = self.Cp_s
+
+        Cs = (
+            m_dot_s
+            * Cp_s
         )
 
         # ======================================================
-        # WALL LOSSES
+        # GEOMETRY
         # ======================================================
-        q_loss, wall_loss, wall_debug = wall_losses(
-            Tw=Tw,
-            h_ext=self.h_ext,
-            A_wall_cell=self.A_wall_cell,
-            V_cell=self.V_cell,
-            T_amb=self.T_amb,
-            A_wall_total=self.A_wall,
-            N=self.N,
+
+        N = len(Tg)
+
+        V_cell = self.V_cell
+
+        # ======================================================
+        # HEAT TRANSFER PARAMETERS
+        # ======================================================
+
+        hv_gs = self.hv_gs
+        hv_gw = self.hv_gw
+        hv_ws = self.hv_ws
+
+        a_gs = self.a_gs
+        a_gw = self.a_gw
+        a_ws = self.a_ws
+
+        K_gs = (
+            hv_gs
+            * a_gs
+        )
+
+        K_gw = (
+            hv_gw
+            * a_gw
+        )
+
+        K_ws = (
+            hv_ws
+            * a_ws
+        )
+
+        # ======================================================
+        # WALL THERMAL RESISTANCE
+        # ======================================================
+
+        R_ref, R_conv, R_total = wall_thermal_resistance(
             refractory_thickness=self.refractory_thickness,
             refractory_conductivity=self.refractory_conductivity,
-            eps=self.eps,
+            h_ext=self.h_ext,
+            A_wall_cell=self.A_wall_cell,
         )
 
         # ======================================================
-        # THERMAL CAPACITIES
+        # REACTION DISTRIBUTION
+        #
+        # reaction_sink : W
+        # reaction_cell : W/cell
         # ======================================================
-        C_g, effective_C_s, C_w = thermal_capacities(
-            rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
-            rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
-            rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective=0.1,
+
+        reaction_cell = (
+            reaction_sink
+            / N
         )
 
         # ======================================================
-        # ENERGY BALANCE EQUATIONS
+        # PICARD ITERATION
         # ======================================================
-        Tg_n = Tg + dt * (-u_g * dTg_dz + (q_vol - q_gs - q_gw) / C_g)
 
-        Ts_n = Ts + dt * (-u_s * dTs_dz + (q_gs - q_ws) / effective_C_s)
+        max_iter = 100
+        tol = 1e-6
+        relaxation = 0.5
 
-        Tw_n = Tw + dt * ((q_gw + q_ws - q_loss) / C_w)
+        Tg_iter = (
+            np.asarray(
+                Tg,
+                dtype=float,
+            )
+            .copy()
+        )
 
-        return Tg_n, Ts_n, Tw_n, wall_loss, wall_debug
+        Ts_iter = (
+            np.asarray(
+                Ts,
+                dtype=float,
+            )
+            .copy()
+        )
+
+        Tw_iter = (
+            np.asarray(
+                Tw,
+                dtype=float,
+            )
+            .copy()
+        )
+
+        converged = False
+        error = np.inf
+
+        # ======================================================
+        # PICARD LOOP
+        # ======================================================
+
+        for iteration in range(max_iter):
+
+            # ==================================================
+            # GAS PROPERTIES
+            # ==================================================
+
+            Cp_g_iter = cp_gas(
+                Tg_iter
+            )
+
+            # ==================================================
+            # RADIATION
+            # ==================================================
+
+            q_gs_rad = radiation(
+                Tg_iter,
+                Ts_iter,
+                zone=self.zone,
+                area=a_gs,
+            )
+
+            q_gw_rad = radiation(
+                Tg_iter,
+                Tw_iter,
+                zone=self.zone,
+                area=a_gw,
+            )
+
+            q_ws_rad = radiation(
+                Ts_iter,
+                Tw_iter,
+                zone=self.zone,
+                area=a_ws,
+            )
+
+            # ==================================================
+            # LINEAR SYSTEM
+            # ==================================================
+
+            n_unknowns = (
+                3 * N
+            )
+
+            A = np.zeros(
+                (
+                    n_unknowns,
+                    n_unknowns,
+                )
+            )
+
+            b = np.zeros(
+                n_unknowns
+            )
+
+            row = 0
+
+            # ==================================================
+            # CELL LOOP
+            # ==================================================
+
+            for i in range(N):
+
+                Tg_i = i
+
+                Ts_i = (
+                    N + i
+                )
+
+                Tw_i = (
+                    2 * N + i
+                )
+
+                # ==================================================
+                # GAS LOCAL HEAT CAPACITY
+                # ==================================================
+
+                Cp_g_i = cp_gas(
+                    Tg_iter[i]
+                )
+
+                Cg_i = (
+                    m_dot_g
+                    * Cp_g_i
+                )
+
+                # ==================================================
+                # GAS ENTHALPY LINEARIZATION
+                #
+                # h(T) ≈ Cp*T + constant
+                # ==================================================
+
+                h_i_iter = h_gas(
+                    Tg_iter[i],
+                    T_ref,
+                )
+
+                h_linear_const_i = (
+                    h_i_iter
+                    - Cp_g_i
+                    * Tg_iter[i]
+                )
+
+                # ==================================================
+                # GAS ENERGY BALANCE
+                #
+                # Gas direction:
+                #
+                # N-1  --->  0
+                #
+                # Gas receives no reaction sink directly.
+                # Calcination reaction is a solid-phase sink.
+                # ==================================================
+
+                A[row, Tg_i] += (
+                    Cg_i
+                    + V_cell * K_gs
+                    + V_cell * K_gw
+                )
+
+                A[row, Ts_i] += (
+                    -V_cell * K_gs
+                )
+
+                A[row, Tw_i] += (
+                    -V_cell * K_gw
+                )
+
+                # --------------------------------------------------
+                # GAS RADIATION SINK
+                # --------------------------------------------------
+
+                radiation_gas_sink = (
+                    V_cell
+                    * (
+                        q_gs_rad[i]
+                        + q_gw_rad[i]
+                    )
+                )
+
+                # --------------------------------------------------
+                # GAS INLET CELL
+                #
+                # Gas enters at cell N-1
+                # --------------------------------------------------
+
+                if i == N - 1:
+
+                    h_in = h_gas(
+                        Tg_in,
+                        T_ref,
+                    )
+
+                    b[row] = (
+                        m_dot_g * h_in
+                        - m_dot_g
+                        * h_linear_const_i
+                        - radiation_gas_sink
+                    )
+
+                # --------------------------------------------------
+                # INTERNAL GAS CELLS
+                # --------------------------------------------------
+
+                else:
+
+                    Tg_up_i = (
+                        i + 1
+                    )
+
+                    Cp_g_up = cp_gas(
+                        Tg_iter[i + 1]
+                    )
+
+                    h_up_iter = h_gas(
+                        Tg_iter[i + 1],
+                        T_ref,
+                    )
+
+                    h_linear_const_up = (
+                        h_up_iter
+                        - Cp_g_up
+                        * Tg_iter[i + 1]
+                    )
+
+                    A[row, Tg_up_i] += (
+                        -m_dot_g
+                        * Cp_g_up
+                    )
+
+                    b[row] = (
+                        -m_dot_g
+                        * h_linear_const_i
+                        + m_dot_g
+                        * h_linear_const_up
+                        - radiation_gas_sink
+                    )
+
+                row += 1
+
+                # ==================================================
+                # SOLID ENERGY BALANCE
+                #
+                # Solid direction:
+                #
+                # 0  --->  N-1
+                #
+                # Calcination reaction is a solid-phase
+                # energy sink.
+                # ==================================================
+
+                A[row, Ts_i] += (
+                    Cs
+                    + V_cell * K_gs
+                    + V_cell * K_ws
+                )
+
+                A[row, Tg_i] += (
+                    -V_cell * K_gs
+                )
+
+                A[row, Tw_i] += (
+                    -V_cell * K_ws
+                )
+
+                # --------------------------------------------------
+                # SOLID RADIATION
+                # --------------------------------------------------
+
+                radiation_solid_source = (
+                    V_cell
+                    * (
+                        q_gs_rad[i]
+                        - q_ws_rad[i]
+                    )
+                )
+
+                # --------------------------------------------------
+                # SOLID INLET CELL
+                # --------------------------------------------------
+
+                if i == 0:
+
+                    b[row] = (
+                        Cs * Ts_in
+                        + radiation_solid_source
+                        - reaction_cell
+                    )
+
+                # --------------------------------------------------
+                # INTERNAL SOLID CELLS
+                # --------------------------------------------------
+
+                else:
+
+                    Ts_up_i = (
+                        N + i - 1
+                    )
+
+                    A[row, Ts_up_i] += (
+                        -Cs
+                    )
+
+                    b[row] = (
+                        radiation_solid_source
+                        - reaction_cell
+                    )
+
+                row += 1
+
+                # ==================================================
+                # WALL ENERGY BALANCE
+                # ==================================================
+
+                A[row, Tg_i] += (
+                    V_cell * K_gw
+                )
+
+                A[row, Ts_i] += (
+                    V_cell * K_ws
+                )
+
+                A[row, Tw_i] += (
+                    -V_cell * K_gw
+                    -V_cell * K_ws
+                    -1.0 / R_total
+                )
+
+                # --------------------------------------------------
+                # WALL RADIATION SOURCE
+                # --------------------------------------------------
+
+                radiation_wall_source = (
+                    V_cell
+                    * (
+                        q_gw_rad[i]
+                        + q_ws_rad[i]
+                    )
+                )
+
+                b[row] = (
+                    -self.T_amb
+                    / R_total
+                    - radiation_wall_source
+                )
+
+                row += 1
+
+            # ======================================================
+            # SOLVE LINEAR SYSTEM
+            # ======================================================
+
+            x_solution = np.linalg.solve(
+                A,
+                b,
+            )
+
+            Tg_new = (
+                x_solution[:N]
+            )
+
+            Ts_new = (
+                x_solution[
+                    N:2 * N
+                ]
+            )
+
+            Tw_new = (
+                x_solution[
+                    2 * N:3 * N
+                ]
+            )
+
+            # ======================================================
+            # CONVERGENCE ERROR
+            # ======================================================
+
+            error = max(
+                np.max(
+                    np.abs(
+                        Tg_new
+                        - Tg_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Ts_new
+                        - Ts_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Tw_new
+                        - Tw_iter
+                    )
+                ),
+            )
+
+            # ======================================================
+            # RELAXATION
+            # ======================================================
+
+            Tg_iter = (
+                relaxation
+                * Tg_new
+                + (
+                    1.0
+                    - relaxation
+                )
+                * Tg_iter
+            )
+
+            Ts_iter = (
+                relaxation
+                * Ts_new
+                + (
+                    1.0
+                    - relaxation
+                )
+                * Ts_iter
+            )
+
+            Tw_iter = (
+                relaxation
+                * Tw_new
+                + (
+                    1.0
+                    - relaxation
+                )
+                * Tw_iter
+            )
+
+            # ======================================================
+            # CONVERGENCE
+            # ======================================================
+
+            if error < tol:
+
+                converged = True
+
+                break
+
+        # ======================================================
+        # CONVERGENCE WARNING
+        # ======================================================
+
+        if not converged:
+
+            print(
+                f"[CALCINER WARNING] "
+                f"Thermal iteration did not converge. "
+                f"error = {error:.6e} K"
+            )
+
+        # ======================================================
+        # STEADY-STATE TEMPERATURES
+        # ======================================================
+
+        Tg_ss = Tg_iter
+        Ts_ss = Ts_iter
+        Tw_ss = Tw_iter
+
+        # ======================================================
+        # INLET / OUTLET
+        #
+        # Gas:
+        #     N-1 -> 0
+        #
+        # Solid:
+        #     0 -> N-1
+        # ======================================================
+
+        Tg_out = Tg_ss[0]
+
+        Ts_out = Ts_ss[-1]
+
+        Tw_out = Tw_ss[-1]
+
+        # ======================================================
+        # FINAL RADIATION
+        # ======================================================
+
+        q_gs_rad_final = radiation(
+            Tg_ss,
+            Ts_ss,
+            zone=self.zone,
+            area=a_gs,
+        )
+
+        q_gw_rad_final = radiation(
+            Tg_ss,
+            Tw_ss,
+            zone=self.zone,
+            area=a_gw,
+        )
+
+        q_ws_rad_final = radiation(
+            Ts_ss,
+            Tw_ss,
+            zone=self.zone,
+            area=a_ws,
+        )
+
+        # ======================================================
+        # CONVECTIVE HEAT TRANSFER
+        # ======================================================
+
+        Qgs_conv = (
+            V_cell
+            * K_gs
+            * (
+                Tg_ss
+                - Ts_ss
+            )
+        )
+
+        Qgw_conv = (
+            V_cell
+            * K_gw
+            * (
+                Tg_ss
+                - Tw_ss
+            )
+        )
+
+        Qws_conv = (
+            V_cell
+            * K_ws
+            * (
+                Ts_ss
+                - Tw_ss
+            )
+        )
+
+        # ======================================================
+        # TOTAL HEAT TRANSFER
+        # ======================================================
+
+        Qgs = np.sum(
+            Qgs_conv
+            + V_cell
+            * q_gs_rad_final
+        )
+
+        Qgw = np.sum(
+            Qgw_conv
+            + V_cell
+            * q_gw_rad_final
+        )
+
+        Qws = np.sum(
+            Qws_conv
+            + V_cell
+            * q_ws_rad_final
+        )
+
+        # ======================================================
+        # WALL LOSS
+        # ======================================================
+
+        Q_wall_loss = np.sum(
+            (
+                Tw_ss
+                - self.T_amb
+            )
+            / R_total
+        )
+
+        # ======================================================
+        # GAS ENTHALPY BALANCE
+        # ======================================================
+
+        Hg_in = (
+            m_dot_g
+            * h_gas(
+                Tg_in,
+                T_ref,
+            )
+        )
+
+        Hg_out = (
+            m_dot_g
+            * h_gas(
+                Tg_out,
+                T_ref,
+            )
+        )
+
+        gas_energy_change = (
+            Hg_out
+            - Hg_in
+        )
+
+        # ------------------------------------------------------
+        # Gas only exchanges energy through:
+        #
+        #   gas -> solid
+        #   gas -> wall
+        #
+        # Reaction is NOT a gas sink.
+        # ------------------------------------------------------
+
+        gas_expected = (
+            -Qgs
+            -Qgw
+        )
+
+        gas_energy_balance = (
+            gas_energy_change
+            - gas_expected
+        )
+
+        # ======================================================
+        # SOLID ENTHALPY BALANCE
+        # ======================================================
+
+        Hs_in = (
+            m_dot_s
+            * Cp_s
+            * (
+                Ts_in
+                - T_ref
+            )
+        )
+
+        Hs_out = (
+            m_dot_s
+            * Cp_s
+            * (
+                Ts_out
+                - T_ref
+            )
+        )
+
+        solid_energy_change = (
+            Hs_out
+            - Hs_in
+        )
+
+        # ------------------------------------------------------
+        # Solid receives:
+        #
+        #   +Qgs
+        #   -Qws
+        #   -Qcalcination
+        # ------------------------------------------------------
+
+        solid_expected = (
+            Qgs
+            - Qws
+            - reaction_sink
+        )
+
+        solid_energy_balance = (
+            solid_energy_change
+            - solid_expected
+        )
+
+        # ======================================================
+        # TOTAL EQUIPMENT ENERGY BALANCE
+        #
+        # Hgas_in
+        # + Hsolid_in
+        #
+        # =
+        #
+        # Hgas_out
+        # + Hsolid_out
+        # + Q_wall_loss
+        # + Q_calcination
+        #
+        # Therefore:
+        #
+        # residual -> 0
+        # ======================================================
+
+        total_energy_balance = (
+            Hg_in
+            + Hs_in
+            - Hg_out
+            - Hs_out
+            - Q_wall_loss
+            - reaction_sink
+        )
+        
+        print("\n========== CALCINER PHASE AFTER TOTAL ENERGY BALANCE ==========")
+
+        print(
+            f"Gas ΔH                 = "
+            f"{gas_energy_change:.6e} W"
+        )
+
+        print(
+            f"Gas expected           = "
+            f"{gas_expected:.6e} W"
+        )
+
+        print(
+            f"Gas balance            = "
+            f"{gas_energy_balance:.6e} W"
+        )
+
+        print(
+            f"Solid ΔH               = "
+            f"{solid_energy_change:.6e} W"
+        )
+
+        print(
+            f"Solid expected         = "
+            f"{solid_expected:.6e} W"
+        )
+
+        print(
+            f"Solid balance          = "
+            f"{solid_energy_balance:.6e} W"
+        )
+
+        print(
+            f"Qgs                    = "
+            f"{Qgs:.6e} W"
+        )
+
+        print(
+            f"Qgw                    = "
+            f"{Qgw:.6e} W"
+        )
+
+        print(
+            f"Qws                    = "
+            f"{Qws:.6e} W"
+        )
+
+        print(
+            f"Qwall                  = "
+            f"{Q_wall_loss:.6e} W"
+        )
+
+        print(
+            f"Qreaction              = "
+            f"{reaction_sink:.6e} W"
+        )
+
+        print(
+            f"Qgw + Qws              = "
+            f"{Qgw + Qws:.6e} W"
+        )
+
+        print(
+            f"Qwall consistency      = "
+            f"{Q_wall_loss - (Qgw + Qws):.6e} W"
+        )
+
+        print(
+            f"Total balance          = "
+            f"{total_energy_balance:.6e} W"
+        )
+
+        print(
+            "===================================================="
+        )
+
+        # ======================================================
+        # RETURN
+        # ======================================================
+
+        return (
+            Tg_ss,
+            Ts_ss,
+            Tw_ss,
+            Q_wall_loss,
+            {
+                "Q_gs": Qgs,
+                "Q_gw": Qgw,
+                "Q_ws": Qws,
+                "Q_wall_loss": Q_wall_loss,
+                "Q_reaction": reaction_sink,
+                "gas_energy_balance": gas_energy_balance,
+                "solid_energy_balance": solid_energy_balance,
+                "total_energy_balance": total_energy_balance,
+                "iterations": iteration + 1,
+                "converged": converged,
+            },
+        )
 
     # ======================================================
     # STATE UPDATE
@@ -183,154 +982,217 @@ class Calciner:
         # ======================================================
         # STATE INTEGRITY CHECK
         # ======================================================
-        if not isinstance(state.Tg_calciner, np.ndarray):
-            raise TypeError("Tg_calciner must be np.ndarray")
 
-        if state.Tg_calciner.shape != (self.N,):
-            raise ValueError(
-                f"Calciner state corrupted: {state.Tg_calciner.shape}"
+        if not isinstance(
+            state.Tg_calciner,
+            np.ndarray,
+        ):
+            raise TypeError(
+                "Tg_calciner must be np.ndarray"
             )
 
-        # ======================================================
-        # STORE OLD STATES
-        # ======================================================
-        state.Tg_calciner_old = state.Tg_calciner.copy()
-        state.Ts_calciner_old = state.Ts_calciner.copy()
-        state.Tw_calciner_old = state.Tw_calciner.copy()
+        if state.Tg_calciner.shape != (
+            self.N,
+        ):
+            raise ValueError(
+                f"Calciner state corrupted: "
+                f"{state.Tg_calciner.shape}"
+            )
 
         # ======================================================
         # INCOMING ENTHALPY FROM TRANSITION
         # ======================================================
-        state.Hgas_calciner_in = state.Hgas_transition_out
-        state.Hsolid_calciner_in = state.Hsolid_transition_out
+
+        state.Hgas_calciner_in = (
+            state.Hgas_transition_out
+        )
+
+        state.Hsolid_calciner_in = (
+            state.Hsolid_transition_out
+        )
 
         # ======================================================
         # INLET TEMPERATURES FROM ENTHALPY
+        #
+        # These are physical inlet conditions.
+        #
+        # Gas:
+        #     N-1 -> 0
+        #
+        # Solid:
+        #     0 -> N-1
         # ======================================================
-        state.Tg_calciner[0] = self.gas_temperature_from_enthalpy(
-            state.Hgas_calciner_in,
-            state,
+
+        Tg_in = (
+            self.gas_temperature_from_enthalpy(
+                state.Hgas_calciner_in,
+                state,
+            )
         )
 
-        state.Ts_calciner[0] = self.solid_temperature_from_enthalpy(
-            state.Hsolid_calciner_in,
-            state,
+        Ts_in = (
+            self.solid_temperature_from_enthalpy(
+                state.Hsolid_calciner_in,
+                state,
+            )
         )
 
         # ======================================================
-        # CALCINER CHEMISTRY
+        # CaCO3 BEFORE REACTION
         # ======================================================
-        state = self.chemistry.apply_calciner(state)
+        CaCO3_before = state.materials["calciner"].solids.CaCO3.copy()
+
+        print("\n========== CALCINER CaCO3 BEFORE ==========")
+        print("cells =", CaCO3_before)
+        print("total =", np.sum(CaCO3_before))
+
+        # ======================================================
+        # CHEMISTRY
+        # ======================================================
+        state.dt = dt
+
+        state = self.chemistry.apply_calciner(
+            state,
+            state.residence_time,
+        )
+
+        # ======================================================
+        # CaCO3 AFTER REACTION
+        # ======================================================
+        CaCO3_after = state.materials["calciner"].solids.CaCO3
+
+        print("\n========== CALCINER CaCO3 AFTER ==========")
+        print("cells =", CaCO3_after)
+        print("total =", np.sum(CaCO3_after))
+
+        print("\n========== CALCINER CaCO3 REACTED ==========")
+        print("cells =", CaCO3_before - CaCO3_after)
+        print("total =", np.sum(CaCO3_before - CaCO3_after))
+        print(
+            "Q_calcination =",
+            state.Calcination_Q_sink,
+            "W"
+        )
 
         # ======================================================
         # THERMAL STEP
-        # (Reaction heat sink is handled INSIDE thermal_step)
+        #
+        # Reaction is a solid-phase energy sink.
+        #
+        # IMPORTANT:
+        # No dt is passed to thermal_step().
         # ======================================================
-        Tg, Ts, Tw, wall_loss, wall_debug = self.thermal_step(
-            state.Tg_calciner,
-            state.Ts_calciner,
-            state.Tw_calciner,
-            state,
-            dt,
-            reaction_sink=state.Calcination_Q_sink,
+
+        Tg, Ts, Tw, wall_loss, wall_debug = (
+            self.thermal_step(
+                state.Tg_calciner,
+                state.Ts_calciner,
+                state.Tw_calciner,
+                state,
+                Tg_in,
+                Ts_in,
+                reaction_sink=(
+                    state.Calcination_Q_sink
+                ),
+            )
         )
 
         # ======================================================
-        # UPDATE STATES
+        # UPDATE TEMPERATURE STATES
         # ======================================================
+
         state.Tg_calciner = Tg
         state.Ts_calciner = Ts
         state.Tw_calciner = Tw
 
-        state.Wall_loss_calciner = float(wall_loss)
+        state.Wall_loss_calciner = (
+            float(wall_loss)
+        )
 
         # ======================================================
-        # UPDATE ENTHALPIES FROM FINAL TEMPERATURES
+        # UPDATE GAS ENTHALPY
+        #
+        # Must use the same h_gas() definition
+        # used by thermal_step().
         # ======================================================
+
         state.Hg_calciner = (
             state.m_dot_g
-            * self.Cp_g
-            * (state.Tg_calciner - self.T_ref)
+            * h_gas(
+                state.Tg_calciner,
+                self.T_ref,
+            )
         )
+
+        # ======================================================
+        # UPDATE SOLID ENTHALPY
+        # ======================================================
 
         state.Hs_calciner = (
             state.m_dot_s
             * self.Cp_s
-            * (state.Ts_calciner - self.T_ref)
+            * (
+                state.Ts_calciner
+                - self.T_ref
+            )
         )
 
         # ======================================================
-        # WALL DEBUG
+        # ENTHALPY TO NEXT ZONE
         # ======================================================
-        if wall_debug is None:
-            wall_debug = {}
 
-        state.wall_debug_calciner = {
-            "q_loss_mean": wall_debug.get("q_loss_mean", 0.0),
-            "q_loss_total": wall_debug.get("wall_loss_total", 0.0),
-            "A_wall": wall_debug.get("A_wall", 0.0),
-            "V_cell": wall_debug.get("V_cell", 0.0),
-            "N": wall_debug.get("N", self.N),
-        }
-
-        state.q_loss_mean_calciner = (
-            state.wall_debug_calciner["q_loss_mean"]
+        state.Hgas_calciner_out = (
+            state.Hg_calciner[0]
         )
 
-        state.A_wall_calciner = (
-            state.wall_debug_calciner["A_wall"]
-        )
-
-        state.V_cell_calciner = (
-            state.wall_debug_calciner["V_cell"]
-        )
-
-        state.N_calciner = (
-            state.wall_debug_calciner["N"]
+        state.Hsolid_calciner_out = (
+            state.Hs_calciner[-1]
         )
 
         # ======================================================
-        # ENERGY OUT
+        # STEADY-STATE:
+        # NO ACCUMULATION
         # ======================================================
-        state.Hgas_calciner_out = state.Hg_calciner[-1]
-        state.Hsolid_calciner_out = state.Hs_calciner[-1]
 
-        # ======================================================
-        # STORED ENERGY
-        # ======================================================
-        state.Calciner_gas_stored = np.sum(
-            self._rho_g_Vcell_Cp_g
-            * (state.Tg_calciner - state.Tg_calciner_old)
-            / dt
-        )
+        state.Calciner_gas_stored = 0.0
 
-        state.Calciner_solid_stored = np.sum(
-            self._rho_s_Vcell_Cp_s
-            * (state.Ts_calciner - state.Ts_calciner_old)
-            / dt
-        )
+        state.Calciner_solid_stored = 0.0
 
-        state.Calciner_wall_stored = np.sum(
-            self._rho_wall_Vwall_cell_Cp
-            * (state.Tw_calciner - state.Tw_calciner_old)
-            / dt
-        )
+        state.Calciner_wall_stored = 0.0
 
         state.Calciner_stored_energy_change = (
-            state.Calciner_gas_stored
-            + state.Calciner_solid_stored
-            + state.Calciner_wall_stored
+            0.0
         )
 
         # ======================================================
-        # ENERGY BALANCE
+        # STEADY-STATE ENERGY BALANCE
+        #
+        # Energy in:
+        #
+        #   Hgas_in
+        # + Hsolid_in
+        #
+        # Energy out:
+        #
+        #   Hgas_out
+        # + Hsolid_out
+        # + Q_wall_loss
+        # + Q_calcination
+        #
+        # Residual:
+        #
+        #   Energy_in - Energy_out
+        #
+        # Target:
+        #
+        #   residual -> 0
         # ======================================================
+
         state.Calciner_energy_balance = (
             state.Hgas_calciner_in
             + state.Hsolid_calciner_in
             - state.Hgas_calciner_out
             - state.Hsolid_calciner_out
-            - state.Calciner_stored_energy_change
             - state.Wall_loss_calciner
             - state.Calcination_Q_sink
         )
@@ -338,14 +1200,235 @@ class Calciner:
         # ======================================================
         # RELATIVE ENERGY BALANCE
         # ======================================================
+
+        energy_scale = (
+            abs(
+                state.Hgas_calciner_in
+            )
+            + abs(
+                state.Hsolid_calciner_in
+            )
+            + abs(
+                state.Calcination_Q_sink
+            )
+            + self.eps
+        )
+
         state.Calciner_energy_balance_relative = (
             state.Calciner_energy_balance
-            /
-            (
-                abs(state.Hgas_calciner_in)
-                + abs(state.Hsolid_calciner_in)
-                + self.eps
-            )
+            / energy_scale
+        )
+
+        # ======================================================
+        # CALCINER FLOW DEBUG
+        # ======================================================
+
+        print(
+            "\n========== CALCINER FLOW DEBUG =========="
+        )
+
+        print(
+            f"u_g = {state.u_g:.6e} m/s"
+        )
+
+        print(
+            f"u_s = {state.u_s:.6e} m/s"
+        )
+
+        print("------------------------------------------")
+
+        print(
+            f"m_dot_g = "
+            f"{state.m_dot_g:.6e} kg/s"
+        )
+
+        print(
+            f"m_dot_s = "
+            f"{state.m_dot_s:.6e} kg/s"
+        )
+
+        print("------------------------------------------")
+
+        print(
+            f"Tg_in = "
+            f"{Tg_in:.3f} K"
+        )
+
+        print(
+            f"Tg_out = "
+            f"{state.Tg_calciner[0]:.3f} K"
+        )
+
+        print(
+            f"Ts_in = "
+            f"{Ts_in:.3f} K"
+        )
+
+        print(
+            f"Ts_out = "
+            f"{state.Ts_calciner[-1]:.3f} K"
+        )
+
+        print(
+            f"Tw_in = "
+            f"{state.Tw_calciner[0]:.3f} K"
+        )
+
+        print(
+            f"Tw_out = "
+            f"{state.Tw_calciner[-1]:.3f} K"
+        )
+
+        print(
+            "=========================================="
+        )
+
+        # ======================================================
+        # CALCINER ENERGY BALANCE DEBUG
+        # ======================================================
+
+        print(
+            "\n========== "
+            "CALCINER ENERGY BALANCE "
+            "=========="
+        )
+
+        print(
+            f"Hgas_calciner_in       = "
+            f"{state.Hgas_calciner_in:.6e} W"
+        )
+
+        print(
+            f"Hgas_calciner_out      = "
+            f"{state.Hgas_calciner_out:.6e} W"
+        )
+
+        print(
+            f"Hsolid_calciner_in     = "
+            f"{state.Hsolid_calciner_in:.6e} W"
+        )
+
+        print(
+            f"Hsolid_calciner_out    = "
+            f"{state.Hsolid_calciner_out:.6e} W"
+        )
+
+        print(
+            f"Wall_loss_calciner     = "
+            f"{state.Wall_loss_calciner:.6e} W"
+        )
+
+        print(
+            f"Calcination_Q_sink     = "
+            f"{state.Calcination_Q_sink:.6e} W"
+        )
+
+        print("----------------------------------------------")
+
+        # ======================================================
+        # ENERGY IN
+        # ======================================================
+
+        calciner_energy_in = (
+            state.Hgas_calciner_in
+            + state.Hsolid_calciner_in
+        )
+
+        # ======================================================
+        # ENERGY OUT
+        #
+        # Includes:
+        #   gas
+        #   solid
+        #   wall loss
+        #   calcination reaction
+        # ======================================================
+
+        calciner_energy_out = (
+            state.Hgas_calciner_out
+            + state.Hsolid_calciner_out
+            + state.Wall_loss_calciner
+            + state.Calcination_Q_sink
+        )
+
+        # ======================================================
+        # ENERGY RESIDUAL
+        # ======================================================
+
+        calciner_residual = (
+            calciner_energy_in
+            - calciner_energy_out
+        )
+
+        print(
+            f"Energy_in              = "
+            f"{calciner_energy_in:.6e} W"
+        )
+
+        print(
+            f"Energy_out             = "
+            f"{calciner_energy_out:.6e} W"
+        )
+
+        print(
+            f"Residual               = "
+            f"{calciner_residual:.6e} W"
+        )
+
+        print("----------------------------------------------")
+
+        print(
+            f"Calciner_energy_balance = "
+            f"{state.Calciner_energy_balance:.6e} W"
+        )
+
+        print(
+            f"Calciner_energy_balance_relative = "
+            f"{state.Calciner_energy_balance_relative:.6e}"
+        )
+
+        print("----------------------------------------------")
+
+        # ======================================================
+        # CALCINER TEMPERATURE DEBUG
+        # ======================================================
+
+        print(
+            "\n========== "
+            "CALCINER TEMPERATURES "
+            "=========="
+        )
+
+        print(
+            f"Tg_in  = {Tg_in:.3f} K"
+        )
+
+        print(
+            f"Tg_out = "
+            f"{state.Tg_calciner[0]:.3f} K"
+        )
+
+        print(
+            f"Ts_in  = {Ts_in:.3f} K"
+        )
+
+        print(
+            f"Ts_out = "
+            f"{state.Ts_calciner[-1]:.3f} K"
+        )
+
+        print(
+            f"Tw_in  = "
+            f"{state.Tw_calciner[0]:.3f} K"
+        )
+
+        print(
+            f"Tw_out = "
+            f"{state.Tw_calciner[-1]:.3f} K"
+        )
+
+        print(
+            "============================================"
         )
 
         return state
@@ -357,33 +1440,75 @@ class Calciner:
 
     def gas_temperature_from_enthalpy(self, H, state):
 
+        m_dot_g = state.m_dot_g
+
+        # H = m_dot_g * h_gas(T, T_ref)
+        #
+        # Therefore solve:
+        #
+        # h_gas(T, T_ref) = H / m_dot_g
+        #
+        # using numerical inversion.
+
+        h_target = (
+            H
+            / (
+                m_dot_g
+                + self.eps
+            )
+        )
+
+        T_low = 200.0
+        T_high = 4000.0
+
+        for _ in range(100):
+
+            T_mid = (
+                0.5
+                * (
+                    T_low
+                    + T_high
+                )
+            )
+
+            h_mid = h_gas(
+                T_mid,
+                self.T_ref,
+            )
+
+            if h_mid < h_target:
+
+                T_low = T_mid
+
+            else:
+
+                T_high = T_mid
+
         return (
-            H /
-            (state.m_dot_g * self.Cp_g + self.eps)
-            +
-            self.T_ref
+            0.5
+            * (
+                T_low
+                + T_high
+            )
         )
 
 
-    def solid_temperature_from_enthalpy(self, H, state):
+    def solid_temperature_from_enthalpy(
+        self,
+        H,
+        state,
+    ):
 
         return (
-            H /
-            (state.m_dot_s * self.Cp_s + self.eps)
-            +
-            self.T_ref
+            H
+            / (
+                state.m_dot_s
+                * self.Cp_s
+                + self.eps
+            )
+            + self.T_ref
         )
 
 
-    # ======================================================
-    # ENTHALPY TO NEXT ZONE
-    # ======================================================
-
-    def gas_enthalpy_out(self, Hg):
-
-        return Hg[-1]
 
 
-    def solid_enthalpy_out(self, Hs):
-
-        return Hs[-1]
