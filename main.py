@@ -6,6 +6,7 @@ from kiln.preheater import Preheater
 from kiln.cooler import Cooler
 from controls.mpc import MasterMPC
 from physics.mass_transport import MassTransport
+from physics.physics import gas_mass_balance
 from dataclasses import fields
 from chemistry.phases import SolidPhases, GasPhases
 
@@ -174,6 +175,117 @@ class Twin:
             ),
 
         }
+        
+        
+    # ==========================================================
+    # GAS ENTHALPY FIXED-POINT COUPLING
+    # ==========================================================
+    def _solve_gas_coupling(self, inputs):
+
+        max_iter = 50
+        tol = 1e-3  # W
+
+        H_burning_old = getattr(
+            self.state,
+            "Hgas_burning_out",
+            0.0
+        )
+
+        H_transition_old = getattr(
+            self.state,
+            "Hgas_transition_out",
+            H_burning_old
+        )
+
+        H_calciner_old = getattr(
+            self.state,
+            "Hgas_calciner_out",
+            H_transition_old
+        )
+
+        for iteration in range(max_iter):
+
+            # ======================================================
+            # GAS ENTHALPY FIXED-POINT COUPLING
+            # ======================================================
+            self.state = self._solve_gas_coupling(
+                inputs
+            )
+
+            print("\n========== GAS FLOW AFTER COUPLING ==========")
+            print(
+                f"m_dot_g              = "
+                f"{self.state.m_dot_g:.6e} kg/s"
+            )
+            print(
+                f"Hgas_burning_out     = "
+                f"{self.state.Hgas_burning_out:.6e} W"
+            )
+            print(
+                f"Hgas_transition_out  = "
+                f"{self.state.Hgas_transition_out:.6e} W"
+            )
+            print(
+                f"Hgas_calciner_out    = "
+                f"{self.state.Hgas_calciner_out:.6e} W"
+            )
+            print("==============================================")
+
+            # ==================================================
+            # CONVERGENCE
+            # ==================================================
+            err_burning = abs(
+                H_burning_new - H_burning_old
+            )
+
+            err_transition = abs(
+                H_transition_new - H_transition_old
+            )
+
+            err_calciner = abs(
+                H_calciner_new - H_calciner_old
+            )
+
+            err = max(
+                err_burning,
+                err_transition,
+                err_calciner
+            )
+
+            if err < tol:
+
+                print(
+                    f"\n[GAS COUPLING] converged "
+                    f"in {iteration + 1} iterations"
+                )
+
+                return self.state
+
+            # ==================================================
+            # RELAXATION
+            # ==================================================
+            alpha = 0.5
+
+            H_burning_old = (
+                alpha * H_burning_new
+                + (1.0 - alpha) * H_burning_old
+            )
+
+            H_transition_old = (
+                alpha * H_transition_new
+                + (1.0 - alpha) * H_transition_old
+            )
+
+            H_calciner_old = (
+                alpha * H_calciner_new
+                + (1.0 - alpha) * H_calciner_old
+            )
+
+        raise RuntimeError(
+            "Gas enthalpy coupling did not converge "
+            f"after {max_iter} iterations. "
+            f"Residual = {err:.6e} W"
+        )
 
 
     # --------------------------------------------------
@@ -200,36 +312,106 @@ class Twin:
             print("MPC FAILED:", repr(e))
 
         inputs = dict(self._last_inputs)
+        
+        # ======================================================
+        # CENTRAL GAS MASS FLOW
+        # ======================================================
+        self.state.m_dot_g = gas_mass_balance(
+            fuel_rate_total=inputs["Fuel_rate_total"],
+            O2=inputs["O2"],
+            eps=self.eps,
+        )
+
+        print("\n========== GAS FLOW CHECK ==========")
+        print(f"m_dot_g = {self.state.m_dot_g:.6e} kg/s")
+        print("====================================")
 
         # ======================================================
-        # MASS FLOW INJECTION
+        # GAS PROPERTIES
         # ======================================================
-        inputs["m_dot_g"] = self.state.m_dot_g
         inputs["rho_g"] = getattr(self.state, "rho_g", 1.2)
 
+
         # ======================================================
-        # CALCINER / ILC
+        # GAS MASS FLOW
         # ======================================================
-        self.state = self.calciner.apply(
+        self.state.m_dot_g = gas_mass_balance(
+            fuel_rate_total=inputs["Fuel_rate_total"],
+            O2=inputs["O2"],
+            eps=self.eps,
+        )
+
+        print("\n========== GAS FLOW CHECK ==========")
+        print(f"m_dot_g = {self.state.m_dot_g:.6e} kg/s")
+        print("====================================")
+
+        inputs["rho_g"] = getattr(
             self.state,
+            "rho_g",
+            1.2,
         )
 
         # ======================================================
-        # TRANSITION
+        # THERMAL ZONE ORDER
+        # GAS FLOW: BURNING -> TRANSITION -> CALCINER
         # ======================================================
-        self.state = self.transition.apply(
-            self.state,
-            self.dt,
-        )
 
-        # ======================================================
-        # BURNING
-        # ======================================================
+        # ------------------------------------------------------
+        # 1. BURNING
+        # ------------------------------------------------------
         self.state = self.burning.apply(
             self.state,
             inputs,
             self.dt,
         )
+
+        # ------------------------------------------------------
+        # 2. TRANSITION
+        # ------------------------------------------------------
+        self.state = self.transition.apply(
+            self.state,
+            self.dt,
+        )
+
+        # ------------------------------------------------------
+        # 3. CALCINER
+        # ------------------------------------------------------
+        self.state = self.calciner.apply(
+            self.state,
+        )
+
+        # ======================================================
+        # GAS ENTHALPY HANDOFF CHECK
+        # ======================================================
+        print("\n========== GAS ENTHALPY HANDOFF ==========")
+        print(
+            f"Hgas_burning_out     = "
+            f"{self.state.Hgas_burning_out:.6e} W"
+        )
+        print(
+            f"Hgas_transition_in   = "
+            f"{self.state.Hgas_transition_in:.6e} W"
+        )
+        print(
+            f"Hgas_transition_out  = "
+            f"{self.state.Hgas_transition_out:.6e} W"
+        )
+        print(
+            f"Hgas_calciner_in     = "
+            f"{self.state.Hgas_calciner_in:.6e} W"
+        )
+        print(
+            f"Hgas_calciner_out    = "
+            f"{self.state.Hgas_calciner_out:.6e} W"
+        )
+        print("============================================")
+
+
+        
+        print("\n========== GAS FLOW AFTER BURNING ==========")
+        print(f"m_dot_g AFTER BURNING = {self.state.m_dot_g:.6e} kg/s")
+        print(f"Hgas_burning_out      = {self.state.Hgas_burning_out:.6e} W")
+        print("============================================")
 
 
         # ======================================================

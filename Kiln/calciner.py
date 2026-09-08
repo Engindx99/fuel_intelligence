@@ -1024,6 +1024,11 @@ class Calciner:
     # ======================================================
     def apply(self, state):
 
+        print("\n========== CALCINER APPLY ENTER ==========", flush=True)
+        print(f"m_dot_g                = {state.m_dot_g:.6e} kg/s", flush=True)
+        print(f"Hgas_transition_out    = {state.Hgas_transition_out:.6e} W", flush=True)
+        print("==========================================", flush=True)
+
         # ======================================================
         # STATE INTEGRITY CHECK
         # ======================================================
@@ -1434,6 +1439,73 @@ class Calciner:
         state.Wall_loss_calciner = (
             float(wall_loss_new)
         )
+        
+        print("\n========== CALCINER ENTHALPY INPUT CHECK ==========")
+
+        print(
+            f"state.m_dot_g        = "
+            f"{state.m_dot_g:.6e} kg/s"
+        )
+
+        print(
+            f"Tg_calciner          = "
+            f"{state.Tg_calciner}"
+        )
+
+        print(
+            f"Tg_calciner[0]       = "
+            f"{state.Tg_calciner[0]:.6f} K"
+        )
+
+        print(
+            f"Tg_calciner[-1]      = "
+            f"{state.Tg_calciner[-1]:.6f} K"
+        )
+
+        print(
+            f"h_gas(Tg[0])         = "
+            f"{h_gas(state.Tg_calciner[0], self.T_ref):.6e} J/kg"
+        )
+
+        print(
+            f"h_gas(Tg[-1])        = "
+            f"{h_gas(state.Tg_calciner[-1], self.T_ref):.6e} J/kg"
+        )
+
+        print(
+            f"Hgas_calciner_in     = "
+            f"{state.Hgas_calciner_in:.6e} W"
+        )
+
+        print(
+            f"Hsolid_calciner_in   = "
+            f"{state.Hsolid_calciner_in:.6e} W"
+        )
+
+        print("====================================================")
+        
+        print("\n========== CALCINER ENTHALPY INPUT CHECK ==========")
+
+        print(f"state.m_dot_g        = {state.m_dot_g:.6e} kg/s")
+
+        print(f"Tg_calciner          = {state.Tg_calciner}")
+        print(f"Tg_calciner[0]       = {state.Tg_calciner[0]:.6f} K")
+        print(f"Tg_calciner[-1]      = {state.Tg_calciner[-1]:.6f} K")
+
+        print(
+            f"h_gas(Tg[0])         = "
+            f"{h_gas(state.Tg_calciner[0], self.T_ref):.6e} J/kg"
+        )
+
+        print(
+            f"h_gas(Tg[-1])        = "
+            f"{h_gas(state.Tg_calciner[-1], self.T_ref):.6e} J/kg"
+        )
+
+        print(f"Hgas_calciner_in     = {state.Hgas_calciner_in:.6e} W")
+        print(f"Hsolid_calciner_in   = {state.Hsolid_calciner_in:.6e} W")
+
+        print("====================================================")
 
         # ======================================================
         # UPDATE GAS ENTHALPY
@@ -1441,6 +1513,17 @@ class Calciner:
         # Must use the same h_gas() definition
         # used by thermal_step().
         # ======================================================
+        print("\n========== BEFORE CALCINER HG ==========", flush=True)
+        print(f"m_dot_g       = {state.m_dot_g:.6e} kg/s", flush=True)
+        print(f"Tg[0]         = {state.Tg_calciner[0]:.6f} K", flush=True)
+        print(f"Tg[-1]        = {state.Tg_calciner[-1]:.6f} K", flush=True)
+
+        h0 = h_gas(state.Tg_calciner[0], self.T_ref)
+        hN = h_gas(state.Tg_calciner[-1], self.T_ref)
+
+        print(f"h_gas[0]      = {h0:.6e} J/kg", flush=True)
+        print(f"h_gas[-1]     = {hN:.6e} J/kg", flush=True)
+        print("==========================================", flush=True)
 
         state.Hg_calciner = (
             state.m_dot_g
@@ -1449,6 +1532,7 @@ class Calciner:
                 self.T_ref,
             )
         )
+
 
         # ======================================================
         # UPDATE SOLID ENTHALPY
@@ -1463,13 +1547,30 @@ class Calciner:
             )
         )
 
+
         # ======================================================
         # ENTHALPY TO NEXT ZONE
         # ======================================================
 
-        state.Hgas_calciner_out = (
-            state.Hg_calciner[0]
-        )
+        state.Hgas_calciner_out = state.Hg_calciner[0]
+
+
+        # ======================================================
+        # CALCINER OUTPUT CHECK
+        # ======================================================
+
+        print("\n========== CALCINER OUTPUT CHECK ==========")
+        print(f"Hg_calciner[0]        = {state.Hg_calciner[0]:.6e} W")
+        print(f"Hg_calciner[-1]       = {state.Hg_calciner[-1]:.6e} W")
+        print(f"Hgas_calciner_out     = {state.Hgas_calciner_out:.6e} W")
+        print(f"m_dot_g               = {state.m_dot_g:.6e} kg/s")
+        print("===========================================\n")
+
+
+
+        # ======================================================
+        # SOLID ENTHALPY TO NEXT ZONE
+        # ======================================================
 
         state.Hsolid_calciner_out = (
             state.Hs_calciner[-1]

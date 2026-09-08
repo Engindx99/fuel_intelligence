@@ -191,6 +191,8 @@ class Transition:
         Tg_iter = np.asarray(Tg, dtype=float).copy()
         Ts_iter = np.asarray(Ts, dtype=float).copy()
         Tw_iter = np.asarray(Tw, dtype=float).copy()
+        
+        m_dot_CaCO3_out_cells = np.zeros(N)
 
         converged = False
         error = np.inf
@@ -200,6 +202,11 @@ class Transition:
         # ======================================================
 
         for iteration in range(max_iter):
+
+            # ==================================================
+            # RESET CHEMISTRY FLOW FOR THIS PICARD ITERATION
+            # ==================================================
+            m_dot_CaCO3_out_cells[:] = 0.0
 
             # ==================================================
             # RADIATION
@@ -380,6 +387,61 @@ class Transition:
                     )
 
                 row += 1
+                
+                
+                # ======================================================
+                # TRANSITION CALCINATION
+                # ======================================================
+                m_dot_CaCO3_transition_in = getattr(
+                    state,
+                    "m_dot_CaCO3_out_calciner",
+                    0.0,
+                )
+
+                T_reaction = max(float(Ts_iter[i]), 1.0)
+
+                k_reaction = float(
+                    self.chemistry.reaction_rate(T_reaction)
+                )
+
+                if i == 0:
+                    m_CaCO3_in_cell = m_dot_CaCO3_transition_in
+                else:
+                    m_CaCO3_in_cell = (
+                        m_dot_CaCO3_out_cells[i - 1]
+                    )
+
+                spatial_exponent = (
+                    k_reaction
+                    * self.dz
+                    / max(u_s, self.eps)
+                )
+
+                m_CaCO3_out_cell = (
+                    m_CaCO3_in_cell
+                    * np.exp(-spatial_exponent)
+                )
+
+                m_CaCO3_out_cell = np.clip(
+                    m_CaCO3_out_cell,
+                    0.0,
+                    m_CaCO3_in_cell,
+                )
+
+                # Sonraki hücreye aktarılacak CaCO3 debisi
+                m_dot_CaCO3_out_cells[i] = (
+                    m_CaCO3_out_cell
+                )
+
+                m_CaCO3_reacted_cell = (
+                    m_CaCO3_in_cell
+                    - m_CaCO3_out_cell
+                )
+
+                Q_calcination_cell = (
+                    m_CaCO3_reacted_cell
+                    * self.chemistry.deltaH
+                )
 
                 # ==================================================
                 # SOLID ENERGY BALANCE
@@ -423,34 +485,17 @@ class Transition:
                 # --------------------------------------------------
 
                 if i == 0:
-
-                    # ----------------------------------------------
-                    # SOLID INLET FROM BURNING
-                    # ----------------------------------------------
-
                     b[row] = (
                         Cs * Ts_in
                         + radiation_solid_source
+                        - Q_calcination_cell
                     )
-
                 else:
-
-                    # ----------------------------------------------
-                    # UPSTREAM SOLID CELL
-                    #
-                    # Solid moves:
-                    #
-                    # i-1 -> i
-                    # ----------------------------------------------
-
                     Ts_up_i = N + i - 1
-
-                    A[row, Ts_up_i] += (
-                        -Cs
-                    )
-
+                    A[row, Ts_up_i] += -Cs
                     b[row] = (
                         radiation_solid_source
+                        - Q_calcination_cell
                     )
 
                 row += 1
@@ -611,6 +656,135 @@ class Transition:
             zone=self.zone,
             area=a_ws,
         )
+        
+        # ======================================================
+        # FINAL TRANSITION CALCINATION
+        # ======================================================
+        m_dot_CaCO3_transition_in = getattr(
+            state,
+            "m_dot_CaCO3_out_calciner",
+            0.0,
+        )
+
+        m_dot_CaCO3_in_cells = np.zeros(N)
+        m_dot_CaCO3_reacted_cells = np.zeros(N)
+        m_dot_CaCO3_out_cells = np.zeros(N)
+        reaction_heat_cells = np.zeros(N)
+        reaction_rate_cells = np.zeros(N)
+
+        if m_dot_CaCO3_transition_in > self.eps:
+            m_dot_CaCO3_in_cells[0] = (
+                m_dot_CaCO3_transition_in
+            )
+
+            for i in range(N):
+
+                T_reaction = max(
+                    float(Ts_ss[i]),
+                    1.0,
+                )
+
+                k_reaction = float(
+                    self.chemistry.reaction_rate(
+                        T_reaction
+                    )
+                )
+
+                reaction_rate_cells[i] = k_reaction
+
+                m_in = max(
+                    float(m_dot_CaCO3_in_cells[i]),
+                    0.0,
+                )
+
+                spatial_exponent = (
+                    k_reaction
+                    * self.dz
+                    / max(state.u_s, self.eps)
+                )
+
+                m_out = (
+                    m_in
+                    * np.exp(-spatial_exponent)
+                )
+
+                m_out = np.clip(
+                    m_out,
+                    0.0,
+                    m_in,
+                )
+
+                m_reacted = m_in - m_out
+
+                m_dot_CaCO3_out_cells[i] = m_out
+                m_dot_CaCO3_reacted_cells[i] = m_reacted
+
+                reaction_heat_cells[i] = (
+                    m_reacted
+                    * self.chemistry.deltaH
+                )
+
+                if i + 1 < N:
+                    m_dot_CaCO3_in_cells[i + 1] = m_out
+
+        Q_calcination_transition = np.sum(
+            reaction_heat_cells
+        )
+
+        m_dot_CaCO3_out_transition = (
+            m_dot_CaCO3_out_cells[-1]
+        )
+
+        X_calcination_transition = (
+            1.0
+            - (
+                m_dot_CaCO3_out_transition
+                / max(
+                    m_dot_CaCO3_transition_in,
+                    self.eps,
+                )
+            )
+        )
+        
+        
+        print("\n========== TRANSITION CHEMISTRY DEBUG ==========")
+        print(
+            f"CaCO3 in       = "
+            f"{m_dot_CaCO3_transition_in:.6f} kg/s"
+        )
+        print(
+            f"CaCO3 reacted  = "
+            f"{np.sum(m_dot_CaCO3_reacted_cells):.6f} kg/s"
+        )
+        print(
+            f"CaCO3 out      = "
+            f"{m_dot_CaCO3_out_transition:.6f} kg/s"
+        )
+        print(
+            f"Conversion     = "
+            f"{X_calcination_transition:.6f}"
+        )
+        print(
+            f"Qcalc          = "
+            f"{Q_calcination_transition/1e6:.6f} MW"
+        )
+        cell_conversion = (
+            1.0
+            - m_dot_CaCO3_out_cells
+            / np.maximum(
+                m_dot_CaCO3_in_cells,
+                self.eps
+            )
+        )
+
+        print(
+            f"Cell conversion = {cell_conversion}"
+        )
+        print(
+            f"Cell CaCO3 out  = "
+            f"{m_dot_CaCO3_out_cells}"
+        )
+        print("===============================================")
 
         # ======================================================
         # FINAL CONVECTION
@@ -766,18 +940,14 @@ class Transition:
 
         # ======================================================
         # ENERGY BALANCE
-        #
-        # Hg_in + Hs_in
-        # =
-        # Hg_out + Hs_out + wall_loss
         # ======================================================
-
         total_energy_balance = (
             Hg_in
             + Hs_in
             - Hg_out
             - Hs_out
             - wall_loss
+            - Q_calcination_transition
         )
 
         # ======================================================
@@ -933,6 +1103,48 @@ class Transition:
         print(
             "==============================================="
         )
+        
+        
+        state.Calcination_Q_transition = float(
+            Q_calcination_transition
+        )
+
+        state.X_CaCO3_transition = float(
+            X_calcination_transition
+        )
+
+        state.m_dot_CaCO3_in_transition = float(
+            m_dot_CaCO3_transition_in
+        )
+
+        state.m_dot_CaCO3_out_transition = float(
+            m_dot_CaCO3_out_transition
+        )
+
+        state.m_dot_CaCO3_reacted_transition = float(
+            m_dot_CaCO3_transition_in
+            - m_dot_CaCO3_out_transition
+        )
+
+        state.Calcination_Q_transition_cells = (
+            reaction_heat_cells.copy()
+        )
+
+        state.m_dot_CaCO3_in_transition_cells = (
+            m_dot_CaCO3_in_cells.copy()
+        )
+
+        state.m_dot_CaCO3_reacted_transition_cells = (
+            m_dot_CaCO3_reacted_cells.copy()
+        )
+
+        state.m_dot_CaCO3_out_transition_cells = (
+            m_dot_CaCO3_out_cells.copy()
+        )
+
+        state.reaction_rate_CaCO3_transition_cells = (
+            reaction_rate_cells.copy()
+        )
 
         return (
             Tg_ss,
@@ -1049,24 +1261,7 @@ class Transition:
         # ======================================================
         # TRANSITION CHEMISTRY
         # ======================================================
-        m_dot_CaCO3_transition_in = getattr(
-            state,
-            "m_dot_CaCO3_out_calciner",
-            None,
-        )
 
-        if m_dot_CaCO3_transition_in is None:
-            raise AttributeError(
-                "Transition: ILC çıkışındaki "
-                "m_dot_CaCO3_out_calciner state üzerinde bulunmuyor."
-            )
-
-        state = self.chemistry.apply(
-            state,
-            dz=self.dz,
-            u_s=state.u_s,
-            m_dot_CaCO3_in=m_dot_CaCO3_transition_in,
-        )
 
 
         # ======================================================
@@ -1183,6 +1378,7 @@ class Transition:
             - state.Hgas_transition_out
             - state.Hsolid_transition_out
             - state.Wall_loss_transition
+            - state.Calcination_Q_transition
         )
         
         # ======================================================

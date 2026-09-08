@@ -19,6 +19,7 @@ class GlobalState:
     # ======================================================
     # OPERATION
     # ======================================================
+    Feed_temperature: float = 300.0  # K
     Feed_rate: float = 40.0 # kg/s
     Inventory_kg: float = 0.0 # kg/s
     Residence_time_target: float = 0.0 #min

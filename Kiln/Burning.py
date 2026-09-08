@@ -223,16 +223,11 @@ class Burning:
         T_ref = self.T_ref
 
         # ======================================================
-        # MASS FLOW
+        # MASS FLOW / THERMAL CAPACITY
         # ======================================================
 
-        m_dot_g = gas_mass_balance(
-            fuel_rate_total=fuel_rate_total,
-            O2=O2,
-            eps=self.eps
-        )
-
-        state.m_dot_g = float(m_dot_g)
+        # m_dot_g is calculated centrally in main.py.
+        m_dot_g = state.m_dot_g
 
         m_dot_s = state.m_dot_s
 

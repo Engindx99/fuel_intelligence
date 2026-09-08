@@ -13,7 +13,7 @@ class CalcinationModel(ReactionBase):
         # KINETICS
         # ======================================================
 
-        self.prefactor = 30.0             # 1/s
+        self.prefactor = 42.5             # 1/s
         self.activation_energy = 1.5e5      # J/mol
         self.deltaH = 1.78e6                # J/kg CaCO3
 

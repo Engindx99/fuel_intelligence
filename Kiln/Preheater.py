@@ -1,5 +1,6 @@
 import numpy as np
 from physics.physics import solid_mass_flow
+from physics.physics import cp_gas, h_gas
 from physics.physics import fuel_heat_release
 from physics.physics import residence_time
 from physics.physics import gas_axial_velocity
@@ -122,57 +123,456 @@ class Preheater:
         )
 
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, state, dt, reaction_sink=0.0):
-        
+    # STEADY-STATE THERMAL STEP
+    # ======================================================
+    def thermal_step(self, Tg, Ts, Tw, state, reaction_sink=0.0):
+
         # ======================================================
-        # INLET BOUNDARY
+        # INPUTS
         # ======================================================
-        Tg_in = Tg[0]
+        m_dot_g = state.m_dot_g
+        m_dot_s = state.m_dot_s
+
+        # ======================================================
+        # GAS INLET TEMPERATURE FROM ENTHALPY
+        # ======================================================
+        # Zone-to-zone gas energy handoff is defined by enthalpy.
+
+        H_in = state.Hgas_preheater_in
+
+        print("\n========== PREHEATER INPUT CHECK ==========")
+        print(f"Hgas_preheater_in = {H_in:.6e} W")
+        print(f"Hgas_calciner_out = {state.Hgas_calciner_out:.6e} W")
+        print(f"m_dot_g           = {state.m_dot_g:.6e} kg/s")
+        print("============================================")
+
+        if H_in <= 0.0:
+            raise RuntimeError(
+                "Preheater gas inlet enthalpy is zero or negative: "
+                f"Hgas_preheater_in={H_in:.6e} W, "
+                f"Hgas_calciner_out={state.Hgas_calciner_out:.6e} W"
+            )
+
+        Tg_in = self.gas_temperature_from_enthalpy(
+            H_in,
+            state,
+        )
+
+        # Solid inlet remains temperature-based for now
         Ts_in = Ts[0]
 
         # ======================================================
-        # GRADIENTS (NO ALLOCATION)
-        # ======================================================
-        dTg_dz = self._dTg_dz
-        dTs_dz = self._dTs_dz
-
-        dTg_dz[1:] = (Tg[1:] - Tg[:-1]) / self.dz
-        dTs_dz[1:] = (Ts[1:] - Ts[:-1]) / self.dz
-
-        dTg_dz[0] = dTg_dz[1]
-        dTs_dz[0] = dTs_dz[1]
-
-        # ======================================================
-        # REACTION SOURCE / SINK
+        # PREHEATER THERMAL INLET DEBUG
         # ======================================================
 
-        q_vol = (
-            -reaction_sink
-            /
-            (self.V_total + self.eps)
+        print(
+            "========== PREHEATER THERMAL INLET =========="
+        )
+
+        print(
+            f"Hgas_preheater_in = "
+            f"{H_in:.6e} W"
+        )
+
+        print(
+            f"Tg_from_H         = "
+            f"{Tg_in:.3f} K"
+        )
+
+        print(
+            f"Tg_array[0]       = "
+            f"{Tg[0]:.3f} K"
+        )
+
+        print(
+            f"Ts_in             = "
+            f"{Ts_in:.3f} K"
+        )
+
+        print(
+            "=============================================="
         )
 
         # ======================================================
-        # HEAT TRANSFER
+        # REACTION SINK
         # ======================================================
-        q_gs, q_gw, q_ws = heat_transfer(
-            Tg=Tg,
-            Ts=Ts,
-            Tw=Tw,
-            hv_gs=self.hv_gs,
-            hv_gw=self.hv_gw,
-            hv_ws=self.hv_ws,
-            a_gs=self.a_gs,
-            a_gw=self.a_gw,
-            a_ws=self.a_ws,
-            zone=self.zone,
+
+        q_vol = -reaction_sink / (
+            self.V_total + self.eps
         )
 
         # ======================================================
-        # WALL LOSSES
+        # INITIAL ARRAYS
         # ======================================================
-        q_loss, wall_loss, wall_debug = wall_losses(
-            Tw=Tw,
+
+        Tg_new = Tg.copy()
+        Ts_new = Ts.copy()
+        Tw_new = Tw.copy()
+
+        # ======================================================
+        # INLET CONDITIONS
+        # ======================================================
+
+        Tg_new[0] = Tg_in
+        Ts_new[0] = Ts_in
+
+        # ======================================================
+        # ENERGY ACCUMULATORS
+        # ======================================================
+
+        Q_gs_total = 0.0
+        Q_gw_total = 0.0
+        Q_ws_total = 0.0
+        Q_reaction_total = 0.0
+
+        # ======================================================
+        # AXIAL INTEGRATION
+        # ======================================================
+        for i in range(self.N - 1):
+
+            Tg_i = Tg_new[i]
+            Ts_i = Ts_new[i]
+            Tw_i = Tw_new[i]
+
+            print(
+                f"\n[PREHEATER CELL {i}]"
+                f"\n  Tg_i       = {Tg_i:.3f} K"
+                f"\n  Ts_i       = {Ts_i:.3f} K"
+                f"\n  Tw_i       = {Tw_i:.3f} K"
+                f"\n  Tg_in     = {Tg_in:.3f} K"
+                f"\n  Tg[0]     = {Tg[0]:.3f} K"
+                f"\n  Tg_new[0] = {Tg_new[0]:.3f} K"
+                f"\n  Hgas_in   = {state.Hgas_preheater_in:.6e} W"
+            )
+
+            # ==================================================
+            # LOCAL HEAT TRANSFER
+            # q -> W/m3
+            # ==================================================
+            q_gs, q_gw, q_ws = heat_transfer(
+                Tg=np.array([Tg_i]),
+                Ts=np.array([Ts_i]),
+                Tw=np.array([Tw_i]),
+                hv_gs=self.hv_gs,
+                hv_gw=self.hv_gw,
+                hv_ws=self.hv_ws,
+                a_gs=self.a_gs,
+                a_gw=self.a_gw,
+                a_ws=self.a_ws,
+                zone=self.zone,
+            )
+
+            # ==================================================
+            # LOCAL WALL LOSS
+            # q_loss -> W/m3
+            # ==================================================
+            q_loss, _, wall_debug = wall_losses(
+                Tw=np.array([Tw_i]),
+                h_ext=self.h_ext,
+                A_wall_cell=self.A_wall_cell,
+                V_cell=self.V_cell,
+                T_amb=self.T_amb,
+                A_wall_total=self.A_wall,
+                N=self.N,
+                refractory_thickness=self.refractory_thickness,
+                refractory_conductivity=self.refractory_conductivity,
+                eps=self.eps,
+            )
+
+            # ==================================================
+            # SCALAR CONVERSION
+            # ==================================================
+            q_gs = float(np.asarray(q_gs).ravel()[0])
+            q_gw = float(np.asarray(q_gw).ravel()[0])
+            q_ws = float(np.asarray(q_ws).ravel()[0])
+            q_loss = float(np.asarray(q_loss).ravel()[0])
+
+            # ==================================================
+            # CELL POWER
+            # W/m3 -> W
+            # ==================================================
+            Q_gs_cell = q_gs * self.V_cell
+            Q_gw_cell = q_gw * self.V_cell
+            Q_ws_cell = q_ws * self.V_cell
+            Q_reaction_cell = q_vol * self.V_cell
+
+            # ==================================================
+            # ACCUMULATE ENERGY TRANSFERS
+            # ==================================================
+            Q_gs_total += Q_gs_cell
+            Q_gw_total += Q_gw_cell
+            Q_ws_total += Q_ws_cell
+            Q_reaction_total += Q_reaction_cell
+
+            # ==================================================
+            # GAS ENERGY BALANCE — ENTHALPY FORM
+            # ==================================================
+
+            H_gas_in_cell = (
+                m_dot_g * float(h_gas(Tg_i, self.T_ref))
+            )
+            
+            
+            # ==================================================
+            # GAS INLET ENTHALPY CONSISTENCY CHECK
+            # ==================================================
+
+            if i == 0:
+
+                H_state_in = state.Hgas_preheater_in
+                H_thermal_in = H_gas_in_cell
+
+                difference = H_thermal_in - H_state_in
+
+                relative_difference = (
+                    difference
+                    / (abs(H_state_in) + self.eps)
+                )
+
+                print(
+                    "\n========== PREHEATER GAS INLET ENTHALPY CHECK =========="
+                )
+
+                print(
+                    f"Tg_in             = {Tg_i:.3f} K"
+                )
+
+                print(
+                    f"Hgas_preheater_in = {H_state_in:.6e} W"
+                )
+
+                print(
+                    f"H_thermal_from_T  = {H_thermal_in:.6e} W"
+                )
+
+                print(
+                    f"Difference        = {difference:.6e} W"
+                )
+
+                print(
+                    f"Relative difference = {relative_difference:.6e}"
+                )
+
+                print(
+                    "=========================================================\n"
+                )
+
+            H_gas_out_cell = (
+                H_gas_in_cell
+                + Q_reaction_cell
+                - Q_gs_cell
+                - Q_gw_cell
+            )
+
+            Tg_new[i + 1] = self.gas_temperature_from_enthalpy(
+                H_gas_out_cell,
+                state,
+            )
+
+
+            # ==================================================
+            # SOLID ENERGY BALANCE
+            # ==================================================
+
+            dTs_dz = (
+                Q_gs_cell
+                - Q_ws_cell
+            ) / (
+                (m_dot_s * self.Cp_s + self.eps) * self.dz
+            )
+
+            Ts_new[i + 1] = (
+                Ts_i
+                + self.dz * dTs_dz
+            )
+
+
+            # ==================================================
+            # LOCAL ENERGY CHECK
+            # ==================================================
+
+            H_gas_expected_out = (
+                H_gas_in_cell
+                + Q_reaction_cell
+                - Q_gs_cell
+                - Q_gw_cell
+            )
+
+            H_solid_in_cell = (
+                m_dot_s
+                * self.Cp_s
+                * (Ts_i - self.T_ref)
+            )
+
+            H_solid_expected_out = (
+                H_solid_in_cell
+                + Q_gs_cell
+                - Q_ws_cell
+            )
+
+            print(
+                f"cell {i}: "
+                f"Gas Qin={H_gas_in_cell/1e6:.3f} MW, "
+                f"Gas Qout={H_gas_expected_out/1e6:.3f} MW, "
+                f"Solid Qin={H_solid_in_cell/1e6:.3f} MW, "
+                f"Solid Qout={H_solid_expected_out/1e6:.3f} MW"
+            )
+
+
+            # ======================================================
+            # WALL STEADY-STATE BALANCE
+            # ======================================================
+            # Steady-state wall has no energy accumulation:
+            #
+            #     q_gw(Tw) + q_ws(Tw) - q_loss(Tw) = 0
+            #
+            # Solve directly for Tw.
+
+            def wall_residual(Tw_trial):
+
+                # ----------------------------------------------
+                # Gas -> wall + solid -> wall
+                # ----------------------------------------------
+                _, q_gw_trial, q_ws_trial = heat_transfer(
+                    Tg=np.array([Tg_i]),
+                    Ts=np.array([Ts_i]),
+                    Tw=np.array([Tw_trial]),
+                    hv_gs=self.hv_gs,
+                    hv_gw=self.hv_gw,
+                    hv_ws=self.hv_ws,
+                    a_gs=self.a_gs,
+                    a_gw=self.a_gw,
+                    a_ws=self.a_ws,
+                    zone=self.zone,
+                )
+
+                # ----------------------------------------------
+                # Wall -> environment
+                # ----------------------------------------------
+                q_loss_trial, _, _ = wall_losses(
+                    Tw=np.array([Tw_trial]),
+                    h_ext=self.h_ext,
+                    A_wall_cell=self.A_wall_cell,
+                    V_cell=self.V_cell,
+                    T_amb=self.T_amb,
+                    A_wall_total=self.A_wall,
+                    N=self.N,
+                    refractory_thickness=self.refractory_thickness,
+                    refractory_conductivity=self.refractory_conductivity,
+                    eps=self.eps,
+                )
+
+                q_gw_trial = float(
+                    np.asarray(q_gw_trial).ravel()[0]
+                )
+
+                q_ws_trial = float(
+                    np.asarray(q_ws_trial).ravel()[0]
+                )
+
+                q_loss_trial = float(
+                    np.asarray(q_loss_trial).ravel()[0]
+                )
+
+                return (
+                    q_gw_trial
+                    + q_ws_trial
+                    - q_loss_trial
+                )
+
+
+            # ==================================================
+            # BISECTION
+            # ==================================================
+
+            T_low = self.T_amb
+            T_high = max(
+                Tg_i,
+                Ts_i,
+                self.T_amb + 1.0,
+            )
+
+            f_low = wall_residual(T_low)
+            f_high = wall_residual(T_high)
+
+            # Expand upper bound if necessary
+            for _ in range(20):
+
+                if f_low * f_high <= 0.0:
+                    break
+
+                T_high *= 1.25
+
+                f_high = wall_residual(T_high)
+
+
+            if f_low * f_high > 0.0:
+
+                raise RuntimeError(
+                    f"Preheater wall steady-state root not bracketed "
+                    f"at cell {i}: "
+                    f"T_low={T_low:.3f} K, "
+                    f"T_high={T_high:.3f} K, "
+                    f"f_low={f_low:.6e}, "
+                    f"f_high={f_high:.6e}"
+                )
+
+
+            # ==================================================
+            # BISECTION SOLVE
+            # ==================================================
+
+            for _ in range(60):
+
+                T_mid = 0.5 * (
+                    T_low
+                    + T_high
+                )
+
+                f_mid = wall_residual(T_mid)
+
+                if abs(f_mid) < 1e-9:
+                    break
+
+                if f_low * f_mid <= 0.0:
+
+                    T_high = T_mid
+                    f_high = f_mid
+
+                else:
+
+                    T_low = T_mid
+                    f_low = f_mid
+
+
+            Tw_new[i] = float(T_mid)
+
+            # ==================================================
+            # AXIAL TEMPERATURE UPDATE
+            # ==================================================
+
+
+            Ts_new[i + 1] = (
+                Ts_i
+                + self.dz * dTs_dz
+            )
+
+        # ======================================================
+        # OUTLET WALL TEMPERATURE
+        # ======================================================
+        Tw_new[-1] = Tw_new[-2]
+
+        # ======================================================
+        # RE-ENFORCE INLET CONDITIONS
+        # ======================================================
+        Tg_new[0] = Tg_in
+        Ts_new[0] = Ts_in
+
+        # ======================================================
+        # TOTAL WALL LOSS
+        # ======================================================
+        _, wall_loss, wall_debug = wall_losses(
+            Tw=Tw_new,
             h_ext=self.h_ext,
             A_wall_cell=self.A_wall_cell,
             V_cell=self.V_cell,
@@ -185,39 +585,60 @@ class Preheater:
         )
 
         # ======================================================
-        # THERMAL CAPACITIES
+        # DEBUG OUTPUT
         # ======================================================
-        C_g, effective_C_s, C_w = thermal_capacities(
-            rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
-            rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
-            rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective= 1.0,
-        )
+        print("\n========== PREHEATER THERMAL DEBUG ==========")
 
-        # ======================================================
-        # ENERGY EQUATIONS
-        # ======================================================
-        Tg_n = Tg + dt * (
-            -state.u_g * dTg_dz
-            + (q_vol - q_gs - q_gw) / C_g
-        )
+        print(f"Q_gs_total       = {Q_gs_total:.6e} W")
+        print(f"Q_gw_total       = {Q_gw_total:.6e} W")
+        print(f"Q_ws_total       = {Q_ws_total:.6e} W")
+        print(f"Q_reaction_total = {Q_reaction_total:.6e} W")
+        print(f"Wall_loss        = {wall_loss:.6e} W")
 
-        Ts_n = Ts + dt * (
-            -state.u_s * dTs_dz
-            + (q_gs - q_ws) / effective_C_s
-        )
+        print("----------------------------------------------")
 
-        Tw_n = Tw + dt * (
-            (q_gw + q_ws - q_loss) / C_w
+        print(f"Tg_in            = {Tg_new[0]:.3f} K")
+        print(f"Tg_out           = {Tg_new[-1]:.3f} K")
+        print(f"Ts_in            = {Ts_new[0]:.3f} K")
+        print(f"Ts_out           = {Ts_new[-1]:.3f} K")
+        print(f"Tw_out           = {Tw_new[-1]:.3f} K")
+
+        print("==============================================")
+
+        return (
+            Tg_new,
+            Ts_new,
+            Tw_new,
+            float(wall_loss),
+            wall_debug,
         )
         
-        # ======================================================
-        # ENFORCE INLET BOUNDARY
-        # ======================================================
-        Tg_n[0] = Tg_in
-        Ts_n[0] = Ts_in
+        
+    def gas_temperature_from_enthalpy(self, H, state):
 
-        return Tg_n, Ts_n, Tw_n, wall_loss, wall_debug
+        target_h = H / (state.m_dot_g + self.eps)
+
+        T = 1200.0
+
+        for _ in range(50):
+
+            h = float(h_gas(T, self.T_ref))
+            cp = float(cp_gas(T))
+
+            residual = h - target_h
+
+            if abs(residual) < 1e-6:
+                break
+
+            T_new = T - residual / (cp + self.eps)
+
+            T = np.clip(
+                T_new,
+                250.0,
+                4000.0,
+            )
+
+        return float(T)
 
 
     # ======================================================
@@ -234,24 +655,52 @@ class Preheater:
         if state.Tg_preheater.shape != (self.N,):
             raise ValueError("Preheater state corrupted")
 
-        # ======================================================
-        # STORE OLD STATES
-        # ======================================================
-        state.Tg_preheater_old = state.Tg_preheater.copy()
-        state.Ts_preheater_old = state.Ts_preheater.copy()
-        state.Tw_preheater_old = state.Tw_preheater.copy()
         
         # ======================================================
         # ENERGY IN
         # ======================================================
         state.Hgas_preheater_in = state.Hgas_calciner_out
-        state.Hsolid_preheater_in = state.Hsolid_calciner_out
+        
+        
+        print("\n========== CALCINER -> PREHEATER GAS HANDOFF ==========")
+
+        print(
+            f"Hg_calciner[0]   = {state.Hg_calciner[0]:.6e} W"
+        )
+
+        print(
+            f"Hg_calciner[-1]  = {state.Hg_calciner[-1]:.6e} W"
+        )
+
+        print(
+            f"Tg_calciner[0]   = {state.Tg_calciner[0]:.3f} K"
+        )
+
+        print(
+            f"Tg_calciner[-1]  = {state.Tg_calciner[-1]:.3f} K"
+        )
+
+        print(
+            f"Hgas_calciner_out = {state.Hgas_calciner_out:.6e} W"
+        )
+
+        print(
+            f"Hgas_preheater_in = {state.Hgas_preheater_in:.6e} W"
+        )
+
+        print("=========================================================\n")
+
+        state.Hsolid_preheater_in = (
+            state.m_dot_s
+            * self.Cp_s
+            * (state.Feed_temperature - self.T_ref)
+        )
 
         # ======================================================
-        # BOUNDARY CONDITIONS (FROM CALCINER)
+        # BOUNDARY CONDITIONS
         # ======================================================
-        state.Tg_preheater[0] = state.Tg_calciner[-1]
-        state.Ts_preheater[0] = state.Ts_calciner[-1]
+        state.Tg_preheater[0] = state.Tg_calciner[0]
+        state.Ts_preheater[0] = state.Feed_temperature
         
         # ======================================================
         # PREHEATER CHEMISTRY
@@ -269,7 +718,6 @@ class Preheater:
             state.Ts_preheater,
             state.Tw_preheater,
             state,
-            dt,
             reaction_sink=state.Preheater_Q_sink,
         )
 
@@ -279,32 +727,6 @@ class Preheater:
 
         state.Wall_loss_preheater = float(wall_loss)
         
-        
-        # ======================================================
-        # STORED ENERGY
-        # ======================================================
-
-        state.Preheater_gas_stored = np.sum(
-            self._rho_g_Vcell_Cp_g *
-            (state.Tg_preheater - state.Tg_preheater_old) / dt
-        )
-
-        state.Preheater_solid_stored = np.sum(
-            self._rho_s_Vcell_Cp_s *
-            (state.Ts_preheater - state.Ts_preheater_old) / dt
-        )
-
-        state.Preheater_wall_stored = np.sum(
-            self._rho_wall_Vwall_cell_Cp *
-            (state.Tw_preheater - state.Tw_preheater_old) / dt
-        )
-
-
-        state.Preheater_stored_energy_change = (
-            state.Preheater_gas_stored
-            + state.Preheater_solid_stored
-            + state.Preheater_wall_stored
-        )
 
         # ======================================================
         # ENERGY OUT
@@ -329,6 +751,59 @@ class Preheater:
             - state.Hsolid_preheater_out
             - state.Wall_loss_preheater
         )
+        
+        
+        # ======================================================
+        # PREHEATER DEBUG
+        # ======================================================
+        print()
+        print("========== PREHEATER STEADY STATE ==========")
+
+        print(f"Tg_in       = {state.Tg_preheater[0]:.3f} K")
+        print(f"Tg_out      = {state.Tg_preheater[-1]:.3f} K")
+        print(f"Ts_in       = {state.Ts_preheater[0]:.3f} K")
+        print(f"Ts_out      = {state.Ts_preheater[-1]:.3f} K")
+        print(f"Tw_out      = {state.Tw_preheater[-1]:.3f} K")
+
+        print()
+
+        print(f"Hg_in       = {state.Hgas_preheater_in:.6e} W")
+        print(f"Hg_out      = {state.Hgas_preheater_out:.6e} W")
+        print(f"Hs_in       = {state.Hsolid_preheater_in:.6e} W")
+        print(f"Hs_out      = {state.Hsolid_preheater_out:.6e} W")
+
+        print()
+
+        print(f"Wall_loss   = {state.Wall_loss_preheater:.6e} W")
+        print(f"Q_reaction  = {state.Preheater_Q_sink:.6e} W")
+
+        print()
+
+        energy_in = (
+            state.Hgas_preheater_in
+            + state.Hsolid_preheater_in
+        )
+
+        energy_out = (
+            state.Hgas_preheater_out
+            + state.Hsolid_preheater_out
+            + state.Wall_loss_preheater
+            + state.Preheater_Q_sink
+        )
+
+        residual = energy_in - energy_out
+
+        print(f"Energy in   = {energy_in:.6e} W")
+        print(f"Energy out  = {energy_out:.6e} W")
+        print(f"Residual    = {residual:.6e} W")
+
+        if abs(energy_in) > self.eps:
+            print(
+                f"Rel. error  = "
+                f"{residual / energy_in:.6e}"
+            )
+
+        print("============================================")
 
         return state
 
@@ -340,8 +815,7 @@ class Preheater:
 
         H_gas_out = (
             state.m_dot_g
-            * self.Cp_g
-            * (Tg[-1] - self.T_ref)
+            * float(h_gas(Tg[-1], self.T_ref))
         )
 
         return H_gas_out
