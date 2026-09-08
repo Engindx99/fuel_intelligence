@@ -525,7 +525,7 @@ class Preheater:
     # ======================================================
     # STEADY-STATE THERMAL STEP
     # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, state, reaction_sink=0.0):
+    def thermal_step(self, Tg, Ts, Tw, state, reaction_sink=0.0, reaction_heat_cells=None):
 
         # ======================================================
         # INPUTS
@@ -594,82 +594,12 @@ class Preheater:
         )
 
         # ======================================================
-        # REACTION SINK
-        # ======================================================
-
-        # Thermal integration currently uses N-1 active cells.
-        # Distribute the total reaction sink over those active cells.
-
-        V_active = (self.N - 1) * self.V_cell
-
-        q_vol = -reaction_sink / (
-            V_active + self.eps
-        )
-
-        # ======================================================
         # INITIAL ARRAYS
         # ======================================================
 
-        Tg_new = Tg.copy()
-        Ts_new = Ts.copy()
-        Tw_new = Tw.copy()
-
-        # ======================================================
-        # INLET CONDITIONS
-        # ======================================================
-
-        Tg_new[0] = Tg_in
-        Ts_new[0] = Ts_in
-
-        # ======================================================
-        # ENERGY ACCUMULATORS
-        # ======================================================
-
-        Q_gs_total = 0.0
-        Q_gw_total = 0.0
-        Q_ws_total = 0.0
-        Q_reaction_total = 0.0
-        
-        # ======================================================
-        # PHYSICAL STAGE 1
-        # ======================================================
-        # Stage 1 is treated as one physical control volume:
-        #
-        #   Gas  : Calciner -> Stage 1 -> Stage 2
-        #   Solid: Feed     -> Stage 1 -> Stage 2
-        #
-        # This is the first real physical preheater stage.
-        # Stages 2-5 are still handled by the legacy thermal
-        # integration below and will be converted incrementally.
-
-        stage1 = self.stages[0]
-        stage1.reset_diagnostics()
-
-        Tg_1_in = Tg_new[0]
-        Ts_1_in = Ts_new[0]
-        Tw_1_in = Tw_new[0]
-        
-
-        # ------------------------------------------------------
-        # Stage 1 heat transfer
-        # ------------------------------------------------------
-
-        q_gs_1, q_gw_1, q_ws_1 = heat_transfer(
-            Tg=np.array([Tg_1_in]),
-            Ts=np.array([Ts_1_in]),
-            Tw=np.array([Tw_1_in]),
-            hv_gs=self.hv_gs,
-            hv_gw=self.hv_gw,
-            hv_ws=self.hv_ws,
-            a_gs=self.a_gs,
-            a_gw=self.a_gw,
-            a_ws=self.a_ws,
-            zone=self.zone,
-        )
-
-        q_gs_1 = float(np.asarray(q_gs_1).ravel()[0])
-        q_gw_1 = float(np.asarray(q_gw_1).ravel()[0])
-        q_ws_1 = float(np.asarray(q_ws_1).ravel()[0])
+        Tg_new = np.empty(self.N, dtype=float)
+        Ts_new = np.empty(self.N, dtype=float)
+        Tw_new = np.empty(self.N, dtype=float)
 
         # ======================================================
         # PHYSICAL STAGE 1
@@ -677,12 +607,8 @@ class Preheater:
 
         stage1 = self.stages[0]
 
-        Tg_1_in = Tg_new[0]
-        Ts_1_in = Ts_new[0]
-
-        # ------------------------------------------------------
-        # Stage 1 solver
-        # ------------------------------------------------------
+        Tg_1_in = Tg_in
+        Ts_1_in = Ts_in
 
         stage1.solve(
             gas_inlet_temperature=Tg_1_in,
@@ -691,65 +617,16 @@ class Preheater:
             m_dot_s=m_dot_s,
             state=state,
             model=self,
-            reaction_power=0.0,
+            reaction_power=-reaction_heat_cells[0],
         )
-
-        # ------------------------------------------------------
-        # Stage 1 outputs
-        # ------------------------------------------------------
 
         Tg_1_out = stage1.gas_outlet_temperature
         Ts_1_out = stage1.solid_outlet_temperature
         Tw_1 = stage1.wall_temperature
 
-        # ------------------------------------------------------
-        # Stage 1 state update
-        # ------------------------------------------------------
-
-        Tg_new[1] = Tg_1_out
-        Ts_new[1] = Ts_1_out
+        Tg_new[0] = Tg_1_out
+        Ts_new[0] = Ts_1_out
         Tw_new[0] = Tw_1
-
-        # ------------------------------------------------------
-        # Stage 1 diagnostics
-        # ------------------------------------------------------
-
-        print("\n========== PREHEATER STAGE 1 ==========")
-
-        print(f"Tg_in       = {stage1.gas_inlet_temperature:.3f} K")
-        print(f"Tg_out      = {stage1.gas_outlet_temperature:.3f} K")
-        print(f"Ts_in       = {stage1.solid_inlet_temperature:.3f} K")
-        print(f"Ts_out      = {stage1.solid_outlet_temperature:.3f} K")
-        print(f"Tw          = {stage1.wall_temperature:.3f} K")
-
-        print()
-
-        print(f"Hg_in       = {stage1.gas_inlet_enthalpy:.6e} W")
-        print(f"Hg_out      = {stage1.gas_outlet_enthalpy:.6e} W")
-        print(f"Hs_in       = {stage1.solid_inlet_enthalpy:.6e} W")
-        print(f"Hs_out      = {stage1.solid_outlet_enthalpy:.6e} W")
-
-        print()
-
-        print(f"Q_gs        = {stage1.Q_gs:.6e} W")
-        print(f"Q_gw        = {stage1.Q_gw:.6e} W")
-        print(f"Q_ws        = {stage1.Q_ws:.6e} W")
-        print(f"Q_wall_loss = {stage1.Q_wall_loss:.6e} W")
-        print(f"Q_reaction  = {stage1.Q_reaction:.6e} W")
-
-        print()
-
-        print(f"Energy in   = {stage1.energy_in:.6e} W")
-        print(f"Energy out  = {stage1.energy_out:.6e} W")
-        print(f"Residual    = {stage1.energy_residual:.6e} W")
-
-        if abs(stage1.energy_in) > self.eps:
-            print(
-                f"Rel. error  = "
-                f"{stage1.energy_residual / stage1.energy_in:.6e}"
-            )
-
-        print("========================================")
         
         # ======================================================
         # PHYSICAL STAGE 2
@@ -775,7 +652,7 @@ class Preheater:
             m_dot_s=m_dot_s,
             state=state,
             model=self,
-            reaction_power=0.0,
+            reaction_power=-reaction_heat_cells[1],
         )
 
         # ------------------------------------------------------
@@ -790,8 +667,8 @@ class Preheater:
         # Stage 2 state update
         # ------------------------------------------------------
 
-        Tg_new[2] = Tg_2_out
-        Ts_new[2] = Ts_2_out
+        Tg_new[1] = Tg_2_out
+        Ts_new[1] = Ts_2_out
         Tw_new[1] = Tw_2
 
         # ------------------------------------------------------
@@ -861,7 +738,7 @@ class Preheater:
             m_dot_s=m_dot_s,
             state=state,
             model=self,
-            reaction_power=0.0,
+            reaction_power=-reaction_heat_cells[2],
         )
 
         # ------------------------------------------------------
@@ -876,8 +753,8 @@ class Preheater:
         # Stage 3 state update
         # ------------------------------------------------------
 
-        Tg_new[3] = Tg_3_out
-        Ts_new[3] = Ts_3_out
+        Tg_new[2] = Tg_3_out
+        Ts_new[2] = Ts_3_out
         Tw_new[2] = Tw_3
 
         # ------------------------------------------------------
@@ -946,7 +823,7 @@ class Preheater:
             m_dot_s=m_dot_s,
             state=state,
             model=self,
-            reaction_power=0.0,
+            reaction_power=-reaction_heat_cells[3],
         )
 
         # ------------------------------------------------------
@@ -961,8 +838,8 @@ class Preheater:
         # Stage 4 state update
         # ------------------------------------------------------
 
-        Tg_new[4] = Tg_4_out
-        Ts_new[4] = Ts_4_out
+        Tg_new[3] = Tg_4_out
+        Ts_new[3] = Ts_4_out
         Tw_new[3] = Tw_4
 
         # ------------------------------------------------------
@@ -1006,127 +883,119 @@ class Preheater:
             )
 
         print("========================================")
+        
+        # ======================================================
+        # STAGE 5
+        # ======================================================
 
-        # ======================================================
-        # OUTLET WALL TEMPERATURE
-        # ======================================================
-        Tw_new[-1] = Tw_new[-2]
-     
-        # ======================================================
-        # RE-ENFORCE INLET CONDITIONS
-        # ======================================================
-        Tg_new[0] = Tg_in
-        Ts_new[0] = Ts_in
+        stage5 = self.stages[4]
 
-        # ======================================================
-        # TOTAL WALL LOSS
-        # ======================================================
-        _, wall_loss, wall_debug = wall_losses(
-            Tw=Tw_new[:-1],
-            h_ext=self.h_ext,
-            A_wall_cell=self.A_wall_cell,
-            V_cell=self.V_cell,
-            T_amb=self.T_amb,
-            A_wall_total=self.A_wall,
-            N=self.N - 1,
-            refractory_thickness=self.refractory_thickness,
-            refractory_conductivity=self.refractory_conductivity,
-            eps=self.eps,
+        Tg_5_in = stage4.gas_outlet_temperature
+        Ts_5_in = stage4.solid_outlet_temperature
+
+        stage5.solve(
+            gas_inlet_temperature=Tg_5_in,
+            solid_inlet_temperature=Ts_5_in,
+            m_dot_g=m_dot_g,
+            m_dot_s=m_dot_s,
+            state=state,
+            model=self,
+            reaction_power=-reaction_heat_cells[4],
         )
-        
-        # ======================================================
-        # MAP THERMAL RESULTS TO PHYSICAL PREHEATER STAGES
-        # ======================================================
 
-        for i, stage in enumerate(self.stages):
+        Tg_5_out = stage5.gas_outlet_temperature
+        Ts_5_out = stage5.solid_outlet_temperature
+        Tw_5 = stage5.wall_temperature
 
-            # Stage 1 and Stage 2 are already real physical stages.
-            # Their diagnostics come directly from PreheaterStage.solve().
-            if i in (0, 1, 2, 3):
-                continue
+        Tg_new[4] = Tg_5_out
+        Ts_new[4] = Ts_5_out
+        Tw_new[4] = Tw_5
 
-            stage.reset_diagnostics()
 
-            # Current thermal model has remaining legacy cells.
+        print("\n========== PREHEATER STAGE 5 ==========")
+        print(f"Tg_in       = {Tg_5_in:.3f} K")
+        print(f"Tg_out      = {Tg_5_out:.3f} K")
+        print(f"Ts_in       = {Ts_5_in:.3f} K")
+        print(f"Ts_out      = {Ts_5_out:.3f} K")
+        print(f"Tw          = {Tw_5:.3f} K")
 
-            if i < self.N - 1:
+        print(f"Hg_in       = {stage5.gas_inlet_enthalpy:.6e} W")
+        print(f"Hg_out      = {stage5.gas_outlet_enthalpy:.6e} W")
+        print(f"Hs_in       = {stage5.solid_inlet_enthalpy:.6e} W")
+        print(f"Hs_out      = {stage5.solid_outlet_enthalpy:.6e} W")
 
-                stage.gas_inlet_temperature = float(Tg_new[i])
-                stage.gas_outlet_temperature = float(Tg_new[i + 1])
+        print(f"Q_gs        = {stage5.Q_gs:.6e} W")
+        print(f"Q_gw        = {stage5.Q_gw:.6e} W")
+        print(f"Q_ws        = {stage5.Q_ws:.6e} W")
+        print(f"Q_wall_loss = {stage5.Q_wall_loss:.6e} W")
+        print(f"Q_reaction  = {stage5.Q_reaction:.6e} W")
 
-                stage.solid_inlet_temperature = float(Ts_new[i])
-                stage.solid_outlet_temperature = float(Ts_new[i + 1])
-
-                stage.wall_temperature = float(Tw_new[i])
-
-                stage.gas_inlet_enthalpy = (
-                    m_dot_g * float(h_gas(Tg_new[i], self.T_ref))
-                )
-
-                stage.gas_outlet_enthalpy = (
-                    m_dot_g * float(h_gas(Tg_new[i + 1], self.T_ref))
-                )
-
-                stage.solid_inlet_enthalpy = (
-                    m_dot_s * self.Cp_s * (Ts_new[i] - self.T_ref)
-                )
-
-                stage.solid_outlet_enthalpy = (
-                    m_dot_s * self.Cp_s * (Ts_new[i + 1] - self.T_ref)
-                )
-
-            else:
-
-                # Stage 5 temporarily uses the last available thermal state.
-                stage.gas_inlet_temperature = float(Tg_new[-1])
-                stage.gas_outlet_temperature = float(Tg_new[-1])
-
-                stage.solid_inlet_temperature = float(Ts_new[-1])
-                stage.solid_outlet_temperature = float(Ts_new[-1])
-
-                stage.wall_temperature = float(Tw_new[-1])
-
-                stage.gas_inlet_enthalpy = (
-                    m_dot_g * float(h_gas(Tg_new[-1], self.T_ref))
-                )
-
-                stage.gas_outlet_enthalpy = stage.gas_inlet_enthalpy
-
-                stage.solid_inlet_enthalpy = (
-                    m_dot_s * self.Cp_s * (Ts_new[-1] - self.T_ref)
-                )
-
-                stage.solid_outlet_enthalpy = stage.solid_inlet_enthalpy
+        print(f"Energy residual = {stage5.energy_residual:.6e} W")
+        print("========================================")
+     
                 
-        
         # ======================================================
         # TOTAL STAGE ENERGY TRANSFERS
         # ======================================================
 
         Q_gs_total = sum(
             stage.Q_gs
-            for stage in self.stages[:4]
+            for stage in self.stages
         )
 
         Q_gw_total = sum(
             stage.Q_gw
-            for stage in self.stages[:4]
+            for stage in self.stages
         )
 
         Q_ws_total = sum(
             stage.Q_ws
-            for stage in self.stages[:4]
+            for stage in self.stages
         )
 
         Q_reaction_total = sum(
             stage.Q_reaction
-            for stage in self.stages[:4]
+            for stage in self.stages
         )
 
         Q_wall_loss_total = sum(
             stage.Q_wall_loss
-            for stage in self.stages[:4]
+            for stage in self.stages
         )
+        
+        wall_loss = Q_wall_loss_total
+        wall_debug = {}
+        
+        # ======================================================
+        # DRYING REACTION DIAGNOSTIC
+        # ======================================================
+
+        print("\n========== PREHEATER DRYING REACTION CHECK ==========")
+
+        print(
+            f"Drying Q sink total = "
+            f"{state.Drying_Q_sink:.6f} W"
+        )
+
+        print(
+            f"Drying Q cells sum  = "
+            f"{np.sum(state.Drying_Q_sink_cells):.6f} W"
+        )
+
+        print(
+            f"Stage reaction sum  = "
+            f"{sum(stage.Q_reaction for stage in self.stages):.6f} W"
+        )
+
+        for i, q in enumerate(state.Drying_Q_sink_cells):
+            print(
+                f"Stage {i+1}: "
+                f"Drying Q sink = {q:.6f} W | "
+                f"Stage Q reaction = "
+                f"{self.stages[i].Q_reaction:.6f} W"
+            )
+
+        print("=====================================================")
 
         # ======================================================
         # DEBUG OUTPUT
@@ -1257,17 +1126,21 @@ class Preheater:
         # ======================================================
         # THERMAL STEP
         # ======================================================
-        Tg, Ts, Tw, wall_loss, wall_debug = self.thermal_step(
-            state.Tg_preheater,
-            state.Ts_preheater,
-            state.Tw_preheater,
-            state,
-            reaction_sink=state.Preheater_Q_sink,
+
+        Tg_new, Ts_new, Tw_new, wall_loss, wall_debug = (
+            self.thermal_step(
+                state.Tg_preheater,
+                state.Ts_preheater,
+                state.Tw_preheater,
+                state,
+                reaction_sink=state.Preheater_Q_sink,
+                reaction_heat_cells=state.Drying_Q_sink_cells,
+            )
         )
 
-        state.Tg_preheater = Tg
-        state.Ts_preheater = Ts
-        state.Tw_preheater = Tw
+        state.Tg_preheater = Tg_new
+        state.Ts_preheater = Ts_new
+        state.Tw_preheater = Tw_new
 
         state.Wall_loss_preheater = float(wall_loss)
         
@@ -1303,9 +1176,9 @@ class Preheater:
         print()
         print("========== PREHEATER STEADY STATE ==========")
 
-        print(f"Tg_in       = {state.Tg_preheater[0]:.3f} K")
+        print(f"Tg_stage1_out = {state.Tg_preheater[0]:.3f} K")
         print(f"Tg_out      = {state.Tg_preheater[-1]:.3f} K")
-        print(f"Ts_in       = {state.Ts_preheater[0]:.3f} K")
+        print(f"Ts_stage1_out = {state.Ts_preheater[0]:.3f} K")
         print(f"Ts_out      = {state.Ts_preheater[-1]:.3f} K")
         print(f"Tw_out      = {state.Tw_preheater[-1]:.3f} K")
 

@@ -56,10 +56,13 @@ class DryingModel(ReactionBase):
         # ======================================================
         # REACTION HEAT
         # ======================================================
-        state.Drying_Q_sink = np.sum(
-            self.heat_sink(
-                reacted,
-            )
+
+        state.Drying_Q_sink_cells = self.heat_sink(
+            reacted
+        )
+
+        state.Drying_Q_sink = float(
+            np.sum(state.Drying_Q_sink_cells)
         )
 
         return state

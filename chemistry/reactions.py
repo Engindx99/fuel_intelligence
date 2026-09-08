@@ -36,27 +36,11 @@ class ChemistryModel:
 
     def apply_preheater(self, state):
 
-        # ----------------------------------------------
-        # DRYING
-        # ----------------------------------------------
         state = self.drying.apply(state)
 
-
-        # ----------------------------------------------
-        # DEHYDROXYLATION
-        # ----------------------------------------------
-        state = self.dehydroxylation.apply(state)
-
-
-        # ----------------------------------------------
-        # TOTAL PREHEATER HEAT SINK
-        # ----------------------------------------------
-        state.Preheater_Q_sink = (
+        state.Preheater_Q_sink = float(
             state.Drying_Q_sink
-            +
-            state.Dehydroxylation_Q_sink
         )
-
 
         return state
 

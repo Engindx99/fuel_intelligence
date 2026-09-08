@@ -534,6 +534,10 @@ class GlobalState:
     # ======================================================
 
     Drying_Q_sink: float = 0.0
+    
+    Drying_Q_sink_cells: np.ndarray = field(
+    default_factory=lambda: np.zeros(5)
+    )
 
     Dehydroxylation_Q_sink: float = 0.0
 
