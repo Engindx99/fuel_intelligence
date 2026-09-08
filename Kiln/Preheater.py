@@ -197,8 +197,13 @@ class Preheater:
         # REACTION SINK
         # ======================================================
 
+        # Thermal integration currently uses N-1 active cells.
+        # Distribute the total reaction sink over those active cells.
+
+        V_active = (self.N - 1) * self.V_cell
+
         q_vol = -reaction_sink / (
-            self.V_total + self.eps
+            V_active + self.eps
         )
 
         # ======================================================
@@ -572,13 +577,13 @@ class Preheater:
         # TOTAL WALL LOSS
         # ======================================================
         _, wall_loss, wall_debug = wall_losses(
-            Tw=Tw_new,
+            Tw=Tw_new[:-1],
             h_ext=self.h_ext,
             A_wall_cell=self.A_wall_cell,
             V_cell=self.V_cell,
             T_amb=self.T_amb,
             A_wall_total=self.A_wall,
-            N=self.N,
+            N=self.N - 1,
             refractory_thickness=self.refractory_thickness,
             refractory_conductivity=self.refractory_conductivity,
             eps=self.eps,
