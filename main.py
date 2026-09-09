@@ -89,8 +89,28 @@ class Twin:
         # ======================================================
         # LOGGING (SAFE)
         # ======================================================
-        self.log_interval = cfg.get("logging", {}).get("interval_sec", 60)
+        self.log_interval = cfg.get(
+            "logging",
+            {}
+        ).get(
+            "interval_sec",
+            60,
+        )
+
         self._next_log_time = 0.0
+
+        # ======================================================
+        # VALIDATION LOGGING
+        # ======================================================
+        self.validation_interval = cfg.get(
+            "validation",
+            {}
+        ).get(
+            "interval_sec",
+            60,
+        )
+
+        self._next_validation_time = 0.0
 
         # ======================================================
         # OPERATIONAL LAYER (NOW ACTIVE)
@@ -151,6 +171,21 @@ class Twin:
             report_validation(
                 result,
                 equipment=equipment_name,
+                balance_type="energy",
+            )
+            
+            # ======================================================
+            # PREHEATER GLOBAL ENERGY BALANCE
+            # ======================================================
+
+            result = validate_energy(
+                energy_in=self.preheater.energy_in,
+                energy_out=self.preheater.energy_out,
+            )
+
+            report_validation(
+                result,
+                equipment="Preheater",
                 balance_type="energy",
             )
 
@@ -387,14 +422,17 @@ class Twin:
         )
         
         # ======================================================
-        # CENTRAL ENERGY VALIDATION
-        # ======================================================
-        self._validate_energy_balances()
-
-        # ======================================================
         # TIME UPDATE
         # ======================================================
         self.time += self.dt
+        
+
+        # ======================================================
+        # CENTRAL ENERGY VALIDATION
+        # ======================================================
+        if self.time >= self._next_validation_time:
+            self._validate_energy_balances()
+            self._next_validation_time += self.validation_interval
 
         # ======================================================
         # LOGGING

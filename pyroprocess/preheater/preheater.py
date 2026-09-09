@@ -35,6 +35,13 @@ class Preheater:
         ]
         
         # ======================================================
+        # ENERGY DIAGNOSTICS
+        # ======================================================
+        self.energy_in = 0.0
+        self.energy_out = 0.0
+        self.energy_residual = 0.0
+        
+        # ======================================================
         # STAGE REFERENCE GAS TEMPERATURE RANGES
         # ======================================================
         # These are operating reference bounds only.
@@ -149,6 +156,13 @@ class Preheater:
         self._rho_wall_Vwall_cell_Cp = (
             self.rho_wall * self.V_wall_cell * self.Cp_wall
         )
+        
+        # ======================================================
+        # HANDOFF DIAGNOSTICS
+        # ======================================================
+
+        self.gas_handoff_residuals = []
+        self.solid_handoff_residuals = []
 
     # ======================================================
     # STEADY-STATE THERMAL STEP
@@ -211,6 +225,13 @@ class Preheater:
             raise ValueError(
                 "reaction_heat_cells must have length equal to N"
             )
+            
+        # ======================================================
+        # RESET HANDOFF DIAGNOSTICS
+        # ======================================================
+
+        self.gas_handoff_residuals = []
+        self.solid_handoff_residuals = []
 
         # ======================================================
         # STAGE-BY-STAGE THERMAL SOLUTION
@@ -230,6 +251,44 @@ class Preheater:
                 model=self,
                 reaction_power=-reaction_heat_cells[i],
             )
+            
+            # --------------------------------------------------
+            # ENTHALPY HANDOFF VALIDATION
+            # --------------------------------------------------
+
+            if i == 0:
+                Hgas_expected = H_in
+
+                Hsolid_expected = (
+                    m_dot_s
+                    * self.Cp_s
+                    * (Ts_in - self.T_ref)
+                )
+
+            else:
+                previous_stage = self.stages[i - 1]
+
+                Hgas_expected = previous_stage.gas_outlet_enthalpy
+                Hsolid_expected = previous_stage.solid_outlet_enthalpy
+
+            gas_handoff_residual = (
+                stage.gas_inlet_enthalpy
+                - Hgas_expected
+            )
+
+            solid_handoff_residual = (
+                stage.solid_inlet_enthalpy
+                - Hsolid_expected
+            )
+
+            self.gas_handoff_residuals.append(
+                float(gas_handoff_residual)
+            )
+
+            self.solid_handoff_residuals.append(
+                float(solid_handoff_residual)
+            )
+
 
             # --------------------------------------------------
             # Current stage outlet -> next stage inlet
@@ -274,6 +333,79 @@ class Preheater:
             stage.Q_wall_loss
             for stage in self.stages
         )
+
+        # ======================================================
+        # GLOBAL PREHEATER ENERGY BALANCE
+        # ======================================================
+
+        Hgas_in = state.Hgas_preheater_in
+
+        Hsolid_in = (
+            m_dot_s
+            * self.Cp_s
+            * (Ts_in - self.T_ref)
+        )
+
+        Hgas_out = self.stages[-1].gas_outlet_enthalpy
+        Hsolid_out = self.stages[-1].solid_outlet_enthalpy
+
+        self.energy_in = (
+            Hgas_in
+            + Hsolid_in
+        )
+
+        self.energy_out = (
+            Hgas_out
+            + Hsolid_out
+            + Q_wall_loss_total
+            - Q_reaction_total
+        )
+
+        self.energy_residual = (
+            self.energy_in
+            - self.energy_out
+        )
+
+        # ======================================================
+        # GLOBAL PREHEATER DEBUG
+        # ======================================================
+
+        print("\n========== PREHEATER GLOBAL DEBUG ==========")
+
+        print(f"Hgas_in              = {Hgas_in:.6e} W")
+        print(f"Hsolid_in            = {Hsolid_in:.6e} W")
+
+        print(f"Hgas_out             = {Hgas_out:.6e} W")
+        print(f"Hsolid_out           = {Hsolid_out:.6e} W")
+
+        print(f"Q_gs_total           = {Q_gs_total:.6e} W")
+        print(f"Q_gw_total           = {Q_gw_total:.6e} W")
+        print(f"Q_ws_total           = {Q_ws_total:.6e} W")
+
+        print(f"Q_wall_loss_total    = {Q_wall_loss_total:.6e} W")
+        print(f"Q_reaction_total     = {Q_reaction_total:.6e} W")
+        print(
+            f"reaction_heat_positive = "
+            f"{-Q_reaction_total:.6e} W"
+        )
+
+        stage_residual_sum = sum(
+            stage.energy_residual
+            for stage in self.stages
+        )
+
+        print(f"stage_residual_sum   = {stage_residual_sum:.6e} W")
+
+        print(f"energy_in            = {self.energy_in:.6e} W")
+        print(f"energy_out           = {self.energy_out:.6e} W")
+        print(f"residual             = {self.energy_residual:.6e} W")
+
+        # ======================================================
+        # WALL LOSS
+        # ======================================================
+
+        wall_loss = Q_wall_loss_total
+        wall_debug = {}
 
         # ======================================================
         # WALL LOSS
