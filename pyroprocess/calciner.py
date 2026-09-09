@@ -24,6 +24,10 @@ class Calciner:
         # ================= ZONE =================
         self.zone = "calciner"   
         
+        self.energy_in = 0.0
+        self.energy_out = 0.0
+        self.energy_residual = 0.0
+        
         self.chemistry = ChemistryModel()
 
         # ================= NUMERICAL =================
@@ -677,17 +681,6 @@ class Calciner:
 
                 break
 
-        # ======================================================
-        # CONVERGENCE WARNING
-        # ======================================================
-
-        if not converged:
-
-            print(
-                f"[CALCINER WARNING] "
-                f"Thermal iteration did not converge. "
-                f"error = {error:.6e} K"
-            )
 
         # ======================================================
         # STEADY-STATE TEMPERATURES
@@ -919,82 +912,21 @@ class Calciner:
             - Q_wall_loss
             - reaction_sink
         )
+
+        self.energy_in = (
+            Hg_in
+            + Hs_in
+        )
+
+        self.energy_out = (
+            Hg_out
+            + Hs_out
+            + Q_wall_loss
+            + reaction_sink
+        )
+
+        self.energy_residual = total_energy_balance
         
-        print("\n========== CALCINER PHASE AFTER TOTAL ENERGY BALANCE ==========")
-
-        print(
-            f"Gas ΔH                 = "
-            f"{gas_energy_change:.6e} W"
-        )
-
-        print(
-            f"Gas expected           = "
-            f"{gas_expected:.6e} W"
-        )
-
-        print(
-            f"Gas balance            = "
-            f"{gas_energy_balance:.6e} W"
-        )
-
-        print(
-            f"Solid ΔH               = "
-            f"{solid_energy_change:.6e} W"
-        )
-
-        print(
-            f"Solid expected         = "
-            f"{solid_expected:.6e} W"
-        )
-
-        print(
-            f"Solid balance          = "
-            f"{solid_energy_balance:.6e} W"
-        )
-
-        print(
-            f"Qgs                    = "
-            f"{Qgs:.6e} W"
-        )
-
-        print(
-            f"Qgw                    = "
-            f"{Qgw:.6e} W"
-        )
-
-        print(
-            f"Qws                    = "
-            f"{Qws:.6e} W"
-        )
-
-        print(
-            f"Qwall                  = "
-            f"{Q_wall_loss:.6e} W"
-        )
-
-        print(
-            f"Qreaction              = "
-            f"{reaction_sink:.6e} W"
-        )
-
-        print(
-            f"Qgw + Qws              = "
-            f"{Qgw + Qws:.6e} W"
-        )
-
-        print(
-            f"Qwall consistency      = "
-            f"{Q_wall_loss - (Qgw + Qws):.6e} W"
-        )
-
-        print(
-            f"Total balance          = "
-            f"{total_energy_balance:.6e} W"
-        )
-
-        print(
-            "===================================================="
-        )
 
         # ======================================================
         # RETURN
@@ -1024,10 +956,7 @@ class Calciner:
     # ======================================================
     def apply(self, state):
 
-        print("\n========== CALCINER APPLY ENTER ==========", flush=True)
-        print(f"m_dot_g                = {state.m_dot_g:.6e} kg/s", flush=True)
-        print(f"Hgas_transition_out    = {state.Hgas_transition_out:.6e} W", flush=True)
-        print("==========================================", flush=True)
+
 
         # ======================================================
         # STATE INTEGRITY CHECK
@@ -1202,21 +1131,11 @@ class Calciner:
                 self.u_s,
             )
 
-            print("\n========== ILC CHEMISTRY DEBUG ==========")
-            #print(f"CaCO3 in      = {state.m_dot_CaCO3_in_calciner:.6f} kg/s")
-            #print(f"CaCO3 reacted = {state.m_dot_CaCO3_reacted_calciner:.6f} kg/s")
-            #print(f"CaCO3 out     = {state.m_dot_CaCO3_out_calciner:.6f} kg/s")
-            #print(f"Conversion    = {state.X_CaCO3_calciner:.6f}")
-
             Q_reaction = float(
                 state.Calcination_Q_sink
             )
             
-            print(
-                f"[CALCINER -> TRANSITION] "
-                f"CaCO3_out = "
-                f"{state.m_dot_CaCO3_out_calciner:.6f} kg/s"
-            )
+
 
             # ==================================================
             # 3. THERMAL SOLUTION
@@ -1364,148 +1283,7 @@ class Calciner:
         state.Calciner_coupling_reaction_error = (
             float(reaction_relative_error)
         )
-
-        # ======================================================
-        # FINAL CALCINER REACTION REPORT
-        # ======================================================
-
-        print(
-            "\n========== CALCINER REACTION =========="
-        )
-
-        print(
-            f"Coupling iterations    = "
-            f"{state.Calciner_coupling_iterations}"
-        )
-
-        print(
-            f"Coupling converged     = "
-            f"{state.Calciner_coupling_converged}"
-        )
-
-        print(
-            f"Temperature error      = "
-            f"{state.Calciner_coupling_temperature_error:.6e} K"
-        )
-
-        print(
-            f"Reaction relative err  = "
-            f"{state.Calciner_coupling_reaction_error:.6e}"
-        )
-
-
-        #print(
-        #    f"CaCO3 reacted flow     = "
-        #    f"{state.m_dot_CaCO3_reacted_calciner:.6f} kg/s"
-        #)
-
-   
-
-        print(
-            f"Calcination conversion = "
-            f"{state.X_calcination:.6f}"
-        )
-
-        print(
-            f"Calcination heat       = "
-            f"{state.Calcination_Q_sink:.6e} W"
-        )
-
-        print("----------------------------------------")
-
-        print(
-            "Cell conversion        =",
-            state.X_CaCO3_cells
-        )
-
-        print(
-            "Cell reacted flow      =",
-            state.m_dot_CaCO3_reacted_cells
-        )
-
-        print(
-            "Cell inlet flow        =",
-            state.m_dot_CaCO3_in_cells
-        )
-
-        print(
-            "Cell outlet flow       =",
-            state.m_dot_CaCO3_out_cells
-        )
-
-        print("========================================")
-        state.Tw_calciner = Tw_iter
-
-        state.Wall_loss_calciner = (
-            float(wall_loss_new)
-        )
-        
-        print("\n========== CALCINER ENTHALPY INPUT CHECK ==========")
-
-        print(
-            f"state.m_dot_g        = "
-            f"{state.m_dot_g:.6e} kg/s"
-        )
-
-        print(
-            f"Tg_calciner          = "
-            f"{state.Tg_calciner}"
-        )
-
-        print(
-            f"Tg_calciner[0]       = "
-            f"{state.Tg_calciner[0]:.6f} K"
-        )
-
-        print(
-            f"Tg_calciner[-1]      = "
-            f"{state.Tg_calciner[-1]:.6f} K"
-        )
-
-        print(
-            f"h_gas(Tg[0])         = "
-            f"{h_gas(state.Tg_calciner[0], self.T_ref):.6e} J/kg"
-        )
-
-        print(
-            f"h_gas(Tg[-1])        = "
-            f"{h_gas(state.Tg_calciner[-1], self.T_ref):.6e} J/kg"
-        )
-
-        print(
-            f"Hgas_calciner_in     = "
-            f"{state.Hgas_calciner_in:.6e} W"
-        )
-
-        print(
-            f"Hsolid_calciner_in   = "
-            f"{state.Hsolid_calciner_in:.6e} W"
-        )
-
-        print("====================================================")
-        
-        print("\n========== CALCINER ENTHALPY INPUT CHECK ==========")
-
-        print(f"state.m_dot_g        = {state.m_dot_g:.6e} kg/s")
-
-        print(f"Tg_calciner          = {state.Tg_calciner}")
-        print(f"Tg_calciner[0]       = {state.Tg_calciner[0]:.6f} K")
-        print(f"Tg_calciner[-1]      = {state.Tg_calciner[-1]:.6f} K")
-
-        print(
-            f"h_gas(Tg[0])         = "
-            f"{h_gas(state.Tg_calciner[0], self.T_ref):.6e} J/kg"
-        )
-
-        print(
-            f"h_gas(Tg[-1])        = "
-            f"{h_gas(state.Tg_calciner[-1], self.T_ref):.6e} J/kg"
-        )
-
-        print(f"Hgas_calciner_in     = {state.Hgas_calciner_in:.6e} W")
-        print(f"Hsolid_calciner_in   = {state.Hsolid_calciner_in:.6e} W")
-
-        print("====================================================")
+ 
 
         # ======================================================
         # UPDATE GAS ENTHALPY
@@ -1513,17 +1291,10 @@ class Calciner:
         # Must use the same h_gas() definition
         # used by thermal_step().
         # ======================================================
-        print("\n========== BEFORE CALCINER HG ==========", flush=True)
-        print(f"m_dot_g       = {state.m_dot_g:.6e} kg/s", flush=True)
-        print(f"Tg[0]         = {state.Tg_calciner[0]:.6f} K", flush=True)
-        print(f"Tg[-1]        = {state.Tg_calciner[-1]:.6f} K", flush=True)
 
         h0 = h_gas(state.Tg_calciner[0], self.T_ref)
         hN = h_gas(state.Tg_calciner[-1], self.T_ref)
 
-        print(f"h_gas[0]      = {h0:.6e} J/kg", flush=True)
-        print(f"h_gas[-1]     = {hN:.6e} J/kg", flush=True)
-        print("==========================================", flush=True)
 
         state.Hg_calciner = (
             state.m_dot_g
@@ -1553,19 +1324,6 @@ class Calciner:
         # ======================================================
 
         state.Hgas_calciner_out = state.Hg_calciner[0]
-
-
-        # ======================================================
-        # CALCINER OUTPUT CHECK
-        # ======================================================
-
-        print("\n========== CALCINER OUTPUT CHECK ==========")
-        print(f"Hg_calciner[0]        = {state.Hg_calciner[0]:.6e} W")
-        print(f"Hg_calciner[-1]       = {state.Hg_calciner[-1]:.6e} W")
-        print(f"Hgas_calciner_out     = {state.Hgas_calciner_out:.6e} W")
-        print(f"m_dot_g               = {state.m_dot_g:.6e} kg/s")
-        print("===========================================\n")
-
 
 
         # ======================================================
@@ -1646,107 +1404,6 @@ class Calciner:
             / energy_scale
         )
 
-        # ======================================================
-        # CALCINER FLOW DEBUG
-        # ======================================================
-
-        print(
-            "\n========== CALCINER FLOW DEBUG =========="
-        )
-
-        print(
-            f"u_s = {state.u_s:.6e} m/s"
-        )
-
-        print("------------------------------------------")
-
-        print(
-            f"m_dot_g = "
-            f"{state.m_dot_g:.6e} kg/s"
-        )
-
-        print(
-            f"m_dot_s = "
-            f"{state.m_dot_s:.6e} kg/s"
-        )
-
-        print("------------------------------------------")
-
-        print(
-            f"Tg_in = "
-            f"{Tg_in:.3f} K"
-        )
-
-        print(
-            f"Tg_out = "
-            f"{state.Tg_calciner[0]:.3f} K"
-        )
-
-        print(
-            f"Ts_in = "
-            f"{Ts_in:.3f} K"
-        )
-
-        print(
-            f"Ts_out = "
-            f"{state.Ts_calciner[-1]:.3f} K"
-        )
-
-        print(
-            f"Tw_in = "
-            f"{state.Tw_calciner[0]:.3f} K"
-        )
-
-        print(
-            f"Tw_out = "
-            f"{state.Tw_calciner[-1]:.3f} K"
-        )
-
-        print(
-            "=========================================="
-        )
-
-        # ======================================================
-        # CALCINER ENERGY BALANCE DEBUG
-        # ======================================================
-
-        print(
-            "\n========== "
-            "CALCINER ENERGY BALANCE "
-            "=========="
-        )
-
-        print(
-            f"Hgas_calciner_in       = "
-            f"{state.Hgas_calciner_in:.6e} W"
-        )
-
-        print(
-            f"Hgas_calciner_out      = "
-            f"{state.Hgas_calciner_out:.6e} W"
-        )
-
-        print(
-            f"Hsolid_calciner_in     = "
-            f"{state.Hsolid_calciner_in:.6e} W"
-        )
-
-        print(
-            f"Hsolid_calciner_out    = "
-            f"{state.Hsolid_calciner_out:.6e} W"
-        )
-
-        print(
-            f"Wall_loss_calciner     = "
-            f"{state.Wall_loss_calciner:.6e} W"
-        )
-
-        print(
-            f"Calcination_Q_sink     = "
-            f"{state.Calcination_Q_sink:.6e} W"
-        )
-
-        print("----------------------------------------------")
 
         # ======================================================
         # ENERGY IN
@@ -1781,83 +1438,6 @@ class Calciner:
         calciner_residual = (
             calciner_energy_in
             - calciner_energy_out
-        )
-
-        print(
-            f"Energy_in              = "
-            f"{calciner_energy_in:.6e} W"
-        )
-
-        print(
-            f"Energy_out             = "
-            f"{calciner_energy_out:.6e} W"
-        )
-
-        print(
-            f"Residual               = "
-            f"{calciner_residual:.6e} W"
-        )
-
-        print("----------------------------------------------")
-
-        print(
-            f"Calciner_energy_balance = "
-            f"{state.Calciner_energy_balance:.6e} W"
-        )
-
-        print(
-            f"Calciner_energy_balance_relative = "
-            f"{state.Calciner_energy_balance_relative:.6e}"
-        )
-
-        print("----------------------------------------------")
-
-        # ======================================================
-        # CALCINER TEMPERATURE DEBUG
-        # ======================================================
-
-        print(
-            "\n========== "
-            "CALCINER TEMPERATURES "
-            "=========="
-        )
-
-        print(
-            f"Tg_in  = {Tg_in:.3f} K"
-        )
-
-        print(
-            f"Tg_out = "
-            f"{state.Tg_calciner[0]:.3f} K"
-        )
-
-        print(
-            f"Ts_in  = {Ts_in:.3f} K"
-        )
-
-        print(
-            f"Ts_out = "
-            f"{state.Ts_calciner[-1]:.3f} K"
-        )
-
-        print(
-            f"Tw_in  = "
-            f"{state.Tw_calciner[0]:.3f} K"
-        )
-
-        print(
-            f"Tw_out = "
-            f"{state.Tw_calciner[-1]:.3f} K"
-        )
-
-        print(
-            "============================================"
-        )
-        
-        print(
-            "[CALCINER FINAL CHECK] "
-            f"m_dot_CaCO3_out_calciner = "
-            f"{getattr(state, 'm_dot_CaCO3_out_calciner', 'MISSING')}"
         )
 
         return state

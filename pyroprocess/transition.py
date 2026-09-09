@@ -30,6 +30,10 @@ class Transition:
 
         # ================= ZONE =================
         self.zone = "transition"
+        
+        self.energy_in = 0.0
+        self.energy_out = 0.0
+        self.energy_residual = 0.0
 
         # ================= GEOMETRY =================
         self.D = 4.2
@@ -556,29 +560,6 @@ class Transition:
                 2 * N:3 * N
             ]
 
-            # ======================================================
-            # CONVERGENCE
-            # ======================================================
-
-            error = max(
-                np.max(
-                    np.abs(
-                        Tg_new - Tg_iter
-                    )
-                ),
-
-                np.max(
-                    np.abs(
-                        Ts_new - Ts_iter
-                    )
-                ),
-
-                np.max(
-                    np.abs(
-                        Tw_new - Tw_iter
-                    )
-                ),
-            )
 
             # ==================================================
             # RELAXATION
@@ -600,28 +581,6 @@ class Transition:
                 relaxation * Tw_new
                 + (1.0 - relaxation)
                 * Tw_iter
-            )
-
-            # ==================================================
-            # CONVERGED
-            # ==================================================
-
-            if error < tol:
-
-                converged = True
-
-                break
-
-        # ======================================================
-        # CONVERGENCE WARNING
-        # ======================================================
-
-        if not converged:
-
-            print(
-                "WARNING: Transition radiation iteration "
-                f"did not converge after {max_iter} iterations. "
-                f"Final error = {error:.6e} K"
             )
 
         # ======================================================
@@ -746,28 +705,7 @@ class Transition:
             )
         )
         
-        
-        print("\n========== TRANSITION CHEMISTRY DEBUG ==========")
-        print(
-            f"CaCO3 in       = "
-            f"{m_dot_CaCO3_transition_in:.6f} kg/s"
-        )
-        print(
-            f"CaCO3 reacted  = "
-            f"{np.sum(m_dot_CaCO3_reacted_cells):.6f} kg/s"
-        )
-        print(
-            f"CaCO3 out      = "
-            f"{m_dot_CaCO3_out_transition:.6f} kg/s"
-        )
-        print(
-            f"Conversion     = "
-            f"{X_calcination_transition:.6f}"
-        )
-        print(
-            f"Qcalc          = "
-            f"{Q_calcination_transition/1e6:.6f} MW"
-        )
+
         cell_conversion = (
             1.0
             - m_dot_CaCO3_out_cells
@@ -777,14 +715,7 @@ class Transition:
             )
         )
 
-        print(
-            f"Cell conversion = {cell_conversion}"
-        )
-        print(
-            f"Cell CaCO3 out  = "
-            f"{m_dot_CaCO3_out_cells}"
-        )
-        print("===============================================")
+
 
         # ======================================================
         # FINAL CONVECTION
@@ -950,159 +881,21 @@ class Transition:
             - Q_calcination_transition
         )
 
-        # ======================================================
-        # DEBUG
-        # ======================================================
-
-        print()
-        print(
-            "========== TRANSITION STEADY STATE =========="
+        self.energy_in = (
+            Hg_in
+            + Hs_in
         )
 
-        print(
-            f"Tg_in       = {Tg_in:.3f} K"
+        self.energy_out = (
+            Hg_out
+            + Hs_out
+            + wall_loss
+            + Q_calcination_transition
         )
 
-        print(
-            f"Tg_out      = {Tg_ss[0]:.3f} K"
-        )
-
-        print(
-            f"Ts_in       = {Ts_in:.3f} K"
-        )
-
-        print(
-            f"Ts_out      = {Ts_ss[-1]:.3f} K"
-        )
-
-        print(
-            f"Tw_out      = {Tw_ss[-1]:.3f} K"
-        )
-
-        print()
-
-        print(
-            f"Hg_in       = {Hg_in:.6e} W"
-        )
-
-        print(
-            f"Hg_out      = {Hg_out:.6e} W"
-        )
-
-        print(
-            f"Hs_in       = {Hs_in:.6e} W"
-        )
-
-        print(
-            f"Hs_out      = {Hs_out:.6e} W"
-        )
-
-        print()
-
-        print(
-            f"Q_gs        = {Q_gs:.3f} W"
-        )
-
-        print(
-            f"Q_gw        = {Q_gw:.3f} W"
-        )
-
-        print(
-            f"Q_ws        = {Q_ws:.3f} W"
-        )
-
-        print(
-            f"Q_wall_loss = {wall_loss:.3f} W"
-        )
-
-        print()
-
-        print(
-            "--- ENERGY TRANSFER CHECK ---"
-        )
-
-        print(
-            f"Delta H gas   = "
-            f"{Hg_out - Hg_in:.6e} W"
-        )
-
-        print(
-            f"Delta H solid = "
-            f"{Hs_out - Hs_in:.6e} W"
-        )
-
-        print(
-            f"Gas expected  = "
-            f"{-Q_gs - Q_gw:.6e} W"
-        )
-
-        print(
-            f"Solid expected = "
-            f"{Q_gs - Q_ws:.6e} W"
-        )
-
-        print()
-
-        print(
-            "--- RADIATION ---"
-        )
-
-        print(
-            f"Q_gs_rad = "
-            f"{V_cell * np.sum(q_gs_rad):.3f} W"
-        )
-
-        print(
-            f"Q_gw_rad = "
-            f"{V_cell * np.sum(q_gw_rad):.3f} W"
-        )
-
-        print(
-            f"Q_ws_rad = "
-            f"{V_cell * np.sum(q_ws_rad):.3f} W"
-        )
-
-        print(
-            f"Iterations = {iteration + 1}"
-        )
-
-        print(
-            f"Rad. error = {error:.6e} K"
-        )
-
-        print()
-
-        print(
-            "--- ENERGY BALANCE ---"
-        )
-
-        print(
-            f"Total balance = "
-            f"{total_energy_balance:.6e} W"
-        )
-
-        print()
-
-        print(
-            "--- CELL TEMPERATURES ---"
-        )
-
-        for i in range(N):
-
-            print(
-                f"cell {i}: "
-                f"Tg={Tg_ss[i]:.2f} K, "
-                f"Ts={Ts_ss[i]:.2f} K, "
-                f"Tw={Tw_ss[i]:.2f} K, "
-                f"Qgs={V_cell * q_gs_cell[i] / 1e6:.3f} MW, "
-                f"Qgw={V_cell * q_gw_cell[i] / 1e6:.3f} MW, "
-                f"Qws={V_cell * q_ws_cell[i] / 1e6:.3f} MW, "
-                f"Qloss={Q_loss_cell[i] / 1e6:.3f} MW"
-            )
-
-        print(
-            "==============================================="
-        )
+        self.energy_residual = total_energy_balance
+        
+        
         
         
         state.Calcination_Q_transition = float(
@@ -1379,35 +1172,6 @@ class Transition:
             - state.Hsolid_transition_out
             - state.Wall_loss_transition
             - state.Calcination_Q_transition
-        )
-        
-        # ======================================================
-        # TRANSITION HANDOFF DEBUG
-        # ======================================================
-        print("\n========== TRANSITION HANDOFF ==========")
-        print(
-            f"Hgas_transition_in  = "
-            f"{state.Hgas_transition_in:.6e} W"
-        )
-        print(
-            f"Hgas_transition_out = "
-            f"{state.Hgas_transition_out:.6e} W"
-        )
-        print(
-            f"Hsolid_transition_in  = "
-            f"{state.Hsolid_transition_in:.6e} W"
-        )
-        print(
-            f"Hsolid_transition_out = "
-            f"{state.Hsolid_transition_out:.6e} W"
-        )
-        print(
-            f"Wall_loss_transition = "
-            f"{state.Wall_loss_transition:.6e} W"
-        )
-        print(
-            f"Transition balance = "
-            f"{state.Transition_energy_balance:.6e} W"
         )
 
         return state

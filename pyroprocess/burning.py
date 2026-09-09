@@ -22,9 +22,9 @@ from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
 from physics.physics import ZONE_ENERGY_WEIGHTS
 from physics.physics import ZONE_HT_CONFIG
-from chemistry.reactions import ChemistryModel
 from physics.physics import wall_thermal_resistance
 
+from chemistry.reactions import ChemistryModel
 
 
 def load_cfg(path):
@@ -57,6 +57,13 @@ class Burning:
             L=self.L,
             N=self.N
         )
+        
+        # ======================================================
+        # ENERGY DIAGNOSTICS
+        # ======================================================
+        self.energy_in = 0.0
+        self.energy_out = 0.0
+        self.energy_residual = 0.0
 
         # ======================================================
         # INTERFACIAL & WALL GEOMETRY
@@ -611,29 +618,6 @@ class Burning:
                 2 * N:3 * N
             ]
 
-            # ==================================================
-            # CONVERGENCE ERROR
-            # ==================================================
-
-            error = max(
-                np.max(
-                    np.abs(
-                        Tg_new - Tg_iter
-                    )
-                ),
-
-                np.max(
-                    np.abs(
-                        Ts_new - Ts_iter
-                    )
-                ),
-
-                np.max(
-                    np.abs(
-                        Tw_new - Tw_iter
-                    )
-                )
-            )
 
             # ==================================================
             # RELAXATION
@@ -654,26 +638,6 @@ class Burning:
                 + (1.0 - relaxation) * Tw_iter
             )
 
-            # ==================================================
-            # CONVERGED?
-            # ==================================================
-
-            if error < tol:
-
-                converged = True
-                break
-
-        # ======================================================
-        # CONVERGENCE WARNING
-        # ======================================================
-
-        if not converged:
-
-            print(
-                f"[BURNING WARNING] "
-                f"Thermal iteration did not converge. "
-                f"error = {error:.6e} K"
-            )
 
         # ======================================================
         # STEADY-STATE TEMPERATURES
@@ -848,112 +812,27 @@ class Burning:
         # TOTAL ENERGY BALANCE
         # ======================================================
 
-        total_energy_balance = (
+        energy_in = (
             Hg_in
             + Hs_in
             + Q_burning
-            - Hg_out
-            - Hs_out
-            - Q_wall_loss
         )
 
-        # ======================================================
-        # DEBUG / DIAGNOSTICS
-        # ======================================================
-
-        print(
-            "\n========== BURNING STEADY STATE =========="
+        energy_out = (
+            Hg_out
+            + Hs_out
+            + Q_wall_loss
         )
 
-        print(
-            f"Tg_in  = {Tg_in:.3f} K"
+        total_energy_balance = (
+            energy_in
+            - energy_out
         )
+        
+        self.energy_in = float(energy_in)
+        self.energy_out = float(energy_out)
+        self.energy_residual = float(total_energy_balance)
 
-        print(
-            f"Tg_out = {Tg_out:.3f} K"
-        )
-
-        print(
-            f"Ts_in  = {Ts_in:.3f} K"
-        )
-
-        print(
-            f"Ts_out = {Ts_out:.3f} K"
-        )
-
-        print(
-            f"Tw_out = {Tw_out:.3f} K"
-        )
-
-        print(
-            f"Q_burning = {Q_burning:.3f} W"
-        )
-
-        print(
-            f"Q_gs = {Qgs:.3f} W"
-        )
-
-        print(
-            f"Q_gw = {Qgw:.3f} W"
-        )
-
-        print(
-            f"Q_ws = {Qws:.3f} W"
-        )
-
-        print(
-            f"Q_wall_loss = {Q_wall_loss:.3f} W"
-        )
-
-        print(
-            "\n--- GAS THERMODYNAMICS ---"
-        )
-
-        print(
-            f"Cp_g inlet  = "
-            f"{cp_gas(Tg_in):.3f} J/(kg K)"
-        )
-
-        print(
-            f"Cp_g outlet = "
-            f"{cp_gas(Tg_out):.3f} J/(kg K)"
-        )
-
-        print(
-            f"m_dot_g = "
-            f"{m_dot_g:.6f} kg/s"
-        )
-
-        print(
-            "\n--- ENERGY BALANCE ---"
-        )
-
-        print(
-            f"Gas balance = "
-            f"{gas_energy_balance:.6e} W"
-        )
-
-        print(
-            f"Solid balance = "
-            f"{solid_energy_balance:.6e} W"
-        )
-
-        print(
-            f"Total balance = "
-            f"{total_energy_balance:.6e} W"
-        )
-
-        print(
-            f"Iterations = {iteration + 1}"
-        )
-
-        # ======================================================
-        # CELL TEMPERATURES
-        # ======================================================
-
-        print(
-            "\n--- CELL TEMPERATURES ---"
-        )
 
         for i in range(N):
 
@@ -1017,36 +896,6 @@ class Burning:
                 / R_total
             )
 
-            # ==================================================
-            # DEBUG OUTPUT
-            # ==================================================
-
-            print(
-                f"cell {i}: "
-                f"Tg={Tg_ss[i]:.2f} K, "
-                f"Ts={Ts_ss[i]:.2f} K, "
-                f"Tw={Tw_ss[i]:.2f} K, "
-
-                f"Qcomb={q_cell[i]/1e6:.3f} MW, "
-
-                f"Qgs={Qgs_cell/1e6:.3f} MW, "
-                f"Qgs_conv={Qgs_conv_cell/1e6:.3f} MW, "
-                f"Qgs_rad={Qgs_rad_cell/1e6:.3f} MW, "
-
-                f"Qgw={Qgw_cell/1e6:.3f} MW, "
-                f"Qgw_conv={Qgw_conv_cell/1e6:.3f} MW, "
-                f"Qgw_rad={Qgw_rad_cell/1e6:.3f} MW, "
-
-                f"Qws={Qws_cell/1e6:.3f} MW, "
-                f"Qws_conv={Qws_conv_cell/1e6:.3f} MW, "
-                f"Qws_rad={Qws_rad_cell/1e6:.3f} MW, "
-
-                f"Qloss={Qloss_cell/1e6:.3f} MW"
-            )
-
-        print(
-            "==========================================="
-        )
 
         # ======================================================
         # RETURN
@@ -1061,6 +910,8 @@ class Burning:
             Q_RDF,
             Q_H2,
             Q_burning,
+            energy_in,
+            energy_out,
             total_energy_balance,
         )
 
@@ -1172,6 +1023,8 @@ class Burning:
             Q_RDF,
             Q_H2,
             Q_burning,
+            energy_in,
+            energy_out,
             total_energy_balance,
         ) = self.thermal_step(
             state.Tg_burning,

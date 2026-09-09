@@ -1,9 +1,6 @@
-python -m kiln.burning
-
-python -m kiln.calcination
-
 python main.py
 
+python -m kiln.calcination
 
 python -m controls.mpc
 
@@ -13,7 +10,6 @@ Bu yeni düzenlemeleri al ve  aşağıdaki modele entegre edip tam kod olarak ve
 bu yeni güncellemelere göre thermal step güncel versiyonunu yazar mısın?
 
 güncel versiyonunu python copy paste olarak verir misin?
-
 
 
 
