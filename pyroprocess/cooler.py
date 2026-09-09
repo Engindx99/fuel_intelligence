@@ -13,6 +13,7 @@ from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
 from physics.physics import ZONE_HT_CONFIG
+from physics.physics import wall_thermal_resistance
 
 class Cooler:
 
@@ -119,39 +120,405 @@ class Cooler:
         )
         
 
-    # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, state, dt):
-        
-        # ======================================================
-        # INLET BOUNDARY
-        # ======================================================
-        Tg_in = Tg[0]
-        Ts_in = Ts[0]
+    def thermal_step(self, Tg, Ts, Tw, state):
 
         # ======================================================
-        # GRADIENTS (NO ALLOCATION)
+        # MASS FLOW
         # ======================================================
-        dTg_dz = self._dTg_dz
-        dTs_dz = self._dTs_dz
 
-        dTg_dz[1:] = (Tg[1:] - Tg[:-1]) / self.dz
-        dTs_dz[1:] = (Ts[1:] - Ts[:-1]) / self.dz
+        m_dot_g = state.m_dot_g
+        m_dot_s = state.m_dot_s
 
-        dTg_dz[0] = dTg_dz[1]
-        dTs_dz[0] = dTs_dz[1]
+        N = self.N
+        V_cell = self.V_cell
 
         # ======================================================
-        # NO INTERNAL HEAT GENERATION
+        # INLET BOUNDARY CONDITIONS
         # ======================================================
-        q_vol = 0.0
+
+        Tg_in = state.Tg_cooler_in
+        Ts_in = state.Ts_cooler_in
 
         # ======================================================
-        # HEAT TRANSFER (CONVECTION + RADIATION)
+        # HEAT TRANSFER COEFFICIENTS
         # ======================================================
+
+        K_gs = self.hv_gs * self.a_gs
+        K_gw = self.hv_gw * self.a_gw
+        K_ws = self.hv_ws * self.a_ws
+
+        # ======================================================
+        # WALL THERMAL RESISTANCE
+        # ======================================================
+
+        (
+            R_ref,
+            R_conv,
+            R_total,
+        ) = wall_thermal_resistance(
+            refractory_thickness=self.refractory_thickness,
+            refractory_conductivity=self.refractory_conductivity,
+            h_ext=self.h_ext,
+            A_wall_cell=self.A_wall_cell,
+        )
+
+        # ======================================================
+        # PICARD ITERATION
+        # ======================================================
+
+        max_iter = 100
+        tol = 1e-6
+        relaxation = 0.5
+
+        Tg_iter = np.asarray(
+            Tg,
+            dtype=float,
+        ).copy()
+
+        Ts_iter = np.asarray(
+            Ts,
+            dtype=float,
+        ).copy()
+
+        Tw_iter = np.asarray(
+            Tw,
+            dtype=float,
+        ).copy()
+
+        for iteration in range(max_iter):
+
+            # --------------------------------------------------
+            # Existing heat-transfer model
+            # --------------------------------------------------
+
+            q_gs, q_gw, q_ws = heat_transfer(
+                Tg=Tg_iter,
+                Ts=Ts_iter,
+                Tw=Tw_iter,
+                hv_gs=self.hv_gs,
+                hv_gw=self.hv_gw,
+                hv_ws=self.hv_ws,
+                a_gs=self.a_gs,
+                a_gw=self.a_gw,
+                a_ws=self.a_ws,
+                zone=self.zone,
+            )
+
+            # --------------------------------------------------
+            # Existing wall-loss model
+            # --------------------------------------------------
+
+            q_loss, wall_loss, wall_debug = wall_losses(
+                Tw=Tw_iter,
+                h_ext=self.h_ext,
+                A_wall_cell=self.A_wall_cell,
+                V_cell=self.V_cell,
+                T_amb=self.T_amb,
+                A_wall_total=self.A_wall,
+                N=N,
+                refractory_thickness=self.refractory_thickness,
+                refractory_conductivity=self.refractory_conductivity,
+                eps=self.eps,
+            )
+
+            # ==================================================
+            # LINEAR SYSTEM
+            # ==================================================
+
+            n_unknowns = 3 * N
+
+            A = np.zeros(
+                (n_unknowns, n_unknowns),
+                dtype=float,
+            )
+
+            b = np.zeros(
+                n_unknowns,
+                dtype=float,
+            )
+
+            row = 0
+
+            # ==================================================
+            # GAS
+            # ==================================================
+
+            Cg = m_dot_g * self.Cp_g
+
+            # Inlet boundary:
+            #
+            # Tg[0] = Tg_in
+            #
+            A[row, 0] = 1.0
+            b[row] = Tg_in
+
+            row += 1
+
+            for i in range(1, N):
+
+                gas_i = i
+                solid_i = N + i
+                wall_i = 2 * N + i
+
+                gas_up = i - 1
+
+                # ----------------------------------------------
+                # m_dot_g Cp_g (Tg_i - Tg_up)
+                #
+                # + Q_gs
+                # + Q_gw
+                # = 0
+                # ----------------------------------------------
+
+                A[row, gas_i] += (
+                    Cg
+                    + V_cell * K_gs
+                    + V_cell * K_gw
+                )
+
+                A[row, gas_up] += -Cg
+
+                A[row, solid_i] += (
+                    -V_cell * K_gs
+                )
+
+                A[row, wall_i] += (
+                    -V_cell * K_gw
+                )
+
+                # Radiation part is already contained in
+                # heat_transfer(). Freeze nonlinear radiation
+                # contribution at current Picard iteration.
+
+                q_rad_gs = (
+                    q_gs[i]
+                    - K_gs * (
+                        Tg_iter[i]
+                        - Ts_iter[i]
+                    )
+                )
+
+                q_rad_gw = (
+                    q_gw[i]
+                    - K_gw * (
+                        Tg_iter[i]
+                        - Tw_iter[i]
+                    )
+                )
+
+                b[row] = -V_cell * (
+                    q_rad_gs
+                    + q_rad_gw
+                )
+
+                row += 1
+
+            # ==================================================
+            # SOLID
+            # ==================================================
+
+            Cs = m_dot_s * self.Cp_s
+
+            # Inlet boundary:
+            #
+            # Ts[0] = Ts_in
+            #
+            A[row, N] = 1.0
+            b[row] = Ts_in
+
+            row += 1
+
+            for i in range(1, N):
+
+                gas_i = i
+                solid_i = N + i
+                wall_i = 2 * N + i
+
+                solid_up = N + i - 1
+
+                # ----------------------------------------------
+                # m_dot_s Cp_s (Ts_i - Ts_up)
+                #
+                # - Q_gs
+                # + Q_ws
+                # = 0
+                # ----------------------------------------------
+
+                A[row, gas_i] += (
+                    -V_cell * K_gs
+                )
+
+                A[row, solid_i] += (
+                    Cs
+                    + V_cell * K_gs
+                    + V_cell * K_ws
+                )
+
+                A[row, solid_up] += -Cs
+
+                A[row, wall_i] += (
+                    -V_cell * K_ws
+                )
+
+                q_rad_gs = (
+                    q_gs[i]
+                    - K_gs * (
+                        Tg_iter[i]
+                        - Ts_iter[i]
+                    )
+                )
+
+                q_rad_ws = (
+                    q_ws[i]
+                    - K_ws * (
+                        Ts_iter[i]
+                        - Tw_iter[i]
+                    )
+                )
+
+                b[row] = V_cell * (
+                    q_rad_gs
+                    - q_rad_ws
+                )
+
+                row += 1
+
+            # ==================================================
+            # WALL
+            # ==================================================
+
+            for i in range(N):
+
+                gas_i = i
+                solid_i = N + i
+                wall_i = 2 * N + i
+
+                # ----------------------------------------------
+                # Q_gw + Q_ws - Q_loss = 0
+                # ----------------------------------------------
+
+                A[row, gas_i] += (
+                    V_cell * K_gw
+                )
+
+                A[row, solid_i] += (
+                    V_cell * K_ws
+                )
+
+                A[row, wall_i] += (
+                    -V_cell * K_gw
+                    -V_cell * K_ws
+                    -0.27 / R_total
+                )
+
+                q_rad_gw = (
+                    q_gw[i]
+                    - K_gw * (
+                        Tg_iter[i]
+                        - Tw_iter[i]
+                    )
+                )
+
+                q_rad_ws = (
+                    q_ws[i]
+                    - K_ws * (
+                        Ts_iter[i]
+                        - Tw_iter[i]
+                    )
+                )
+
+                b[row] = (
+                    -V_cell * (
+                        q_rad_gw
+                        + q_rad_ws
+                    )
+                    -0.27 * self.T_amb / R_total
+                )
+
+                row += 1
+
+            # ==================================================
+            # SOLVE
+            # ==================================================
+
+            solution = np.linalg.solve(
+                A,
+                b,
+            )
+
+            Tg_new = solution[:N]
+
+            Ts_new = solution[N:2 * N]
+
+            Tw_new = solution[2 * N:3 * N]
+
+            # ==================================================
+            # PICARD RELAXATION
+            # ==================================================
+
+            Tg_next = (
+                relaxation * Tg_new
+                + (1.0 - relaxation) * Tg_iter
+            )
+
+            Ts_next = (
+                relaxation * Ts_new
+                + (1.0 - relaxation) * Ts_iter
+            )
+
+            Tw_next = (
+                relaxation * Tw_new
+                + (1.0 - relaxation) * Tw_iter
+            )
+
+            error = max(
+                np.max(
+                    np.abs(
+                        Tg_next - Tg_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Ts_next - Ts_iter
+                    )
+                ),
+                np.max(
+                    np.abs(
+                        Tw_next - Tw_iter
+                    )
+                ),
+            )
+
+            Tg_iter = Tg_next
+            Ts_iter = Ts_next
+            Tw_iter = Tw_next
+
+            if error < tol:
+                break
+
+        else:
+            raise RuntimeError(
+                "Cooler steady-state thermal solution "
+                f"did not converge after {max_iter} iterations. "
+                f"error={error:.6e} K"
+            )
+
+        # ======================================================
+        # FINAL STATE
+        # ======================================================
+
+        Tg_ss = Tg_iter
+        Ts_ss = Ts_iter
+        Tw_ss = Tw_iter
+
+        # ======================================================
+        # FINAL HEAT TRANSFER
+        # ======================================================
+
         q_gs, q_gw, q_ws = heat_transfer(
-            Tg=Tg,
-            Ts=Ts,
-            Tw=Tw,
+            Tg=Tg_ss,
+            Ts=Ts_ss,
+            Tw=Tw_ss,
             hv_gs=self.hv_gs,
             hv_gw=self.hv_gw,
             hv_ws=self.hv_ws,
@@ -160,74 +527,132 @@ class Cooler:
             a_ws=self.a_ws,
             zone=self.zone,
         )
-    
+
+        # q_* are volumetric [W/m3]
+        Qgs = float(
+            np.sum(q_gs * V_cell)
+        )
+
+        Qgw = float(
+            np.sum(q_gw * V_cell)
+        )
+
+        Qws = float(
+            np.sum(q_ws * V_cell)
+        )
 
         # ======================================================
-        # WALL LOSSES
+        # FINAL WALL LOSS
         # ======================================================
-        q_loss, wall_loss, wall_debug = wall_losses(
-            Tw=Tw,
+
+        (
+            q_loss,
+            wall_loss,
+            wall_debug,
+        ) = wall_losses(
+            Tw=Tw_ss,
             h_ext=self.h_ext,
             A_wall_cell=self.A_wall_cell,
             V_cell=self.V_cell,
             T_amb=self.T_amb,
             A_wall_total=self.A_wall,
-            N=self.N,
+            N=N,
             refractory_thickness=self.refractory_thickness,
             refractory_conductivity=self.refractory_conductivity,
             eps=self.eps,
         )
 
         # ======================================================
-        # THERMAL CAPACITIES
+        # ENTHALPY
         # ======================================================
-        C_g, effective_C_s, C_w = thermal_capacities(
-            rho_g_Vcell_Cp_g=self._rho_g_Vcell_Cp_g,
-            rho_s_Vcell_Cp_s=self._rho_s_Vcell_Cp_s,
-            rho_wall_Vwall_cell_Cp=self._rho_wall_Vwall_cell_Cp,
-            effective= 1.0,
+
+        Hg_in = (
+            m_dot_g
+            * self.Cp_g
+            * (Tg_in - self.T_ref)
+        )
+
+        Hg_out = (
+            m_dot_g
+            * self.Cp_g
+            * (Tg_ss[-1] - self.T_ref)
+        )
+
+        Hs_in = (
+            m_dot_s
+            * self.Cp_s
+            * (Ts_in - self.T_ref)
+        )
+
+        Hs_out = (
+            m_dot_s
+            * self.Cp_s
+            * (Ts_ss[-1] - self.T_ref)
         )
 
         # ======================================================
-        # ENERGY EQUATIONS
+        # ENERGY BALANCE
         # ======================================================
-        Tg_n = Tg + dt * (
-            -state.u_g * dTg_dz
-            + (q_vol - q_gs - q_gw) / C_g
-        )
-        
 
-        Ts_n = Ts + dt * (
-            -state.u_s * dTs_dz
-            + (q_gs - q_ws) / effective_C_s
+        energy_in = (
+            Hg_in
+            + Hs_in
         )
 
-        Tw_n = Tw + dt * (
-            (q_gw + q_ws - q_loss) / C_w
+        energy_out = (
+            Hg_out
+            + Hs_out
+            + wall_loss
         )
-        
+
+        total_energy_balance = (
+            energy_in
+            - energy_out
+        )
+
         # ======================================================
-        # ENFORCE INLET BOUNDARY
+        # STORE DIAGNOSTICS
         # ======================================================
-        Tg_n[0] = Tg_in
-        Ts_n[0] = Ts_in
+
+        self.energy_in = float(
+            energy_in
+        )
+
+        self.energy_out = float(
+            energy_out
+        )
+
+        self.energy_residual = float(
+            total_energy_balance
+        )
+
+        # ======================================================
+        # RETURN
+        # ======================================================
 
         return (
-            Tg_n,
-            Ts_n,
-            Tw_n,
+            Tg_ss,
+            Ts_ss,
+            Tw_ss,
             wall_loss,
             wall_debug,
+            Qgs,
+            Qgw,
+            Qws,
+            energy_in,
+            energy_out,
+            total_energy_balance,
         )
+
+
+
     
     # ======================================================
     # STATE UPDATE
     # ======================================================
+
     def apply(self, state, dt):
 
-        # ======================================================
-        # STATE CHECK
-        # ======================================================
         if not isinstance(state.Tg_cooler, np.ndarray):
             raise TypeError("Tg_cooler must be np.ndarray")
 
@@ -235,54 +660,58 @@ class Cooler:
             raise ValueError("Cooler state corrupted")
 
         # ======================================================
-        # STORE OLD STATES
+        # INLET / OUTLET HANDOFF
         # ======================================================
-        state.Tg_cooler_old = state.Tg_cooler.copy()
-        state.Ts_cooler_old = state.Ts_cooler.copy()
-        state.Tw_cooler_old = state.Tw_cooler.copy()
 
-
-        # ======================================================
-        # ENERGY IN
-        # ======================================================
         state.Hgas_cooler_in = state.Hgas_preheater_out
         state.Hsolid_cooler_in = state.Hsolid_preheater_out
 
-        # ======================================================
-        # BOUNDARY CONDITIONS (FROM PREHEATER)
-        # ======================================================
-        state.Tg_cooler[0] = state.Tg_preheater[-1]
-        state.Ts_cooler[0] = state.Ts_preheater[-1]
-        
+        Tg_in = state.Tg_preheater[-1]
+        Ts_in = state.Ts_preheater[-1]
+
+        state.Tg_cooler_in = Tg_in
+        state.Ts_cooler_in = Ts_in
+
+        state.Tg_cooler[0] = Tg_in
+        state.Ts_cooler[0] = Ts_in
 
         # ======================================================
-        # THERMAL STEP
+        # STEADY-STATE THERMAL SOLVE
         # ======================================================
-        Tg, Ts, Tw, wall_loss, wall_debug = self.thermal_step(
+
+        (
+            Tg,
+            Ts,
+            Tw,
+            wall_loss,
+            wall_debug,
+            Qgs,
+            Qgw,
+            Qws,
+            energy_in,
+            energy_out,
+            total_energy_balance,
+        ) = self.thermal_step(
             state.Tg_cooler,
             state.Ts_cooler,
             state.Tw_cooler,
             state,
-            dt,
         )
-        
-
 
         # ======================================================
-        # UPDATE STATES
+        # UPDATE STATE
         # ======================================================
+
         state.Tg_cooler = Tg
         state.Ts_cooler = Ts
         state.Tw_cooler = Tw
 
-        # ======================================================
-        # WALL LOSS
-        # ======================================================
         state.Wall_loss_cooler = float(wall_loss)
 
         # ======================================================
-        # ENERGY OUT
+        # ENTHALPY
         # ======================================================
+
         state.Hgas_cooler_out = self.gas_enthalpy_out(
             state.Tg_cooler,
             state,
@@ -294,45 +723,33 @@ class Cooler:
         )
 
         # ======================================================
-        # STORED ENERGY
+        # HEAT-TRANSFER DIAGNOSTICS
         # ======================================================
-        state.Cooler_gas_stored = np.sum(
-            self._rho_g_Vcell_Cp_g
-            * (state.Tg_cooler - state.Tg_cooler_old)
-            / dt
-        )
 
-        state.Cooler_solid_stored = np.sum(
-            self._rho_s_Vcell_Cp_s
-            * (state.Ts_cooler - state.Ts_cooler_old)
-            / dt
-        )
+        state.Q_gs_cooler = Qgs
+        state.Q_gw_cooler = Qgw
+        state.Q_ws_cooler = Qws
 
-        state.Cooler_wall_stored = np.sum(
-            self._rho_wall_Vwall_cell_Cp
-            * (state.Tw_cooler - state.Tw_cooler_old)
-            / dt
-        )
+        # ======================================================
+        # STEADY-STATE STORAGE TERMS
+        # ======================================================
 
-        state.Cooler_stored_energy_change = (
-            state.Cooler_gas_stored
-            + state.Cooler_solid_stored
-            + state.Cooler_wall_stored
-        )
+        state.Cooler_gas_stored = 0.0
+        state.Cooler_solid_stored = 0.0
+        state.Cooler_wall_stored = 0.0
+
+        state.Cooler_stored_energy_change = 0.0
 
         # ======================================================
         # ENERGY BALANCE
         # ======================================================
-        state.Cooler_energy_balance = (
-            state.Hgas_cooler_in
-            + state.Hsolid_cooler_in
-            - state.Hgas_cooler_out
-            - state.Hsolid_cooler_out
-            - state.Cooler_stored_energy_change
-            - state.Wall_loss_cooler
-        )
+
+        state.Cooler_energy_in = energy_in
+        state.Cooler_energy_out = energy_out
+        state.Cooler_energy_balance = total_energy_balance
 
         return state
+
 
     # ======================================================
     # GAS ENTHALPY TO NEXT ZONE

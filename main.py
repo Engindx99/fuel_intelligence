@@ -19,8 +19,6 @@ import yaml
 
 
 
-
-
 def load_cfg(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -155,6 +153,7 @@ class Twin:
         # ======================================================
         # MAIN EQUIPMENT
         # ======================================================
+
         equipment_models = [
             ("Burning", self.burning),
             ("Transition", self.transition),
@@ -173,30 +172,41 @@ class Twin:
                 equipment=equipment_name,
                 balance_type="energy",
             )
-            
-            # ======================================================
-            # PREHEATER GLOBAL ENERGY BALANCE
-            # ======================================================
 
-            result = validate_energy(
-                energy_in=self.preheater.energy_in,
-                energy_out=self.preheater.energy_out,
-            )
+        # ======================================================
+        # PREHEATER GLOBAL ENERGY BALANCE
+        # ======================================================
 
-            report_validation(
-                result,
-                equipment="Preheater",
-                balance_type="energy",
-            )
+        result = validate_energy(
+            energy_in=self.preheater.energy_in,
+            energy_out=self.preheater.energy_out,
+        )
+
+        report_validation(
+            result,
+            equipment="Preheater",
+            balance_type="energy",
+        )
 
         # ======================================================
         # PREHEATER STAGES
         # ======================================================
+
         for stage in self.preheater.stages:
+
+            print(
+                f">>> VALIDATING STAGE {stage.stage_id}",
+                flush=True,
+            )
 
             result = validate_energy(
                 energy_in=stage.energy_in,
                 energy_out=stage.energy_out,
+            )
+
+            print(
+                f">>> VALIDATED STAGE {stage.stage_id}",
+                flush=True,
             )
 
             report_validation(
@@ -204,6 +214,13 @@ class Twin:
                 equipment=f"Preheater Stage {stage.stage_id}",
                 balance_type="energy",
             )
+
+            print(
+                f">>> REPORTED STAGE {stage.stage_id}",
+                flush=True,
+            )
+
+        print(">>> AFTER ENERGY VALIDATION", flush=True)
 
     # --------------------------------------------------
     def _safe_inputs(self, raw):
@@ -259,6 +276,113 @@ class Twin:
                 ),
             ),
 
+        }
+        
+            # ==========================================================
+    # STEADY-STATE STATE SNAPSHOT
+    # ==========================================================
+    def _snapshot_state(self):
+
+        return {
+            "Tg_burning": self.state.Tg_burning.copy(),
+            "Ts_burning": self.state.Ts_burning.copy(),
+            "Tw_burning": self.state.Tw_burning.copy(),
+
+            "Tg_transition": self.state.Tg_transition.copy(),
+            "Ts_transition": self.state.Ts_transition.copy(),
+            "Tw_transition": self.state.Tw_transition.copy(),
+
+            "Tg_calciner": self.state.Tg_calciner.copy(),
+            "Ts_calciner": self.state.Ts_calciner.copy(),
+            "Tw_calciner": self.state.Tw_calciner.copy(),
+
+            "Tg_preheater": self.state.Tg_preheater.copy(),
+            "Ts_preheater": self.state.Ts_preheater.copy(),
+            "Tw_preheater": self.state.Tw_preheater.copy(),
+
+            "Tg_cooler": self.state.Tg_cooler.copy(),
+            "Ts_cooler": self.state.Ts_cooler.copy(),
+            "Tw_cooler": self.state.Tw_cooler.copy(),
+
+            "m_dot_g": float(self.state.m_dot_g),
+            "m_dot_s": float(self.state.m_dot_s),
+        }
+        
+    # ==========================================================
+    # STEADY-STATE CONVERGENCE RESIDUAL
+    # ==========================================================
+    def _state_residual(self, old_state):
+        thermal_residual = 0.0
+
+        zone_keys = {
+            "Burning": [
+                "Tg_burning",
+                "Ts_burning",
+                "Tw_burning",
+            ],
+            "Transition": [
+                "Tg_transition",
+                "Ts_transition",
+                "Tw_transition",
+            ],
+            "Calciner": [
+                "Tg_calciner",
+                "Ts_calciner",
+                "Tw_calciner",
+            ],
+            "Preheater": [
+                "Tg_preheater",
+                "Ts_preheater",
+                "Tw_preheater",
+            ],
+            "Cooler": [
+                "Tg_cooler",
+                "Ts_cooler",
+                "Tw_cooler",
+            ],
+        }
+
+        zone_residuals = {}
+
+        for zone, keys in zone_keys.items():
+
+            zone_residual = 0.0
+
+            for key in keys:
+                old_value = old_state[key]
+                new_value = getattr(self.state, key)
+
+                residual = np.max(
+                    np.abs(new_value - old_value)
+                )
+
+                zone_residual = max(
+                    zone_residual,
+                    residual,
+                )
+
+            zone_residuals[zone] = zone_residual
+
+            thermal_residual = max(
+                thermal_residual,
+                zone_residual,
+            )
+
+        mass_residual = max(
+            abs(
+                self.state.m_dot_g
+                - old_state["m_dot_g"]
+            ),
+            abs(
+                self.state.m_dot_s
+                - old_state["m_dot_s"]
+            ),
+        )
+
+        return {
+            "thermal": thermal_residual,
+            "mass": mass_residual,
+            "zones": zone_residuals,
         }
         
         
@@ -367,13 +491,6 @@ class Twin:
         # ======================================================
         inputs["rho_g"] = getattr(self.state, "rho_g", 1.2)
 
-
-        inputs["rho_g"] = getattr(
-            self.state,
-            "rho_g",
-            1.2,
-        )
-
         # ======================================================
         # THERMAL ZONE ORDER
         # GAS FLOW: BURNING -> TRANSITION -> CALCINER
@@ -438,6 +555,7 @@ class Twin:
         # LOGGING
         # ======================================================
         if self.time >= self._next_log_time:
+            print(">>> ENTERING LOGGING", flush=True)
 
             idx = self.state.Tg_burning.shape[0] // 2
 
@@ -464,6 +582,8 @@ class Twin:
 
             fuel_rate_total = inputs["Fuel_rate_total"]
 
+            print(">>> TEMPERATURE SAMPLES DONE", flush=True)
+
             # ======================================================
             # TOTAL WALL LOSSES
             # ======================================================
@@ -485,6 +605,8 @@ class Twin:
                 + self.state.Preheater_stored_energy_change
                 + self.state.Cooler_stored_energy_change
             )
+
+            print(">>> ENERGY LOGGING DONE", flush=True)
 
             # ======================================================
             # TOTAL EXHAUST ENTHALPY
@@ -511,11 +633,7 @@ class Twin:
                 - total_wall_loss
                 - total_stored
             )
-            
-            # ======================================================
-            # MASS FLOW
-            # ======================================================
-            
+
             # ======================================================
             # MASS INVENTORY + GLOBAL MASS BALANCE
             # ======================================================
@@ -543,6 +661,7 @@ class Twin:
 
                 total_CaCO3 += CaCO3
 
+            print(">>> CaCO3 INVENTORY DONE", flush=True)
 
             # ------------------------------------------------------
             # TOTAL SOLID INVENTORY
@@ -566,7 +685,7 @@ class Twin:
                         )
                     )
 
-
+            print(">>> SOLID INVENTORY DONE", flush=True)
 
             # ------------------------------------------------------
             # TOTAL GAS INVENTORY
@@ -590,6 +709,9 @@ class Twin:
                         )
                     )
 
+            print(">>> GAS INVENTORY DONE", flush=True)
+
+            print(">>> BEFORE MASS BALANCE", flush=True)
 
             # ======================================================
             # GLOBAL MASS BALANCE
@@ -604,7 +726,6 @@ class Twin:
                     total_solid_mass + total_gas_mass
                 )
 
-
             # ------------------------------------------------------
             # CURRENT INVENTORIES
             # ------------------------------------------------------
@@ -616,7 +737,6 @@ class Twin:
             self.state.Total_gas_inventory = (
                 total_gas_mass
             )
-
 
             # ------------------------------------------------------
             # EXPECTED TOTAL MASS
@@ -633,7 +753,6 @@ class Twin:
                 - self.state.Cumulative_clinker_mass
             )
 
-
             # ------------------------------------------------------
             # ACTUAL TOTAL MASS
             #
@@ -645,7 +764,6 @@ class Twin:
                 + total_gas_mass
             )
 
-
             # ------------------------------------------------------
             # RESIDUAL
             # ------------------------------------------------------
@@ -654,7 +772,6 @@ class Twin:
                 mass_expected
                 - mass_actual
             )
-
 
             # ------------------------------------------------------
             # RELATIVE RESIDUAL
@@ -668,37 +785,101 @@ class Twin:
                 )
             )
 
+            print(">>> AFTER MASS BALANCE", flush=True)
 
             self._next_log_time += self.log_interval
-
+        
+        print(">>> STEP RETURN", flush=True)
 
         return self.state
 
     # --------------------------------------------------
     def run(self):
 
-        t_end = self.total_hours * 3600.0
-        n_steps = int(t_end / self.dt)
+        # ======================================================
+        # STEADY-STATE SOLVER
+        # ======================================================
+        max_iterations = 10000
+
+        thermal_tolerance = 1e-3
+        mass_tolerance = 1e-6
 
         # ======================================================
         # INIT SAFETY
         # ======================================================
         self.time = 0.0
         self._next_log_time = 0.0
+        self._next_validation_time = 0.0
 
-        print("TWIN STARTED", flush=True)
+        print(
+            "STEADY-STATE SOLVE STARTED",
+            flush=True,
+        )
 
         # ======================================================
-        # MAIN LOOP
+        # CONVERGENCE LOOP
         # ======================================================
-        for i in range(n_steps):
+        for iteration in range(max_iterations):
+
+            old_state = self._snapshot_state()
 
             try:
                 self.step()
 
             except Exception as e:
-                print(f"[TWIN CRASH @ step {i}] -> {repr(e)}")
-                break
+
+                print(
+                    f"[STEADY STATE CRASH @ "
+                    f"iteration {iteration + 1}] "
+                    f"-> {repr(e)}",
+                    flush=True,
+                )
+
+                raise
+
+            residual = self._state_residual(
+                old_state
+            )
+
+            zones = residual["zones"]
+
+            print(
+                f"[ITER {iteration + 1:05d}] "
+                f"thermal={residual['thermal']:.6e} K | "
+                f""
+                f"Burning={zones['Burning']:.6e} | "
+                f"Transition={zones['Transition']:.6e} | "
+                f"Calciner={zones['Calciner']:.6e} | "
+                f"Preheater={zones['Preheater']:.6e} | "
+                f"Cooler={zones['Cooler']:.6e} | "
+                f"mass={residual['mass']:.6e} kg/s",
+                flush=True,
+            )
+
+            # ==================================================
+            # CONVERGENCE CHECK
+            # ==================================================
+            if (
+                residual["thermal"] < thermal_tolerance
+                and
+                residual["mass"] < mass_tolerance
+            ):
+
+                print(
+                    "STEADY STATE CONVERGED "
+                    f"@ iteration {iteration + 1}",
+                    flush=True,
+                )
+
+                return self.state
+
+        # ======================================================
+        # NOT CONVERGED
+        # ======================================================
+        raise RuntimeError(
+            "Steady-state solution did not converge "
+            f"after {max_iterations} iterations."
+        )
 
 
 if __name__ == "__main__":

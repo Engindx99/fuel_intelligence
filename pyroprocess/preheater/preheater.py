@@ -203,8 +203,8 @@ class Preheater:
             state,
         )
 
-        # Solid inlet remains temperature-based for now
-        Ts_in = Ts[0]
+        # Fresh raw meal enters Stage 5.
+        Ts_feed = float(state.Feed_temperature)
 
         # ======================================================
         # INITIAL ARRAYS
@@ -232,15 +232,122 @@ class Preheater:
 
         self.gas_handoff_residuals = []
         self.solid_handoff_residuals = []
+        
+        # ======================================================
+        # COUNTER-CURRENT STAGE SOLUTION
+        # ======================================================
+
+        # Gas:
+        # Stage 1 -> Stage 2 -> Stage 3 -> Stage 4 -> Stage 5
+        #
+        # Solid:
+        # Fresh feed -> Stage 5 -> Stage 4 -> Stage 3
+        #            -> Stage 2 -> Stage 1
+
+        max_iterations = 50
+        tolerance = 1e-5
+
+        # Initial guesses for solid inlet temperature of
+        # each stage.
+        solid_in_guess = np.full(
+            self.N,
+            Ts_feed,
+            dtype=float,
+        )
+
+        solid_out = np.empty(
+            self.N,
+            dtype=float,
+        )
 
         # ======================================================
-        # STAGE-BY-STAGE THERMAL SOLUTION
+        # FIXED-POINT ITERATION
+        # ======================================================
+
+        for iteration in range(max_iterations):
+
+            Tg_current = Tg_in
+
+            # --------------------------------------------------
+            # GAS SWEEP: Stage 1 -> Stage 5
+            # --------------------------------------------------
+
+            for i, stage in enumerate(self.stages):
+
+                # Fresh feed enters Stage 5.
+                if i == self.N - 1:
+                    Ts_current = Ts_feed
+                else:
+                    # Solid comes from the next stage.
+                    Ts_current = solid_in_guess[i]
+
+                stage.solve(
+                    gas_inlet_temperature=Tg_current,
+                    solid_inlet_temperature=Ts_current,
+                    m_dot_g=m_dot_g,
+                    m_dot_s=m_dot_s,
+                    state=state,
+                    model=self,
+                    reaction_power=-reaction_heat_cells[i],
+                )
+
+                solid_out[i] = (
+                    stage.solid_outlet_temperature
+                )
+
+                Tg_current = (
+                    stage.gas_outlet_temperature
+                )
+
+            # --------------------------------------------------
+            # UPDATE SOLID INLET PROFILE
+            # --------------------------------------------------
+
+            new_solid_in = np.empty(
+                self.N,
+                dtype=float,
+            )
+
+            # Fresh feed enters Stage 5.
+            new_solid_in[-1] = Ts_feed
+
+            # Stage i receives solids from Stage i+1.
+            new_solid_in[:-1] = solid_out[1:]
+
+            # --------------------------------------------------
+            # CONVERGENCE
+            # --------------------------------------------------
+
+            solid_error = np.max(
+                np.abs(
+                    new_solid_in
+                    - solid_in_guess
+                )
+            )
+
+            solid_in_guess = new_solid_in
+
+            if solid_error < tolerance:
+                break
+
+        else:
+            raise RuntimeError(
+                "Preheater counter-current solution did not converge: "
+                f"solid_error={solid_error:.6e} K"
+            )
+
+        # ======================================================
+        # FINAL CONSISTENT SWEEP
         # ======================================================
 
         Tg_current = Tg_in
-        Ts_current = Ts_in
 
         for i, stage in enumerate(self.stages):
+
+            if i == self.N - 1:
+                Ts_current = Ts_feed
+            else:
+                Ts_current = solid_in_guess[i]
 
             stage.solve(
                 gas_inlet_temperature=Tg_current,
@@ -251,25 +358,50 @@ class Preheater:
                 model=self,
                 reaction_power=-reaction_heat_cells[i],
             )
-            
-            # --------------------------------------------------
-            # ENTHALPY HANDOFF VALIDATION
-            # --------------------------------------------------
+
+            Tg_new[i] = (
+                stage.gas_outlet_temperature
+            )
+
+            Ts_new[i] = (
+                stage.solid_outlet_temperature
+            )
+
+            Tw_new[i] = (
+                stage.wall_temperature
+            )
+
+            Tg_current = (
+                stage.gas_outlet_temperature
+            )
+
+
+        # ======================================================
+        # ENTHALPY HANDOFF VALIDATION
+        # ======================================================
+
+        self.gas_handoff_residuals = []
+        self.solid_handoff_residuals = []
+
+        for i, stage in enumerate(self.stages):
 
             if i == 0:
                 Hgas_expected = H_in
+            else:
+                Hgas_expected = (
+                    self.stages[i - 1].gas_outlet_enthalpy
+                )
 
+            if i == self.N - 1:
                 Hsolid_expected = (
                     m_dot_s
                     * self.Cp_s
-                    * (Ts_in - self.T_ref)
+                    * (Ts_feed - self.T_ref)
                 )
-
             else:
-                previous_stage = self.stages[i - 1]
-
-                Hgas_expected = previous_stage.gas_outlet_enthalpy
-                Hsolid_expected = previous_stage.solid_outlet_enthalpy
+                Hsolid_expected = (
+                    self.stages[i + 1].solid_outlet_enthalpy
+                )
 
             gas_handoff_residual = (
                 stage.gas_inlet_enthalpy
@@ -289,40 +421,9 @@ class Preheater:
                 float(solid_handoff_residual)
             )
 
-
-            # --------------------------------------------------
-            # Current stage outlet -> next stage inlet
-            # --------------------------------------------------
-
-            Tg_current = stage.gas_outlet_temperature
-            Ts_current = stage.solid_outlet_temperature
-
-            # --------------------------------------------------
-            # Store stage outputs
-            # --------------------------------------------------
-
-            Tg_new[i] = stage.gas_outlet_temperature
-            Ts_new[i] = stage.solid_outlet_temperature
-            Tw_new[i] = stage.wall_temperature
-
         # ======================================================
         # TOTAL STAGE ENERGY TRANSFERS
         # ======================================================
-
-        Q_gs_total = sum(
-            stage.Q_gs
-            for stage in self.stages
-        )
-
-        Q_gw_total = sum(
-            stage.Q_gw
-            for stage in self.stages
-        )
-
-        Q_ws_total = sum(
-            stage.Q_ws
-            for stage in self.stages
-        )
 
         Q_reaction_total = sum(
             stage.Q_reaction
@@ -343,11 +444,11 @@ class Preheater:
         Hsolid_in = (
             m_dot_s
             * self.Cp_s
-            * (Ts_in - self.T_ref)
+            * (Ts_feed - self.T_ref)
         )
 
         Hgas_out = self.stages[-1].gas_outlet_enthalpy
-        Hsolid_out = self.stages[-1].solid_outlet_enthalpy
+        Hsolid_out = self.stages[0].solid_outlet_enthalpy
 
         self.energy_in = (
             Hgas_in
@@ -365,47 +466,6 @@ class Preheater:
             self.energy_in
             - self.energy_out
         )
-
-        # ======================================================
-        # GLOBAL PREHEATER DEBUG
-        # ======================================================
-
-        print("\n========== PREHEATER GLOBAL DEBUG ==========")
-
-        print(f"Hgas_in              = {Hgas_in:.6e} W")
-        print(f"Hsolid_in            = {Hsolid_in:.6e} W")
-
-        print(f"Hgas_out             = {Hgas_out:.6e} W")
-        print(f"Hsolid_out           = {Hsolid_out:.6e} W")
-
-        print(f"Q_gs_total           = {Q_gs_total:.6e} W")
-        print(f"Q_gw_total           = {Q_gw_total:.6e} W")
-        print(f"Q_ws_total           = {Q_ws_total:.6e} W")
-
-        print(f"Q_wall_loss_total    = {Q_wall_loss_total:.6e} W")
-        print(f"Q_reaction_total     = {Q_reaction_total:.6e} W")
-        print(
-            f"reaction_heat_positive = "
-            f"{-Q_reaction_total:.6e} W"
-        )
-
-        stage_residual_sum = sum(
-            stage.energy_residual
-            for stage in self.stages
-        )
-
-        print(f"stage_residual_sum   = {stage_residual_sum:.6e} W")
-
-        print(f"energy_in            = {self.energy_in:.6e} W")
-        print(f"energy_out           = {self.energy_out:.6e} W")
-        print(f"residual             = {self.energy_residual:.6e} W")
-
-        # ======================================================
-        # WALL LOSS
-        # ======================================================
-
-        wall_loss = Q_wall_loss_total
-        wall_debug = {}
 
         # ======================================================
         # WALL LOSS
@@ -486,7 +546,7 @@ class Preheater:
         # ======================================================
 
         state.Tg_preheater[0] = state.Tg_calciner[0]
-        state.Ts_preheater[0] = state.Feed_temperature
+        state.Ts_preheater[-1] = state.Feed_temperature
 
         # ======================================================
         # PREHEATER CHEMISTRY
@@ -569,7 +629,7 @@ class Preheater:
         H_solid_out = (
             state.m_dot_s
             * self.Cp_s
-            * (Ts[-1] - self.T_ref)
+            * (Ts[0] - self.T_ref)
         )
 
         return H_solid_out
