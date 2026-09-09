@@ -5,11 +5,16 @@ from pyroprocess.calciner import Calciner
 from pyroprocess.preheater import Preheater
 from pyroprocess.cooler import Cooler
 
-from controls.mpc import MasterMPC
+
 from physics.mass_transport import MassTransport
 from physics.physics import gas_mass_balance
-from dataclasses import fields
+from physics.steady_state_mass import SteadyStateMassFlow
+
 from chemistry.phases import SolidPhases, GasPhases
+
+from dataclasses import fields
+
+from controls.mpc import MasterMPC
 
 from validators.energy_validator import validate_energy
 from validators.reporter import report_validation
@@ -31,6 +36,7 @@ class Twin:
         self.state = state
         
         self.mass_transport = MassTransport()
+        self.mass_flow = SteadyStateMassFlow()
 
         # ======================================================
         # ZONE MODELS
@@ -139,10 +145,23 @@ class Twin:
         }
 
         # ======================================================
-        # OPTIONAL FEED (IMPORTANT FOR m_dot_s PIPELINE)
+        # FEED CONFIG
         # ======================================================
         feed = cfg.get("feed", {})
-        self._last_inputs["Feed_rate_kg_s"] = feed.get("Feed_rate_kg_s", 0.0)
+
+        self._last_inputs["Feed_rate_kg_s"] = feed.get(
+            "Feed_rate_kg_s",
+            0.0
+        )
+
+        # ======================================================
+        # INITIAL STEADY-STATE MASS FLOW INPUTS
+        # ======================================================
+        self.mass_flow.set_external_inputs(
+            m_dot_raw_meal=self._last_inputs["Feed_rate_kg_s"],
+            m_dot_fuel=self._last_inputs["Fuel_rate_total"],
+            m_dot_air=0.0,
+        )
         
         
     # ==========================================================
@@ -180,6 +199,10 @@ class Twin:
         result = validate_energy(
             energy_in=self.preheater.energy_in,
             energy_out=self.preheater.energy_out,
+            energy_source=sum(
+                stage.Q_reaction
+                for stage in self.preheater.stages
+            ),
         )
 
         report_validation(
@@ -368,15 +391,8 @@ class Twin:
                 zone_residual,
             )
 
-        mass_residual = max(
-            abs(
-                self.state.m_dot_g
-                - old_state["m_dot_g"]
-            ),
-            abs(
-                self.state.m_dot_s
-                - old_state["m_dot_s"]
-            ),
+        mass_residual = abs(
+            self.mass_flow.steady_state_mass_residual
         )
 
         return {
@@ -449,8 +465,153 @@ class Twin:
             f"after {max_iter} iterations. "
             f"Residual = {err:.6e} W"
         )
+        
+        
 
+    def _update_steady_state_mass_flow(self, inputs):
+        """
+        Update continuous steady-state mass flows.
 
+        All flow rates are SI:
+            kg/s
+        """
+
+        # ======================================================
+        # EXTERNAL INPUTS
+        # ======================================================
+
+        m_dot_raw_meal = float(
+            inputs["Feed_rate_kg_s"]
+        )
+
+        m_dot_fuel = float(
+            inputs["Fuel_rate_total"]
+        )
+
+        # ======================================================
+        # COMBUSTION GAS
+        # ======================================================
+
+        m_dot_g_burning = gas_mass_balance(
+            fuel_rate_total=m_dot_fuel,
+            O2=inputs["O2"],
+            eps=self.eps,
+        )
+
+        m_dot_air = (
+            m_dot_g_burning
+            - m_dot_fuel
+        )
+
+        self.mass_flow.set_external_inputs(
+            m_dot_raw_meal=m_dot_raw_meal,
+            m_dot_fuel=m_dot_fuel,
+            m_dot_air=m_dot_air,
+        )
+
+        self.mass_flow.m_dot_g_burning = (
+            m_dot_g_burning
+        )
+
+        # ======================================================
+        # SOLID STREAM
+        # ======================================================
+
+        self.mass_flow.m_dot_s_preheater = (
+            m_dot_raw_meal
+        )
+
+        self.mass_flow.m_dot_s_calciner_in = (
+            self.mass_flow.m_dot_s_preheater
+        )
+
+        # ======================================================
+        # GAS: BURNING -> TRANSITION
+        # ======================================================
+
+        self.mass_flow.m_dot_g_transition = (
+            self.mass_flow.m_dot_g_burning
+        )
+
+        # ======================================================
+        # CALCINER CHEMISTRY
+        # ======================================================
+
+        m_dot_CO2_generated = float(
+            getattr(
+                self.state,
+                "m_dot_CO2_generated_calciner",
+                0.0,
+            )
+        )
+
+        (
+            m_dot_s_calciner_out,
+            m_dot_g_calciner,
+        ) = self.mass_flow.calculate_calciner_flow(
+            m_dot_CO2_generated=m_dot_CO2_generated
+        )
+
+        # ======================================================
+        # SOLID DOWNSTREAM
+        # ======================================================
+
+        self.mass_flow.m_dot_s_transition = (
+            m_dot_s_calciner_out
+        )
+
+        self.mass_flow.m_dot_s_burning = (
+            self.mass_flow.m_dot_s_transition
+        )
+
+        self.mass_flow.m_dot_s_cooler = (
+            self.mass_flow.m_dot_s_burning
+        )
+
+        # ======================================================
+        # GAS DOWNSTREAM
+        # ======================================================
+
+        self.mass_flow.m_dot_g_preheater = (
+            self.mass_flow.m_dot_g_calciner
+        )
+
+        self.mass_flow.m_dot_exhaust = (
+            self.mass_flow.m_dot_g_preheater
+        )
+
+        # ======================================================
+        # CLINKER
+        # ======================================================
+
+        self.mass_flow.m_dot_clinker = (
+            self.mass_flow.m_dot_s_cooler
+        )
+
+        # ======================================================
+        # GLOBAL MASS BALANCE
+        # ======================================================
+
+        self.mass_flow.calculate_global_balance()
+
+        # ======================================================
+        # STATE OUTPUTS
+        # ======================================================
+
+        self.state.m_dot_s = (
+            self.mass_flow.m_dot_s_burning
+        )
+
+        self.state.m_dot_g = (
+            self.mass_flow.m_dot_g_burning
+        )
+
+        self.state.Global_mass_balance = (
+            self.mass_flow.steady_state_mass_residual
+        )
+
+        return self.state
+    
     # --------------------------------------------------
     def step(self):
         
@@ -475,64 +636,68 @@ class Twin:
             print("MPC FAILED:", repr(e))
 
         inputs = dict(self._last_inputs)
-        
+
         # ======================================================
-        # CENTRAL GAS MASS FLOW
+        # INITIAL STEADY-STATE MASS FLOW
+        #
+        # Provides inlet flows for thermal calculations.
+        # Calciner reaction products are not available yet.
         # ======================================================
-        self.state.m_dot_g = gas_mass_balance(
-            fuel_rate_total=inputs["Fuel_rate_total"],
-            O2=inputs["O2"],
-            eps=self.eps,
+
+        self._update_steady_state_mass_flow(inputs)
+
+        inputs["rho_g"] = getattr(
+            self.state,
+            "rho_g",
+            1.2
         )
 
-
         # ======================================================
-        # GAS PROPERTIES
-        # ======================================================
-        inputs["rho_g"] = getattr(self.state, "rho_g", 1.2)
-
-        # ======================================================
-        # THERMAL ZONE ORDER
-        # GAS FLOW: BURNING -> TRANSITION -> CALCINER
-        # ======================================================
-
-        # ------------------------------------------------------
         # 1. BURNING
-        # ------------------------------------------------------
+        # ======================================================
+
         self.state = self.burning.apply(
             self.state,
             inputs,
             self.dt,
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # 2. TRANSITION
-        # ------------------------------------------------------
+        # ======================================================
+
         self.state = self.transition.apply(
             self.state,
             self.dt,
         )
 
-        # ------------------------------------------------------
+        # ======================================================
         # 3. CALCINER
-        # ------------------------------------------------------
+        # ======================================================
+
         self.state = self.calciner.apply(
             self.state,
         )
 
+        # ======================================================
+        # UPDATE MASS FLOW AFTER CALCINATION
+        # ======================================================
+
+        self._update_steady_state_mass_flow(inputs)
 
         # ======================================================
-        # PREHEATER
+        # 4. PREHEATER
         # ======================================================
+
         self.state = self.preheater.apply(
             self.state,
             self.dt,
         )
 
+        # ======================================================
+        # 5. COOLER
+        # ======================================================
 
-        # ======================================================
-        # COOLER
-        # ======================================================
         self.state = self.cooler.apply(
             self.state,
             self.dt,

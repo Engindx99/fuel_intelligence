@@ -1,6 +1,6 @@
 # ======================================================
-# RAW MEAL COMPOSITION
-# Mass fractions (sum = 1.0)
+# Raw meal composition
+# Mass basis = 100000 kg
 # ======================================================
 
 RAW_MEAL_COMPOSITION = {

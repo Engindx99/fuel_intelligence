@@ -40,6 +40,7 @@ class Preheater:
         self.energy_in = 0.0
         self.energy_out = 0.0
         self.energy_residual = 0.0
+        self.Q_reaction_total = 0.0
         
         # ======================================================
         # STAGE REFERENCE GAS TEMPERATURE RANGES
@@ -425,7 +426,7 @@ class Preheater:
         # TOTAL STAGE ENERGY TRANSFERS
         # ======================================================
 
-        Q_reaction_total = sum(
+        self.Q_reaction_total = sum(
             stage.Q_reaction
             for stage in self.stages
         )
@@ -433,6 +434,18 @@ class Preheater:
         Q_wall_loss_total = sum(
             stage.Q_wall_loss
             for stage in self.stages
+        )
+
+        print("\n========== PREHEATER STAGE TOTALS ==========")
+
+        print(
+            f"Q_wall_total = "
+            f"{Q_wall_loss_total:.12e} W"
+        )
+
+        print(
+            f"Q_reaction_total = "
+            f"{self.Q_reaction_total:.12e} W"
         )
 
         # ======================================================
@@ -448,6 +461,7 @@ class Preheater:
         )
 
         Hgas_out = self.stages[-1].gas_outlet_enthalpy
+
         Hsolid_out = self.stages[0].solid_outlet_enthalpy
 
         self.energy_in = (
@@ -459,13 +473,23 @@ class Preheater:
             Hgas_out
             + Hsolid_out
             + Q_wall_loss_total
-            - Q_reaction_total
         )
 
         self.energy_residual = (
             self.energy_in
+            + self.Q_reaction_total
             - self.energy_out
         )
+
+        print("\n========== PREHEATER GLOBAL ENERGY ==========")
+        print(f"Hgas_in          = {Hgas_in:.9e} W")
+        print(f"Hsolid_in        = {Hsolid_in:.9e} W")
+        print(f"Hgas_out         = {Hgas_out:.9e} W")
+        print(f"Hsolid_out       = {Hsolid_out:.9e} W")
+        print(f"Q_wall_loss      = {Q_wall_loss_total:.9e} W")
+        print(f"energy_in        = {self.energy_in:.9e} W")
+        print(f"energy_out       = {self.energy_out:.9e} W")
+        print(f"residual         = {self.energy_residual:.9e} W")
 
         # ======================================================
         # WALL LOSS
@@ -600,6 +624,7 @@ class Preheater:
         state.Preheater_energy_balance = (
             state.Hgas_preheater_in
             + state.Hsolid_preheater_in
+            + state.Preheater_Q_sink
             - state.Hgas_preheater_out
             - state.Hsolid_preheater_out
             - state.Wall_loss_preheater
