@@ -5,19 +5,14 @@ from pyroprocess.calciner import Calciner
 from pyroprocess.preheater import Preheater
 from pyroprocess.cooler import Cooler
 
-
-from physics.mass_transport import MassTransport
 from physics.physics import gas_mass_balance
+from physics.physics import h_gas
+
 from physics.steady_state_mass import SteadyStateMassFlow
 
-from chemistry.phases import SolidPhases, GasPhases
 
-from dataclasses import fields
-
-from controls.mpc import MasterMPC
-
-from validators.energy_validator import validate_energy
-from validators.reporter import report_validation
+from validators.energy import validate_energy
+from reporter.validation import report_validation
 
 import numpy as np
 import yaml 
@@ -31,11 +26,9 @@ def load_cfg(path):
 
 class Twin:
 
-    def __init__(self, state, cfg, mpc_cfg):
+    def __init__(self, state, cfg):
 
         self.state = state
-        
-        self.mass_transport = MassTransport()
         self.mass_flow = SteadyStateMassFlow()
 
         # ======================================================
@@ -78,69 +71,12 @@ class Twin:
 
 
         # ======================================================
-        # MPC (optional)
-        # ======================================================
-        # self.mpc = MasterMPC(mpc_cfg, self.burning)
-
-        # ======================================================
-        # TIME CONFIG
-        # ======================================================
-        self.time = 0.0
-        self.dt = cfg["simulation"]["dt"]
-        self.total_hours = cfg["simulation"]["total_hours"]
-        self.chunk_hours = cfg["simulation"]["chunk_hours"]
-
-        # ======================================================
-        # LOGGING (SAFE)
-        # ======================================================
-        self.log_interval = cfg.get(
-            "logging",
-            {}
-        ).get(
-            "interval_sec",
-            60,
-        )
-
-        self._next_log_time = 0.0
-
-        # ======================================================
-        # VALIDATION LOGGING
-        # ======================================================
-        self.validation_interval = cfg.get(
-            "validation",
-            {}
-        ).get(
-            "interval_sec",
-            60,
-        )
-
-        self._next_validation_time = 0.0
-
-        # ======================================================
-        # OPERATIONAL LAYER (NOW ACTIVE)
-        # ======================================================
-        self.operational = cfg.get("operational", {})
-
-        # ======================================================
-        # FUEL CONFIG (CONSISTENT MASS BASIS)
+        # FUEL CONFIG (PETCOKE ONLY)
         # ======================================================
         fuel = cfg.get("fuel", {})
 
-        petcoke = fuel.get("Petcoke_ratio", 0.0)
-        rdf = fuel.get("RDF_ratio", 0.0)
-        h2 = fuel.get("H2_ratio", 0.0)
-
-        coal = 1.0 - (petcoke + rdf + h2)
-
-        if coal < -1e-9:
-            raise ValueError("Fuel ratios invalid (sum > 1.0)")
-
         self._last_inputs = {
             "Fuel_rate_total": fuel.get("Fuel_rate_total", 0.0),
-            "Petcoke_ratio": petcoke,
-            "Coal_ratio": coal,
-            "RDF_ratio": rdf,
-            "H2_ratio": h2,
             "O2": fuel.get("O2", 3.5),
         }
 
@@ -163,20 +99,67 @@ class Twin:
             m_dot_air=0.0,
         )
         
+    def _validate_solid_handoffs(self):
+        state = self.state
+
+        print("\n========== SOLID HANDOFF DEBUG ==========")
+
+        print("\n--- Preheater -> Calciner ---")
+        print(f"Hsolid_preheater_out = {state.Hsolid_preheater_out:.12e} W")
+        print(f"Hsolid_calciner_in   = {state.Hsolid_calciner_in:.12e} W")
+        print(
+            f"Difference           = "
+            f"{state.Hsolid_preheater_out - state.Hsolid_calciner_in:.12e} W"
+        )
+
+        print("\n--- Calciner -> Transition ---")
+        print(f"Hsolid_calciner_out  = {state.Hsolid_calciner_out:.12e} W")
+        print(f"Hsolid_transition_in  = {state.Hsolid_transition_in:.12e} W")
+        print(
+            f"Difference           = "
+            f"{state.Hsolid_calciner_out - state.Hsolid_transition_in:.12e} W"
+        )
+
+        print("\n--- Burning -> Cooler ---")
+        print(f"Hsolid_burning_out    = {state.Hsolid_burning_out:.12e} W")
+        print(f"Hsolid_cooler_in      = {state.Hsolid_cooler_in:.12e} W")
+        print(
+            f"Difference            = "
+            f"{state.Hsolid_burning_out - state.Hsolid_cooler_in:.12e} W"
+        )
+
+        assert np.isclose(
+            state.Hsolid_calciner_in,
+            state.Hsolid_preheater_out,
+            rtol=1e-10,
+            atol=1e-3,
+        )
+
+        assert np.isclose(
+            state.Hsolid_transition_in,
+            state.Hsolid_calciner_out,
+            rtol=1e-10,
+            atol=1e-3,
+        )
+
+        assert np.isclose(
+            state.Hsolid_cooler_in,
+            state.Hsolid_burning_out,
+            rtol=1e-10,
+            atol=1e-3,
+        )
+        
         
     # ==========================================================
     # CENTRAL ENERGY VALIDATION
     # ==========================================================
     def _validate_energy_balances(self):
 
-        # ======================================================
-        # MAIN EQUIPMENT
-        # ======================================================
-
         equipment_models = [
             ("Burning", self.burning),
             ("Transition", self.transition),
             ("Calciner", self.calciner),
+            ("Cooler", self.cooler),
         ]
 
         for equipment_name, equipment in equipment_models:
@@ -217,19 +200,9 @@ class Twin:
 
         for stage in self.preheater.stages:
 
-            print(
-                f">>> VALIDATING STAGE {stage.stage_id}",
-                flush=True,
-            )
-
             result = validate_energy(
                 energy_in=stage.energy_in,
                 energy_out=stage.energy_out,
-            )
-
-            print(
-                f">>> VALIDATED STAGE {stage.stage_id}",
-                flush=True,
             )
 
             report_validation(
@@ -238,70 +211,131 @@ class Twin:
                 balance_type="energy",
             )
 
-            print(
-                f">>> REPORTED STAGE {stage.stage_id}",
-                flush=True,
-            )
 
-        print(">>> AFTER ENERGY VALIDATION", flush=True)
+    def _validate_global_energy_balance(self):
 
-    # --------------------------------------------------
-    def _safe_inputs(self, raw):
+        state = self.state
 
-        return {
+        # ======================================================
+        # GLOBAL EXTERNAL INPUT
+        # ======================================================
 
-            # ================= FUEL =================
-            "Fuel_rate_total": raw.get(
-                "Fuel_rate_total",
-                self._last_inputs["Fuel_rate_total"],
-            ),
+        H_rawmeal_in = state.Hsolid_preheater_in
+        Q_burning = state.Q_burning
 
-            "Petcoke_ratio": raw.get(
-                "Petcoke_ratio",
-                self._last_inputs["Petcoke_ratio"],
-            ),
+        global_energy_in = (
+            H_rawmeal_in
+            + Q_burning
+        )
 
-            "Coal_ratio": raw.get(
-                "Coal_ratio",
-                self._last_inputs["Coal_ratio"],
-            ),
+        # ======================================================
+        # GLOBAL EXTERNAL OUTPUT
+        # ======================================================
 
-            "RDF_ratio": raw.get(
-                "RDF_ratio",
-                self._last_inputs["RDF_ratio"],
-            ),
+        H_exhaust_out = state.Hgas_cooler_out
+        H_clinker_out = state.Hsolid_cooler_out
 
-            "H2_ratio": raw.get(
-                "H2_ratio",
-                self._last_inputs["H2_ratio"],
-            ),
+        Q_wall_total = (
+            state.Wall_loss_burning
+            + state.Wall_loss_transition
+            + state.Wall_loss_calciner
+            + state.Wall_loss_preheater
+            + state.Wall_loss_cooler
+        )
 
-            "O2": raw.get(
-                "O2",
-                self._last_inputs["O2"],
-            ),
+        Q_reaction_total = (
+            state.Calcination_Q_transition
+            + state.Calcination_Q_sink
+            + state.Preheater_Q_sink
+        )
+
+        global_energy_out = (
+            H_exhaust_out
+            + H_clinker_out
+            + Q_wall_total
+            + Q_reaction_total
+        )
+
+        # ======================================================
+        # GLOBAL ENERGY VALIDATION
+        # ======================================================
+
+        result = validate_energy(
+            energy_in=global_energy_in,
+            energy_out=global_energy_out,
+            energy_source=0.0,
+        )
+
+        report_validation(
+            result,
+            equipment="Pyroprocess",
+            balance_type="global_energy",
+        )
+
+        # ======================================================
+        # FINAL GLOBAL OUTPUT
+        # ======================================================
+
+        print()
+        print("========== PYROPROCESS ENERGY CLOSURE ==========")
+
+        print()
+        print("EXTERNAL INPUT")
+        print(
+            f"    Raw meal enthalpy = "
+            f"{H_rawmeal_in:.6e} W"
+        )
+        print(
+            f"    Burning heat      = "
+            f"{Q_burning:.6e} W"
+        )
+        print(
+            f"    Energy in         = "
+            f"{global_energy_in:.6e} W"
+        )
+
+        print()
+        print("EXTERNAL OUTPUT")
+        print(
+            f"    Exhaust gas       = "
+            f"{H_exhaust_out:.6e} W"
+        )
+        print(
+            f"    Clinker           = "
+            f"{H_clinker_out:.6e} W"
+        )
+        print(
+            f"    Wall losses       = "
+            f"{Q_wall_total:.6e} W"
+        )
+        print(
+            f"    Reaction sinks    = "
+            f"{Q_reaction_total:.6e} W"
+        )
+        print(
+            f"    Energy out        = "
+            f"{global_energy_out:.6e} W"
+        )
+
+        print()
+        print("GLOBAL BALANCE")
+        print(
+            f"    Residual          = "
+            f"{result['residual']:.6e} W"
+        )
+        print(
+            f"    Relative residual = "
+            f"{result['relative_residual']:.6e}"
+        )
+        print(
+            f"    Status            = "
+            f"{'PASS' if result['converged'] else 'FAIL'}"
+        )
+
+        print("=" * 58)
 
 
-            # ================= OPERATION =================
-            "rpm": raw.get(
-                "rpm",
-                self.operational.get(
-                    "rpm_default",
-                    1.5
-                ),
-            ),
-
-            "Feed_rate_kg_s": raw.get(
-                "Feed_rate_kg_s",
-                self._last_inputs.get(
-                    "Feed_rate_kg_s",
-                    0.0
-                ),
-            ),
-
-        }
-        
-            # ==========================================================
+    # ==========================================================
     # STEADY-STATE STATE SNAPSHOT
     # ==========================================================
     def _snapshot_state(self):
@@ -395,76 +429,27 @@ class Twin:
             self.mass_flow.steady_state_mass_residual
         )
 
+        # ==========================================================
+        # SOLID ENERGY HANDOFF RESIDUAL
+        # ==========================================================
+
+        solid_handoff_residual = max(
+            abs(
+                self.state.Hsolid_calciner_in
+                - self.state.Hsolid_preheater_out
+            ),
+            abs(
+                self.state.Hsolid_transition_in
+                - self.state.Hsolid_calciner_out
+            ),
+        )
+
         return {
             "thermal": thermal_residual,
             "mass": mass_residual,
+            "solid_handoff": solid_handoff_residual,
             "zones": zone_residuals,
         }
-        
-        
-    # ==========================================================
-    # GAS ENTHALPY FIXED-POINT COUPLING
-    # ==========================================================
-    def _solve_gas_coupling(self, inputs):
-
-        max_iter = 50
-        tol = 1e-3  # W
-
-        H_burning_old = getattr(
-            self.state,
-            "Hgas_burning_out",
-            0.0
-        )
-
-        H_transition_old = getattr(
-            self.state,
-            "Hgas_transition_out",
-            H_burning_old
-        )
-
-        H_calciner_old = getattr(
-            self.state,
-            "Hgas_calciner_out",
-            H_transition_old
-        )
-
-        for iteration in range(max_iter):
-
-            # ======================================================
-            # GAS ENTHALPY FIXED-POINT COUPLING
-            # ======================================================
-            self.state = self._solve_gas_coupling(
-                inputs
-            )
-
-
-            return self.state
-
-            # ==================================================
-            # RELAXATION
-            # ==================================================
-            alpha = 0.5
-
-            H_burning_old = (
-                alpha * H_burning_new
-                + (1.0 - alpha) * H_burning_old
-            )
-
-            H_transition_old = (
-                alpha * H_transition_new
-                + (1.0 - alpha) * H_transition_old
-            )
-
-            H_calciner_old = (
-                alpha * H_calciner_new
-                + (1.0 - alpha) * H_calciner_old
-            )
-
-        raise RuntimeError(
-            "Gas enthalpy coupling did not converge "
-            f"after {max_iter} iterations. "
-            f"Residual = {err:.6e} W"
-        )
         
         
 
@@ -612,30 +597,11 @@ class Twin:
 
         return self.state
     
-    # --------------------------------------------------
+    
     def step(self):
-        
-        self.state = self.mass_transport.apply(
-        self.state,
-        self.dt,
-        )
-
-        # ======================================================
-        # MPC (DISABLED TEMPORARILY)
-        # ======================================================
-        try:
-            # raw_inputs = self.mpc.compute_control(
-            #     self.state,
-            #     self._last_inputs,
-            #     self.time,
-            # )
-            # self._last_inputs = self._safe_inputs(raw_inputs)
-            pass
-
-        except Exception as e:
-            print("MPC FAILED:", repr(e))
 
         inputs = dict(self._last_inputs)
+
 
         # ======================================================
         # INITIAL STEADY-STATE MASS FLOW
@@ -658,8 +624,7 @@ class Twin:
 
         self.state = self.burning.apply(
             self.state,
-            inputs,
-            self.dt,
+            inputs
         )
 
         # ======================================================
@@ -667,8 +632,7 @@ class Twin:
         # ======================================================
 
         self.state = self.transition.apply(
-            self.state,
-            self.dt,
+            self.state
         )
 
         # ======================================================
@@ -686,12 +650,59 @@ class Twin:
         self._update_steady_state_mass_flow(inputs)
 
         # ======================================================
+        # DIAGNOSTIC: CALCINER -> PREHEATER GAS HANDOFF
+        # ======================================================
+
+        print("\n========== CALCINER -> PREHEATER GAS HANDOFF ==========")
+
+        print(
+            f"m_dot_g current       = "
+            f"{self.state.m_dot_g:.12f} kg/s"
+        )
+
+        print(
+            f"Hgas_calciner_out    = "
+            f"{self.state.Hgas_calciner_out:.12e} W"
+        )
+
+        Tg_calciner_out = self.state.Tg_calciner[0]
+
+        print(
+            f"Tg_calciner_out      = "
+            f"{Tg_calciner_out:.6f} K"
+        )
+
+        H_expected = (
+            self.state.m_dot_g
+            * h_gas(
+                Tg_calciner_out,
+                298.15,
+            )
+        )
+
+        print(
+            f"Hgas_expected(new m) = "
+            f"{H_expected:.12e} W"
+        )
+
+        print(
+            f"Handoff difference    = "
+            f"{self.state.Hgas_calciner_out - H_expected:.12e} W"
+        )
+
+        print(
+            f"Relative difference   = "
+            f"{abs(self.state.Hgas_calciner_out - H_expected) / max(abs(H_expected), 1.0):.12e}"
+        )
+
+        print("========================================================\n")
+
+        # ======================================================
         # 4. PREHEATER
         # ======================================================
 
         self.state = self.preheater.apply(
             self.state,
-            self.dt,
         )
 
         # ======================================================
@@ -699,266 +710,17 @@ class Twin:
         # ======================================================
 
         self.state = self.cooler.apply(
-            self.state,
-            self.dt,
+            self.state
         )
         
-        # ======================================================
-        # TIME UPDATE
-        # ======================================================
-        self.time += self.dt
         
-
-        # ======================================================
-        # CENTRAL ENERGY VALIDATION
-        # ======================================================
-        if self.time >= self._next_validation_time:
-            self._validate_energy_balances()
-            self._next_validation_time += self.validation_interval
-
-        # ======================================================
-        # LOGGING
-        # ======================================================
-        if self.time >= self._next_log_time:
-            print(">>> ENTERING LOGGING", flush=True)
-
-            idx = self.state.Tg_burning.shape[0] // 2
-
-            # ================= TEMPERATURE SAMPLES =================
-            Tg_burn = float(self.state.Tg_burning[idx])
-            Ts_burn = float(self.state.Ts_burning[idx])
-            Tw_burn = float(self.state.Tw_burning[idx])
-
-            Tg_trans = float(self.state.Tg_transition[idx])
-            Ts_trans = float(self.state.Ts_transition[idx])
-            Tw_trans = float(self.state.Tw_transition[idx])
-
-            Tg_calc = float(self.state.Tg_calciner[idx])
-            Ts_calc = float(self.state.Ts_calciner[idx])
-            Tw_calc = float(self.state.Tw_calciner[idx])
-
-            Tg_pre = float(self.state.Tg_preheater[idx])
-            Ts_pre = float(self.state.Ts_preheater[idx])
-            Tw_pre = float(self.state.Tw_preheater[idx])
-
-            Tg_cool = float(self.state.Tg_cooler[idx])
-            Ts_cool = float(self.state.Ts_cooler[idx])
-            Tw_cool = float(self.state.Tw_cooler[idx])
-
-            fuel_rate_total = inputs["Fuel_rate_total"]
-
-            print(">>> TEMPERATURE SAMPLES DONE", flush=True)
-
-            # ======================================================
-            # TOTAL WALL LOSSES
-            # ======================================================
-            total_wall_loss = (
-                self.state.Wall_loss_burning
-                + self.state.Wall_loss_transition
-                + self.state.Wall_loss_calciner
-                + self.state.Wall_loss_preheater
-                + self.state.Wall_loss_cooler
-            )
-
-            # ======================================================
-            # TOTAL STORED ENERGY
-            # ======================================================
-            total_stored = (
-                self.state.Burning_stored_energy_change
-                + self.state.Transition_stored_energy_change
-                + self.state.Calciner_stored_energy_change
-                + self.state.Preheater_stored_energy_change
-                + self.state.Cooler_stored_energy_change
-            )
-
-            print(">>> ENERGY LOGGING DONE", flush=True)
-
-            # ======================================================
-            # TOTAL EXHAUST ENTHALPY
-            # ======================================================
-            total_exhaust = (
-                self.state.Hgas_cooler_out
-                + self.state.Hsolid_cooler_out
-            )
-
-            # ======================================================
-            # TOTAL REACTION HEAT SINK
-            # ======================================================
-            total_reaction = (
-                getattr(self.state, "Preheater_Q_sink", 0.0)
-                + getattr(self.state, "Calcination_Q_sink", 0.0)
-            )
-
-            # ======================================================
-            # GLOBAL ENERGY RESIDUAL
-            # ======================================================
-            global_residual = (
-                self.state.Q_burning
-                - total_exhaust
-                - total_wall_loss
-                - total_stored
-            )
-
-            # ======================================================
-            # MASS INVENTORY + GLOBAL MASS BALANCE
-            # ======================================================
-
-            # ------------------------------------------------------
-            # ZONE CaCO3 INVENTORY
-            # ------------------------------------------------------
-
-            total_CaCO3 = 0.0
-
-            for zone_name in [
-                "preheater",
-                "calciner",
-                "transition",
-                "burning",
-                "cooler",
-            ]:
-
-                CaCO3 = np.sum(
-                    np.maximum(
-                        self.state.materials[zone_name].solids.CaCO3,
-                        0.0,
-                    )
-                )
-
-                total_CaCO3 += CaCO3
-
-            print(">>> CaCO3 INVENTORY DONE", flush=True)
-
-            # ------------------------------------------------------
-            # TOTAL SOLID INVENTORY
-            # ------------------------------------------------------
-
-            total_solid_mass = 0.0
-
-            for material in self.state.materials.values():
-
-                for f in fields(SolidPhases):
-
-                    values = getattr(
-                        material.solids,
-                        f.name,
-                    )
-
-                    total_solid_mass += np.sum(
-                        np.maximum(
-                            values,
-                            0.0,
-                        )
-                    )
-
-            print(">>> SOLID INVENTORY DONE", flush=True)
-
-            # ------------------------------------------------------
-            # TOTAL GAS INVENTORY
-            # ------------------------------------------------------
-
-            total_gas_mass = 0.0
-
-            for material in self.state.materials.values():
-
-                for f in fields(GasPhases):
-
-                    values = getattr(
-                        material.gases,
-                        f.name,
-                    )
-
-                    total_gas_mass += np.sum(
-                        np.maximum(
-                            values,
-                            0.0,
-                        )
-                    )
-
-            print(">>> GAS INVENTORY DONE", flush=True)
-
-            print(">>> BEFORE MASS BALANCE", flush=True)
-
-            # ======================================================
-            # GLOBAL MASS BALANCE
-            # ======================================================
-
-            # ------------------------------------------------------
-            # INITIAL MASS
-            # ------------------------------------------------------
-
-            if self.state.Initial_total_mass <= 0.0:
-                self.state.Initial_total_mass = (
-                    total_solid_mass + total_gas_mass
-                )
-
-            # ------------------------------------------------------
-            # CURRENT INVENTORIES
-            # ------------------------------------------------------
-
-            self.state.Total_solid_inventory = (
-                total_solid_mass
-            )
-
-            self.state.Total_gas_inventory = (
-                total_gas_mass
-            )
-
-            # ------------------------------------------------------
-            # EXPECTED TOTAL MASS
-            #
-            # M_expected =
-            # M_initial
-            # + M_feed
-            # - M_clinker
-            # ------------------------------------------------------
-
-            mass_expected = (
-                self.state.Initial_total_mass
-                + self.state.Cumulative_feed_mass
-                - self.state.Cumulative_clinker_mass
-            )
-
-            # ------------------------------------------------------
-            # ACTUAL TOTAL MASS
-            #
-            # Solid + gas
-            # ------------------------------------------------------
-
-            mass_actual = (
-                total_solid_mass
-                + total_gas_mass
-            )
-
-            # ------------------------------------------------------
-            # RESIDUAL
-            # ------------------------------------------------------
-
-            self.state.Global_mass_balance = (
-                mass_expected
-                - mass_actual
-            )
-
-            # ------------------------------------------------------
-            # RELATIVE RESIDUAL
-            # ------------------------------------------------------
-
-            self.state.Global_mass_balance_relative = (
-                self.state.Global_mass_balance
-                / max(
-                    abs(mass_expected),
-                    1.0e-12,
-                )
-            )
-
-            print(">>> AFTER MASS BALANCE", flush=True)
-
-            self._next_log_time += self.log_interval
-        
-        print(">>> STEP RETURN", flush=True)
 
         return self.state
+    
+        
 
-    # --------------------------------------------------
+
+
     def run(self):
 
         # ======================================================
@@ -969,12 +731,6 @@ class Twin:
         thermal_tolerance = 1e-3
         mass_tolerance = 1e-6
 
-        # ======================================================
-        # INIT SAFETY
-        # ======================================================
-        self.time = 0.0
-        self._next_log_time = 0.0
-        self._next_validation_time = 0.0
 
         print(
             "STEADY-STATE SOLVE STARTED",
@@ -1011,13 +767,13 @@ class Twin:
             print(
                 f"[ITER {iteration + 1:05d}] "
                 f"thermal={residual['thermal']:.6e} K | "
-                f""
                 f"Burning={zones['Burning']:.6e} | "
                 f"Transition={zones['Transition']:.6e} | "
                 f"Calciner={zones['Calciner']:.6e} | "
                 f"Preheater={zones['Preheater']:.6e} | "
                 f"Cooler={zones['Cooler']:.6e} | "
-                f"mass={residual['mass']:.6e} kg/s",
+                f"mass={residual['mass']:.6e} kg/s | "
+                f"solid_handoff={residual['solid_handoff']:.6e} W",
                 flush=True,
             )
 
@@ -1028,6 +784,8 @@ class Twin:
                 residual["thermal"] < thermal_tolerance
                 and
                 residual["mass"] < mass_tolerance
+                and
+                residual["solid_handoff"] < 1e-3
             ):
 
                 print(
@@ -1035,6 +793,433 @@ class Twin:
                     f"@ iteration {iteration + 1}",
                     flush=True,
                 )
+                
+                        # ======================================================
+                # ENERGY HANDOFF DIAGNOSTIC
+                # Read-only: no physics/state modification
+                # ======================================================
+
+                print("\n========== ENERGY HANDOFF DIAGNOSTIC ==========")
+
+                print("\n--- Burning -> Transition ---")
+                print(
+                    f"Hgas_burning_out      = "
+                    f"{self.state.Hgas_burning_out:.12e} W"
+                )
+                print(
+                    f"Hgas_transition_in    = "
+                    f"{self.state.Hgas_transition_in:.12e} W"
+                )
+                print(
+                    f"Gas handoff diff       = "
+                    f"{self.state.Hgas_burning_out - self.state.Hgas_transition_in:.12e} W"
+                )
+
+                print(
+                    f"Hsolid_burning_out    = "
+                    f"{self.state.Hsolid_burning_out:.12e} W"
+                )
+                print(
+                    f"Hsolid_transition_in  = "
+                    f"{self.state.Hsolid_transition_in:.12e} W"
+                )
+                print(
+                    f"Solid handoff diff     = "
+                    f"{self.state.Hsolid_burning_out - self.state.Hsolid_transition_in:.12e} W"
+                )
+
+                print("\n--- Transition -> Calciner ---")
+                print(
+                    f"Hgas_transition_out   = "
+                    f"{self.state.Hgas_transition_out:.12e} W"
+                )
+                print(
+                    f"Hgas_calciner_in      = "
+                    f"{self.state.Hgas_calciner_in:.12e} W"
+                )
+                print(
+                    f"Gas handoff diff       = "
+                    f"{self.state.Hgas_transition_out - self.state.Hgas_calciner_in:.12e} W"
+                )
+
+                print(
+                    f"Hsolid_transition_out = "
+                    f"{self.state.Hsolid_transition_out:.12e} W"
+                )
+                print(
+                    f"Hsolid_calciner_in    = "
+                    f"{self.state.Hsolid_calciner_in:.12e} W"
+                )
+                print(
+                    f"Solid handoff diff     = "
+                    f"{self.state.Hsolid_transition_out - self.state.Hsolid_calciner_in:.12e} W"
+                )
+
+                print("\n--- Calciner -> Preheater ---")
+                print(
+                    f"Hgas_calciner_out     = "
+                    f"{self.state.Hgas_calciner_out:.12e} W"
+                )
+                print(
+                    f"Hgas_preheater_in     = "
+                    f"{self.state.Hgas_preheater_in:.12e} W"
+                )
+                print(
+                    f"Gas handoff diff       = "
+                    f"{self.state.Hgas_calciner_out - self.state.Hgas_preheater_in:.12e} W"
+                )
+
+                print(
+                    f"Hsolid_calciner_out   = "
+                    f"{self.state.Hsolid_calciner_out:.12e} W"
+                )
+                print(
+                    f"Hsolid_preheater_in   = "
+                    f"{self.state.Hsolid_preheater_in:.12e} W"
+                )
+                print(
+                    f"Solid handoff diff     = "
+                    f"{self.state.Hsolid_calciner_out - self.state.Hsolid_preheater_in:.12e} W"
+                )
+
+                print("\n--- Preheater -> Cooler ---")
+                print(
+                    f"Hgas_preheater_out    = "
+                    f"{self.state.Hgas_preheater_out:.12e} W"
+                )
+                print(
+                    f"Hgas_cooler_in        = "
+                    f"{self.state.Hgas_cooler_in:.12e} W"
+                )
+                print(
+                    f"Gas handoff diff       = "
+                    f"{self.state.Hgas_preheater_out - self.state.Hgas_cooler_in:.12e} W"
+                )
+
+                print(
+                    f"Hsolid_preheater_out  = "
+                    f"{self.state.Hsolid_preheater_out:.12e} W"
+                )
+                print(
+                    f"Hsolid_cooler_in      = "
+                    f"{self.state.Hsolid_cooler_in:.12e} W"
+                )
+                print(
+                    f"Solid handoff diff     = "
+                    f"{self.state.Hsolid_preheater_out - self.state.Hsolid_cooler_in:.12e} W"
+                )
+
+                print("\n--- LOCAL ENERGY RESIDUALS ---")
+                print(
+                    f"Burning residual      = "
+                    f"{self.state.Burning_energy_balance:.12e} W"
+                )
+                print(
+                    f"Transition residual   = "
+                    f"{self.state.Transition_energy_balance:.12e} W"
+                )
+                print(
+                    f"Calciner residual     = "
+                    f"{self.state.Calciner_energy_balance:.12e} W"
+                )
+                print(
+                    f"Preheater residual    = "
+                    f"{self.state.Preheater_energy_balance:.12e} W"
+                )
+                print(
+                    f"Cooler residual       = "
+                    f"{self.state.Cooler_energy_balance:.12e} W"
+                )
+
+                print("\n--- REACTION TERMS ---")
+                print(
+                    f"Calcination sink      = "
+                    f"{self.state.Calcination_Q_sink:.12e} W"
+                )
+                print(
+                    f"Transition reaction   = "
+                    f"{self.state.Calcination_Q_transition:.12e} W"
+                )
+                print(
+                    f"Preheater reaction    = "
+                    f"{self.state.Preheater_Q_sink:.12e} W"
+                )
+
+                print("===============================================\n")
+
+                # ==================================================
+                # FINAL STEADY-STATE PHYSICAL CHECK
+                #
+                # Read-only report of the actual converged state.
+                # No additional step() is executed.
+                # ==================================================
+
+                idx = self.state.Tg_burning.shape[0] // 2
+
+                print(
+                    "\n========== FINAL STEADY-STATE PHYSICAL CHECK ==========",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # MASS FLOWS
+                # --------------------------------------------------
+
+                print(
+                    "\n--- MASS FLOWS ---",
+                    flush=True,
+                )
+
+                print(
+                    f"m_dot_g      = "
+                    f"{getattr(self.state, 'm_dot_g', None)} kg/s",
+                    flush=True,
+                )
+
+                print(
+                    f"m_dot_s      = "
+                    f"{getattr(self.state, 'm_dot_s', None)} kg/s",
+                    flush=True,
+                )
+
+                print(
+                    f"Clinker flow = "
+                    f"{getattr(self.state, 'clinker_flow', None)} kg/s",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # TEMPERATURES
+                # --------------------------------------------------
+
+                print(
+                    "\n--- TEMPERATURES ---",
+                    flush=True,
+                )
+
+                print("Burning:", flush=True)
+                print(
+                    f"    Tg_mid = "
+                    f"{self.state.Tg_burning[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Ts_mid = "
+                    f"{self.state.Ts_burning[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Tw_mid = "
+                    f"{self.state.Tw_burning[idx]:.6f} K",
+                    flush=True,
+                )
+
+                print("Transition:", flush=True)
+                print(
+                    f"    Tg_mid = "
+                    f"{self.state.Tg_transition[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Ts_mid = "
+                    f"{self.state.Ts_transition[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Tw_mid = "
+                    f"{self.state.Tw_transition[idx]:.6f} K",
+                    flush=True,
+                )
+
+                print("Calciner:", flush=True)
+                print(
+                    f"    Tg_mid = "
+                    f"{self.state.Tg_calciner[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Ts_mid = "
+                    f"{self.state.Ts_calciner[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Tw_mid = "
+                    f"{self.state.Tw_calciner[idx]:.6f} K",
+                    flush=True,
+                )
+
+                print("Preheater:", flush=True)
+                print(
+                    f"    Tg_mid = "
+                    f"{self.state.Tg_preheater[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Ts_mid = "
+                    f"{self.state.Ts_preheater[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Tw_mid = "
+                    f"{self.state.Tw_preheater[idx]:.6f} K",
+                    flush=True,
+                )
+
+                print("Cooler:", flush=True)
+                print(
+                    f"    Tg_mid = "
+                    f"{self.state.Tg_cooler[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Ts_mid = "
+                    f"{self.state.Ts_cooler[idx]:.6f} K",
+                    flush=True,
+                )
+                print(
+                    f"    Tw_mid = "
+                    f"{self.state.Tw_cooler[idx]:.6f} K",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # FUEL
+                # --------------------------------------------------
+
+                print(
+                    "\n--- FUEL ---",
+                    flush=True,
+                )
+
+                print(
+                    "Fuel = Petcoke",
+                    flush=True,
+                )
+
+                print(
+                    f"Fuel_rate_total = "
+                    f"{self._last_inputs.get('Fuel_rate_total', None)} kg/s",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # ENERGY
+                # --------------------------------------------------
+
+                print(
+                    "\n--- ENERGY ---",
+                    flush=True,
+                )
+
+                print(
+                    f"Q_petcoke = "
+                    f"{getattr(self.state, 'Q_petcoke', None)} W",
+                    flush=True,
+                )
+
+
+                print(
+                    f"Q_burning = "
+                    f"{getattr(self.state, 'Q_burning', None)} W",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # WALL LOSSES
+                # --------------------------------------------------
+
+                print(
+                    "\n--- WALL LOSSES ---",
+                    flush=True,
+                )
+
+                print(
+                    f"Wall_loss_burning    = "
+                    f"{getattr(self.state, 'Wall_loss_burning', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    f"Wall_loss_transition = "
+                    f"{getattr(self.state, 'Wall_loss_transition', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    f"Wall_loss_calciner   = "
+                    f"{getattr(self.state, 'Wall_loss_calciner', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    f"Wall_loss_preheater  = "
+                    f"{getattr(self.state, 'Wall_loss_preheater', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    f"Wall_loss_cooler     = "
+                    f"{getattr(self.state, 'Wall_loss_cooler', None)} W",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # REACTION HEAT
+                # --------------------------------------------------
+
+                print(
+                    "\n--- REACTION HEAT ---",
+                    flush=True,
+                )
+
+                print(
+                    f"Calcination_Q_sink = "
+                    f"{getattr(self.state, 'Calcination_Q_sink', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    f"Preheater_Q_sink   = "
+                    f"{getattr(self.state, 'Preheater_Q_sink', None)} W",
+                    flush=True,
+                )
+
+                # --------------------------------------------------
+                # OUTLET ENTHALPY
+                # --------------------------------------------------
+
+                print(
+                    "\n--- OUTLET ENTHALPY ---",
+                    flush=True,
+                )
+
+                print(
+                    f"Hgas_cooler_out   = "
+                    f"{getattr(self.state, 'Hgas_cooler_out', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    f"Hsolid_cooler_out = "
+                    f"{getattr(self.state, 'Hsolid_cooler_out', None)} W",
+                    flush=True,
+                )
+
+                print(
+                    "\n=======================================================",
+                    flush=True,
+                )
+
+                # ==================================================
+                # FINAL ENERGY VALIDATION
+                #
+                # Validate the actual converged state.
+                # No additional step() is executed.
+                # ==================================================
+
+                self._validate_solid_handoffs()
+                self._validate_energy_balances()
+                self._validate_global_energy_balance()
 
                 return self.state
 
@@ -1053,7 +1238,7 @@ if __name__ == "__main__":
     # CONFIG LOAD
     # ======================================================
     twin_cfg = load_cfg("configs/twin_cfg.yaml")
-    mpc_cfg = load_cfg("configs/mpc_cfg.yaml")
+
 
     # ======================================================
     # STATE INIT
@@ -1065,8 +1250,7 @@ if __name__ == "__main__":
     # ======================================================
     twin = Twin(
         state=state,
-        cfg=twin_cfg,
-        mpc_cfg=mpc_cfg,
+        cfg=twin_cfg
     )
 
     # ======================================================

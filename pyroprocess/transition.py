@@ -104,7 +104,7 @@ class Transition:
         self._rho_wall_Vwall_cell_Cp = self.rho_wall * self.V_wall_cell * self.Cp_wall
         
         # ======================================================
-    def thermal_step(self, Tg, Ts, Tw, state, dt):
+    def thermal_step(self, Tg, Ts, Tw, state):
 
         # ======================================================
         # FLOW / MASS FLOW
@@ -951,7 +951,7 @@ class Transition:
     # ======================================================
     # STATE UPDATE
     # ======================================================
-    def apply(self, state, dt):
+    def apply(self, state):
 
         # ======================================================
         # STATE INTEGRITY CHECK
@@ -1040,8 +1040,7 @@ class Transition:
             state.Tg_transition,
             state.Ts_transition,
             state.Tw_transition,
-            state,
-            dt,
+            state
         )
 
         # ======================================================

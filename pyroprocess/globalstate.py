@@ -32,9 +32,6 @@ class GlobalState:
     # FUEL ENERGY (W)
     # ======================================================
     Q_petcoke: float = 0.0
-    Q_coal: float = 0.0
-    Q_RDF: float = 0.0
-    Q_H2: float = 0.0
     Q_burning: float = 0.0
     
     
@@ -83,6 +80,7 @@ class GlobalState:
     # SOLID ENERGY FLOW (W)
     # ======================================================
 
+    Hsolid_burning_in: float = 0.0
     Hsolid_burning_out: float = 0.0
 
     Hsolid_transition_in: float = 0.0

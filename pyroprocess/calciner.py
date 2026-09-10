@@ -987,7 +987,7 @@ class Calciner:
         )
 
         state.Hsolid_calciner_in = (
-            state.Hsolid_transition_out
+            state.Hsolid_preheater_out
         )
 
         # ======================================================

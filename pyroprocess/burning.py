@@ -184,12 +184,6 @@ class Burning:
         # ======================================================
         # FUEL
         # ======================================================
-        self.LHV = {
-            "petcoke": 32e6,
-            "coal": 18e6,
-            "rdf": 20e6,
-            "h2": 120e6
-        }
 
         self.O2_opt = 3.5
         self.O2_sigma2 = 25.0
@@ -277,9 +271,6 @@ class Burning:
 
         (
             Q_petcoke,
-            Q_coal,
-            Q_RDF,
-            Q_H2,
             Q_burning
         ) = fuel_heat_release(
             fuel_rate_total=fuel_rate_total,
@@ -909,9 +900,6 @@ class Burning:
             Ts_ss,
             Tw_ss,
             Q_petcoke,
-            Q_coal,
-            Q_RDF,
-            Q_H2,
             Q_burning,
             energy_in,
             energy_out,
@@ -923,7 +911,7 @@ class Burning:
     # STATE UPDATE
     # ======================================================
 
-    def apply(self, state, inputs, dt):
+    def apply(self, state, inputs):
 
         # ======================================================
         # STATE INTEGRITY CHECK
@@ -1012,19 +1000,29 @@ class Burning:
         )
 
         state.u_g = u_g
+        
+        
+        # ======================================================
+        # SOLID INLET HANDOFF
+        # ======================================================
+
+        state.Hsolid_burning_in = state.Hsolid_transition_out
+
+        state.Ts_burning_in = (
+            self.T_ref
+            + state.Hsolid_burning_in
+            / (state.m_dot_s * self.Cp_s)
+        )
 
         # ======================================================
         # STEADY-STATE THERMAL SOLUTION
         # ======================================================
 
         (
-            Tg,
-            Ts,
-            Tw,
+            Tg_new,
+            Ts_new,
+            Tw_new,
             Q_petcoke,
-            Q_coal,
-            Q_RDF,
-            Q_H2,
             Q_burning,
             energy_in,
             energy_out,
@@ -1042,9 +1040,10 @@ class Burning:
         # ======================================================
         # UPDATE TEMPERATURE STATES
         # ======================================================
-        state.Tg_burning = Tg
-        state.Ts_burning = Ts
-        state.Tw_burning = Tw
+
+        state.Tg_burning = Tg_new
+        state.Ts_burning = Ts_new
+        state.Tw_burning = Tw_new
 
         # ======================================================
         # BURNING CHEMISTRY
@@ -1072,9 +1071,6 @@ class Burning:
         # FUEL HEAT RELEASE STATES
         # ======================================================
         state.Q_petcoke = Q_petcoke
-        state.Q_coal = Q_coal
-        state.Q_RDF = Q_RDF
-        state.Q_H2 = Q_H2
         state.Q_burning = Q_burning
 
         # ======================================================

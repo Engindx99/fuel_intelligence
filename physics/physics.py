@@ -325,21 +325,7 @@ def fuel_heat_release(
         * Q_petcoke
     )
 
-    # ======================================================
-    # OTHER FUELS DISABLED
-    # ======================================================
-
-    Q_coal = 0.0
-    Q_RDF = 0.0
-    Q_H2 = 0.0
-
-    return (
-        Q_petcoke,
-        Q_coal,
-        Q_RDF,
-        Q_H2,
-        Q_burning,
-    )
+    return Q_petcoke, Q_burning
 
 
 def combustion_axial_distribution(
