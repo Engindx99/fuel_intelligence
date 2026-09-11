@@ -806,6 +806,13 @@ class Burning:
         # TOTAL ENERGY BALANCE
         # ======================================================
 
+        Burning_Q_sink = (
+            state.Belite_Q_sink
+            + state.Alite_Q_sink
+            + state.C3A_Q_sink
+            + state.C4AF_Q_sink
+        )
+
         energy_in = (
             Hg_in
             + Hs_in
@@ -816,13 +823,14 @@ class Burning:
             Hg_out
             + Hs_out
             + Q_wall_loss
+            + Burning_Q_sink
         )
 
         total_energy_balance = (
             energy_in
             - energy_out
         )
-        
+
         self.energy_in = float(energy_in)
         self.energy_out = float(energy_out)
         self.energy_residual = float(total_energy_balance)
@@ -1001,7 +1009,16 @@ class Burning:
 
         state.u_g = u_g
         
-        
+        # ======================================================
+        # GAS INLET HANDOFF
+        # ======================================================
+
+        state.Hgas_burning_in = getattr(state, "Hgas_cooler_out", 0.0)
+
+        state.Tg_burning_in = self.gas_inlet_temperature_from_enthalpy(
+            state.Hgas_burning_in,
+            state,
+        )
         # ======================================================
         # SOLID INLET HANDOFF
         # ======================================================
@@ -1013,6 +1030,12 @@ class Burning:
             + state.Hsolid_burning_in
             / (state.m_dot_s * self.Cp_s)
         )
+        
+        # ======================================================
+        # BURNING CHEMISTRY
+        # ======================================================
+
+        state = self.chemistry.apply_burning(state)
 
         # ======================================================
         # STEADY-STATE THERMAL SOLUTION
@@ -1045,10 +1068,7 @@ class Burning:
         state.Ts_burning = Ts_new
         state.Tw_burning = Tw_new
 
-        # ======================================================
-        # BURNING CHEMISTRY
-        # ======================================================
-        state = self.chemistry.apply_burning(state)
+
 
         # ======================================================
         # ENTHALPY STATES
@@ -1124,7 +1144,21 @@ class Burning:
     def gas_enthalpy_out(self, Hg):
         return Hg[0]
 
-
+    def gas_inlet_temperature_from_enthalpy(self, H, state):
+        m_dot_g = state.m_dot_g
+        if m_dot_g <= self.eps:
+            return self.T_ref
+        h_target = H / m_dot_g
+        T_low = self.T_ref
+        T_high = 4000.0
+        for _ in range(100):
+            T_mid = 0.5 * (T_low + T_high)
+            h_mid = float(h_gas(T_mid, self.T_ref))
+            if h_mid < h_target:
+                T_low = T_mid
+            else:
+                T_high = T_mid
+        return 0.5 * (T_low + T_high)
 
     # ======================================================
     # SOLID ENTHALPY TO NEXT ZONE

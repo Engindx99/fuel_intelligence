@@ -7,6 +7,7 @@ from physics.physics import kiln_geometry
 from physics.physics import wall_geometry
 from physics.physics import ZONE_HT_CONFIG
 
+from chemistry.phases import copy_solid_phases
 from chemistry.reactions import ChemistryModel
 
 from .stage1 import Stage1
@@ -599,6 +600,53 @@ class Preheater:
             state.Ts_preheater,
             state,
         )
+
+        # ======================================================
+        # SOLID PHASE HANDOFF: PREHEATER -> CALCINER
+        # ======================================================
+
+        copy_solid_phases(
+            state.materials["preheater"].solids,
+            state.materials["calciner"].solids,
+        )
+
+        # ======================================================
+        # SOLID PHASE HANDOFF DIAGNOSTIC
+        # ======================================================
+
+        print("\n========== SOLID PHASE HANDOFF ==========")
+
+        for phase in [
+            "H2O",
+            "Bound_H2O",
+            "CaCO3",
+            "CaO",
+            "SiO2",
+            "Al2O3",
+            "Fe2O3",
+            "C2S",
+            "C3S",
+            "C3A",
+            "C4AF",
+        ]:
+            preheater = getattr(
+                state.materials["preheater"].solids,
+                phase,
+            )
+
+            calciner = getattr(
+                state.materials["calciner"].solids,
+                phase,
+            )
+
+            diff = np.sum(calciner - preheater)
+
+            print(
+                f"{phase:10s}: "
+                f"preheater={np.sum(preheater):.6e}, "
+                f"calciner={np.sum(calciner):.6e}, "
+                f"diff={diff:.6e}"
+            )
 
         # ======================================================
         # ENERGY BALANCE

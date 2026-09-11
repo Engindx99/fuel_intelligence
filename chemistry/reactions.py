@@ -66,9 +66,9 @@ class ChemistryModel:
 
 
 
-    # ======================================================
-    # BURNING CHEMISTRY
-    # ======================================================
+        # ======================================================
+        # BURNING CHEMISTRY
+        # ======================================================
 
     def apply_burning(self, state):
 
@@ -80,16 +80,19 @@ class ChemistryModel:
 
         state = self.c4af.apply(state)
 
-
         state.Burning_Q_sink = (
             state.Belite_Q_sink
-            +
-            state.Alite_Q_sink
-            +
-            state.C3A_Q_sink
-            +
-            state.C4AF_Q_sink
+            + state.Alite_Q_sink
+            + state.C3A_Q_sink
+            + state.C4AF_Q_sink
         )
 
+        print("\n========== BURNING CHEMISTRY DEBUG ==========")
+        print(f"Belite_Q_sink = {state.Belite_Q_sink:.12e} W")
+        print(f"Alite_Q_sink  = {state.Alite_Q_sink:.12e} W")
+        print(f"C3A_Q_sink    = {state.C3A_Q_sink:.12e} W")
+        print(f"C4AF_Q_sink   = {state.C4AF_Q_sink:.12e} W")
+        print(f"Burning_Q_sink = {state.Burning_Q_sink:.12e} W")
+        print("==============================================")
 
         return state

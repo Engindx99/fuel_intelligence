@@ -1,6 +1,7 @@
 import numpy as np
 
 from chemistry.base import ReactionBase
+from chemistry.phases import copy_solid_phases
 from chemistry.composition import RAW_MEAL_COMPOSITION
 
 
@@ -276,6 +277,62 @@ class CalcinationModel(ReactionBase):
             m_dot_CaCO3_reacted
             * self.CO2_ratio
         )
+        
+        # ==================================================
+        # SOLID PHASE STATE UPDATE
+        # CaCO3 -> CaO
+        # ==================================================
+
+        calciner_solids = state.materials["calciner"].solids
+
+        CaCO3_before = (
+            calciner_solids.CaCO3.copy()
+        )
+
+        CaO_before = (
+            calciner_solids.CaO.copy()
+        )
+
+        # --------------------------------------------------
+        # Cell-wise conversion from spatial kinetics
+        # --------------------------------------------------
+
+        CaCO3_reacted_fraction = (
+            conversion_cells.copy()
+        )
+
+        CaCO3_reacted_inventory = (
+            CaCO3_before
+            * CaCO3_reacted_fraction
+        )
+
+        CaCO3_reacted_inventory = np.minimum(
+            CaCO3_reacted_inventory,
+            CaCO3_before,
+        )
+
+        # --------------------------------------------------
+        # CaCO3 consumption
+        # --------------------------------------------------
+
+        calciner_solids.CaCO3[:] = (
+            CaCO3_before
+            - CaCO3_reacted_inventory
+        )
+
+        # --------------------------------------------------
+        # CaO generation
+        # --------------------------------------------------
+
+        CaO_generated_inventory = (
+            CaCO3_reacted_inventory
+            * self.CaO_ratio
+        )
+
+        calciner_solids.CaO[:] = (
+            CaO_before
+            + CaO_generated_inventory
+        )
 
         # ==================================================
         # TOTAL CALCINATION HEAT
@@ -302,6 +359,117 @@ class CalcinationModel(ReactionBase):
             0.0,
             1.0,
         )
+        
+        # ==================================================
+        # SOLID PHASE BALANCE DIAGNOSTIC
+        # ==================================================
+
+        CaCO3_reacted_from_state = (
+            np.sum(CaCO3_before)
+            - np.sum(calciner_solids.CaCO3)
+        )
+
+        CaO_generated_from_state = (
+            np.sum(calciner_solids.CaO)
+            - np.sum(CaO_before)
+        )
+
+        CaCO3_expected_for_CaO = (
+            CaO_generated_from_state
+            / self.CaO_ratio
+        )
+
+        state.CaCO3_material_reacted = float(
+            CaCO3_reacted_from_state
+        )
+
+        state.CaO_material_generated = float(
+            CaO_generated_from_state
+        )
+
+        state.CaCO3_material_balance_error = float(
+            CaCO3_reacted_from_state
+            - np.sum(CaCO3_reacted_inventory)
+        )
+
+        state.CaO_stoichiometric_error = float(
+            CaO_generated_from_state
+            - CaCO3_reacted_from_state * self.CaO_ratio
+        )
+        
+        print("\n========== CALCINER SOLID PHASE DIAGNOSTIC ==========")
+
+        print(
+            f"CaCO3_material_reacted      = "
+            f"{state.CaCO3_material_reacted:.12e} kg"
+        )
+
+        print(
+            f"CaO_material_generated      = "
+            f"{state.CaO_material_generated:.12e} kg"
+        )
+
+        print(
+            f"CaCO3_material_balance_error = "
+            f"{state.CaCO3_material_balance_error:.12e} kg"
+        )
+
+        print(
+            f"CaO_stoichiometric_error     = "
+            f"{state.CaO_stoichiometric_error:.12e} kg"
+        )
+
+        print("====================================================")
+        
+        # ==================================================
+        # SOLID PHASE HANDOFF
+        # Calciner -> Transition
+        # ==================================================
+
+        copy_solid_phases(
+            state.materials["calciner"].solids,
+            state.materials["transition"].solids,
+        )
+
+        # ==================================================
+        # SOLID PHASE HANDOFF DIAGNOSTIC
+        # ==================================================
+
+        print("\n========== CALCINER -> TRANSITION SOLID HANDOFF ==========")
+
+        for phase in [
+            "H2O",
+            "Bound_H2O",
+            "CaCO3",
+            "CaO",
+            "SiO2",
+            "Al2O3",
+            "Fe2O3",
+            "C2S",
+            "C3S",
+            "C3A",
+            "C4AF",
+        ]:
+            calciner = getattr(
+                state.materials["calciner"].solids,
+                phase,
+            )
+
+            transition = getattr(
+                state.materials["transition"].solids,
+                phase,
+            )
+
+            diff = np.sum(transition - calciner)
+
+            print(
+                f"{phase:10s}: "
+                f"calciner={np.sum(calciner):.6e}, "
+                f"transition={np.sum(transition):.6e}, "
+                f"diff={diff:.6e}"
+            )
+
+        print("==========================================================")
 
         # ==================================================
         # STATE OUTPUTS

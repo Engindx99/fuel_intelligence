@@ -221,10 +221,12 @@ class Twin:
         # ======================================================
 
         H_rawmeal_in = state.Hsolid_preheater_in
+        H_air_in = getattr(state, "Hgas_cooler_in", 0.0)
         Q_burning = state.Q_burning
 
         global_energy_in = (
             H_rawmeal_in
+            + H_air_in
             + Q_burning
         )
 
@@ -232,7 +234,7 @@ class Twin:
         # GLOBAL EXTERNAL OUTPUT
         # ======================================================
 
-        H_exhaust_out = state.Hgas_cooler_out
+        H_exhaust_out = state.Hgas_preheater_out
         H_clinker_out = state.Hsolid_cooler_out
 
         Q_wall_total = (
@@ -247,7 +249,16 @@ class Twin:
             state.Calcination_Q_transition
             + state.Calcination_Q_sink
             + state.Preheater_Q_sink
+            + state.Burning_Q_sink
         )
+        
+        print("\n========== GLOBAL REACTION DEBUG ==========")
+        print(f"Calcination_Q_transition = {state.Calcination_Q_transition:.12e} W")
+        print(f"Calcination_Q_sink       = {state.Calcination_Q_sink:.12e} W")
+        print(f"Preheater_Q_sink         = {state.Preheater_Q_sink:.12e} W")
+        print(f"Burning_Q_sink           = {state.Burning_Q_sink:.12e} W")
+        print(f"Q_reaction_total         = {Q_reaction_total:.12e} W")
+        print("==========================================")
 
         global_energy_out = (
             H_exhaust_out
@@ -284,6 +295,10 @@ class Twin:
         print(
             f"    Raw meal enthalpy = "
             f"{H_rawmeal_in:.6e} W"
+        )
+        print(
+            f"    Air enthalpy      = "
+            f"{H_air_in:.6e} W"
         )
         print(
             f"    Burning heat      = "
@@ -801,7 +816,21 @@ class Twin:
 
                 print("\n========== ENERGY HANDOFF DIAGNOSTIC ==========")
 
-                print("\n--- Burning -> Transition ---")
+                print("\n--- Cooler -> Burning (Gas) ---")
+                print(
+                    f"Hgas_cooler_out       = "
+                    f"{self.state.Hgas_cooler_out:.12e} W"
+                )
+                print(
+                    f"Hgas_burning_in       = "
+                    f"{getattr(self.state, 'Hgas_burning_in', 0.0):.12e} W"
+                )
+                print(
+                    f"Gas handoff diff       = "
+                    f"{self.state.Hgas_cooler_out - getattr(self.state, 'Hgas_burning_in', 0.0):.12e} W"
+                )
+
+                print("\n--- Burning -> Transition (Gas) ---")
                 print(
                     f"Hgas_burning_out      = "
                     f"{self.state.Hgas_burning_out:.12e} W"
@@ -815,20 +844,7 @@ class Twin:
                     f"{self.state.Hgas_burning_out - self.state.Hgas_transition_in:.12e} W"
                 )
 
-                print(
-                    f"Hsolid_burning_out    = "
-                    f"{self.state.Hsolid_burning_out:.12e} W"
-                )
-                print(
-                    f"Hsolid_transition_in  = "
-                    f"{self.state.Hsolid_transition_in:.12e} W"
-                )
-                print(
-                    f"Solid handoff diff     = "
-                    f"{self.state.Hsolid_burning_out - self.state.Hsolid_transition_in:.12e} W"
-                )
-
-                print("\n--- Transition -> Calciner ---")
+                print("\n--- Transition -> Calciner (Gas) ---")
                 print(
                     f"Hgas_transition_out   = "
                     f"{self.state.Hgas_transition_out:.12e} W"
@@ -842,20 +858,7 @@ class Twin:
                     f"{self.state.Hgas_transition_out - self.state.Hgas_calciner_in:.12e} W"
                 )
 
-                print(
-                    f"Hsolid_transition_out = "
-                    f"{self.state.Hsolid_transition_out:.12e} W"
-                )
-                print(
-                    f"Hsolid_calciner_in    = "
-                    f"{self.state.Hsolid_calciner_in:.12e} W"
-                )
-                print(
-                    f"Solid handoff diff     = "
-                    f"{self.state.Hsolid_transition_out - self.state.Hsolid_calciner_in:.12e} W"
-                )
-
-                print("\n--- Calciner -> Preheater ---")
+                print("\n--- Calciner -> Preheater (Gas) ---")
                 print(
                     f"Hgas_calciner_out     = "
                     f"{self.state.Hgas_calciner_out:.12e} W"
@@ -869,36 +872,52 @@ class Twin:
                     f"{self.state.Hgas_calciner_out - self.state.Hgas_preheater_in:.12e} W"
                 )
 
+                print("\n--- Preheater -> Calciner (Solid) ---")
+                print(
+                    f"Hsolid_preheater_out  = "
+                    f"{self.state.Hsolid_preheater_out:.12e} W"
+                )
+                print(
+                    f"Hsolid_calciner_in    = "
+                    f"{self.state.Hsolid_calciner_in:.12e} W"
+                )
+                print(
+                    f"Solid handoff diff     = "
+                    f"{self.state.Hsolid_preheater_out - self.state.Hsolid_calciner_in:.12e} W"
+                )
+
+                print("\n--- Calciner -> Transition (Solid) ---")
                 print(
                     f"Hsolid_calciner_out   = "
                     f"{self.state.Hsolid_calciner_out:.12e} W"
                 )
                 print(
-                    f"Hsolid_preheater_in   = "
-                    f"{self.state.Hsolid_preheater_in:.12e} W"
+                    f"Hsolid_transition_in  = "
+                    f"{self.state.Hsolid_transition_in:.12e} W"
                 )
                 print(
                     f"Solid handoff diff     = "
-                    f"{self.state.Hsolid_calciner_out - self.state.Hsolid_preheater_in:.12e} W"
+                    f"{self.state.Hsolid_calciner_out - self.state.Hsolid_transition_in:.12e} W"
                 )
 
-                print("\n--- Preheater -> Cooler ---")
+                print("\n--- Transition -> Burning (Solid) ---")
                 print(
-                    f"Hgas_preheater_out    = "
-                    f"{self.state.Hgas_preheater_out:.12e} W"
+                    f"Hsolid_transition_out = "
+                    f"{self.state.Hsolid_transition_out:.12e} W"
                 )
                 print(
-                    f"Hgas_cooler_in        = "
-                    f"{self.state.Hgas_cooler_in:.12e} W"
+                    f"Hsolid_burning_in     = "
+                    f"{self.state.Hsolid_burning_in:.12e} W"
                 )
                 print(
-                    f"Gas handoff diff       = "
-                    f"{self.state.Hgas_preheater_out - self.state.Hgas_cooler_in:.12e} W"
+                    f"Solid handoff diff     = "
+                    f"{self.state.Hsolid_transition_out - self.state.Hsolid_burning_in:.12e} W"
                 )
 
+                print("\n--- Burning -> Cooler (Solid) ---")
                 print(
-                    f"Hsolid_preheater_out  = "
-                    f"{self.state.Hsolid_preheater_out:.12e} W"
+                    f"Hsolid_burning_out    = "
+                    f"{self.state.Hsolid_burning_out:.12e} W"
                 )
                 print(
                     f"Hsolid_cooler_in      = "
@@ -906,7 +925,7 @@ class Twin:
                 )
                 print(
                     f"Solid handoff diff     = "
-                    f"{self.state.Hsolid_preheater_out - self.state.Hsolid_cooler_in:.12e} W"
+                    f"{self.state.Hsolid_burning_out - self.state.Hsolid_cooler_in:.12e} W"
                 )
 
                 print("\n--- LOCAL ENERGY RESIDUALS ---")

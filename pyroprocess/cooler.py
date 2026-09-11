@@ -624,11 +624,11 @@ class Cooler:
         # INLET / OUTLET HANDOFF
         # ======================================================
 
-        state.Hgas_cooler_in = state.Hgas_preheater_out
-        state.Hsolid_cooler_in = state.Hsolid_burning_out
-
-        Tg_in = state.Tg_preheater[-1]
+        Tg_in = self.T_amb
         Ts_in = state.Ts_burning[-1]
+
+        state.Hgas_cooler_in = state.m_dot_g * float(h_gas(Tg_in, self.T_ref))
+        state.Hsolid_cooler_in = state.Hsolid_burning_out
 
         state.Tg_cooler_in = Tg_in
         state.Ts_cooler_in = Ts_in

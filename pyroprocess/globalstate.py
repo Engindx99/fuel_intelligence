@@ -62,6 +62,7 @@ class GlobalState:
     m_dot_g: float = 0.0
     rho_g: float = 1.2
 
+    Hgas_burning_in: float = 0.0
     Hgas_burning_out: float = 0.0
 
     Hgas_transition_in: float = 0.0
@@ -210,7 +211,7 @@ class GlobalState:
 
     
     # ======================================================
-    # PREHEATER STATES (5 CELL) (KELVIN)
+    # PREHEATER INITIAL GUESSES (5 CELL) (K)
     # ======================================================
     Tg_preheater: np.ndarray = field(default_factory=lambda: np.ones(5) * 573.15)
 
@@ -219,7 +220,9 @@ class GlobalState:
     Tw_preheater: np.ndarray = field(default_factory=lambda: np.ones(5) * 523.15)
     
     # ======================================================
-    # TRANSITION STATES (5 CELL) (KELVIN)
+    # TRANSITION INITIAL GUESSES (5 CELL) (K)
+    # ------------------------------------------------------
+    # Numerical initial guesses only.
     # ======================================================
     Tg_transition: np.ndarray = field(
         default_factory=lambda: np.ones(5) * 1650.0
@@ -264,7 +267,7 @@ class GlobalState:
 
 
     # ======================================================
-    # CALCINER STATES (5 CELL) (K)
+    # CALCINER INITIAL GUESSES (5 CELL) (K)
     # ======================================================
 
     Tg_calciner: np.ndarray = field(
@@ -280,9 +283,19 @@ class GlobalState:
     )
 
     # ======================================================
-    # BURNING STATES (5 CELL) (K)
+    # BURNING ZONE INLET TEMPERATURES (K)
     # ======================================================
+
+    Tg_burning_in: float = 300.0
+    Ts_burning_in: float = 300.0
     
+    # ======================================================
+    # BURNING INITIAL GUESSES (5 CELL) (K)
+    # ------------------------------------------------------
+    # These values are numerical initial guesses only.
+    # They are NOT external energy inputs.
+    # ======================================================
+
     Tg_burning_old: np.ndarray = field(
         default_factory=lambda: np.ones(5) * 1773.15
     )
@@ -294,19 +307,6 @@ class GlobalState:
     Tw_burning_old: np.ndarray = field(
         default_factory=lambda: np.ones(5) * 873.15
     )
-
-
-    # ======================================================
-    # BURNING ZONE INLET TEMPERATURES (K)
-    # ======================================================
-
-    Tg_burning_in: float = 1773.15
-    Ts_burning_in: float = 1673.15
-
-
-    # ======================================================
-    # BURNING ZONE CELL TEMPERATURES (K)
-    # ======================================================
 
     Tg_burning: np.ndarray = field(
         default_factory=lambda: np.ones(5) * 1773.15
@@ -320,8 +320,11 @@ class GlobalState:
         default_factory=lambda: np.ones(5) * 873.15
     )
 
+
+
+
     # ======================================================
-    # COOLER STATES (5 CELL) (KELVIN)
+    # COOLER INITIAL GUESSES (5 CELL) (K)
     # ======================================================
 
     Tg_cooler_old: np.ndarray = field(default_factory=lambda: np.ones(5) * 423.15)
@@ -371,12 +374,26 @@ class GlobalState:
                 dtype=float,
             )
 
+        # ======================================================
+        # ZONE MATERIAL STATES
+        # ------------------------------------------------------
+        # Only the Preheater receives fresh raw meal.
+        # Downstream zones receive solid-phase state through
+        # upstream -> downstream handoff.
+        # ======================================================
+
+        empty_cell = lambda key: np.zeros(N, dtype=float)
+
         self.materials = {
-            "burning": build_zone_material(N, make_cell),
-            "transition": build_zone_material(N, make_cell),
-            "calciner": build_zone_material(N, make_cell),
             "preheater": build_zone_material(N, make_cell),
-            "cooler": build_zone_material(N, make_cell),
+
+            "calciner": build_zone_material(N, empty_cell),
+
+            "transition": build_zone_material(N, empty_cell),
+
+            "burning": build_zone_material(N, empty_cell),
+
+            "cooler": build_zone_material(N, empty_cell),
         }
         
         

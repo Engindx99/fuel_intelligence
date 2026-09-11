@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import numpy as np
 
 
@@ -43,7 +43,8 @@ def initialize_raw_meal(
     # ================= MOISTURE =================
     solids.H2O[:] = total_mass * composition["H2O"]
 
-
+    # ================= BOUND WATER =================
+    solids.Bound_H2O[:] = total_mass * composition["Bound_H2O"]
 
     # ================= CARBONATES =================
     solids.CaCO3[:] = total_mass * composition["CaCO3"]
@@ -59,3 +60,28 @@ def initialize_raw_meal(
     solids.C3S[:] = total_mass * composition["C3S"]
     solids.C3A[:] = total_mass * composition["C3A"]
     solids.C4AF[:] = total_mass * composition["C4AF"]
+
+
+def copy_solid_phases(
+    source: SolidPhases,
+    target: SolidPhases,
+):
+    """
+    Copy solid-phase mass arrays from one zone to another.
+
+    Arrays are copied by value, not by reference.
+    Therefore source and target remain independent.
+    """
+
+    for field in fields(SolidPhases):
+
+        source_array = getattr(source, field.name)
+        target_array = getattr(target, field.name)
+
+        if source_array.shape != target_array.shape:
+            raise ValueError(
+                f"Solid phase shape mismatch for {field.name}: "
+                f"{source_array.shape} != {target_array.shape}"
+            )
+
+        target_array[:] = source_array
