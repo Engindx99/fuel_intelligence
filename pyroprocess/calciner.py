@@ -1129,6 +1129,7 @@ class Calciner:
                 state,
                 self.dz,
                 self.u_s,
+                commit_phases=False,
             )
 
             Q_reaction = float(
@@ -1255,6 +1256,22 @@ class Calciner:
                 coupling_converged = True
 
                 break
+            
+        
+        # ======================================================
+        # FINAL CHEMISTRY COMMIT
+        # ======================================================
+        # Burada coupling artık bitmiş durumda.
+        # Final Ts_iter üzerinden kimyayı BİR KEZ çalıştırıyoruz.
+
+        state.Ts_calciner = Ts_iter.copy()
+
+        state = self.chemistry.apply_calciner(
+            state,
+            self.dz,
+            self.u_s,
+            commit_phases=True,
+        )
 
         # ======================================================
         # FINAL STATE

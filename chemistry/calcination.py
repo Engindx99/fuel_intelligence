@@ -45,7 +45,14 @@ class CalcinationModel(ReactionBase):
     # STEADY-STATE SPATIAL REACTION
     # ======================================================
 
-    def apply(self, state, dz, u_s, m_dot_CaCO3_in=None):
+    def apply(
+    self,
+    state,
+    dz,
+    u_s,
+    m_dot_CaCO3_in=None,
+    commit_phases=True,
+):
 
         # ==================================================
         # INPUTS
@@ -285,12 +292,74 @@ class CalcinationModel(ReactionBase):
 
         calciner_solids = state.materials["calciner"].solids
 
+        # ==================================================
+        # PHASE INVENTORY DIAGNOSTIC
+        # ==================================================
+
+        print("\n========== CALCINER PHASE INVENTORY ==========")
+        print(
+            "CaCO3_before =",
+            np.sum(calciner_solids.CaCO3),
+        )
+        print(
+            "CaO_before   =",
+            np.sum(calciner_solids.CaO),
+        )
+        print(
+            "CaCO3_in_flow =",
+            m_dot_CaCO3_in,
+        )
+        print(
+            "CaCO3_reacted_flow =",
+            m_dot_CaCO3_reacted,
+        )
+        
+        # ==================================================
+        # OVERALL CONVERSION
+        # ==================================================
+
+        X_total = (
+            m_dot_CaCO3_reacted
+            / max(
+                m_dot_CaCO3_in,
+                1.0e-12,
+            )
+        )
+
+        X_total = np.clip(
+            X_total,
+            0.0,
+            1.0,
+        )
+
         CaCO3_before = (
             calciner_solids.CaCO3.copy()
         )
 
         CaO_before = (
             calciner_solids.CaO.copy()
+        )
+
+        print("\n========== CALCINER PHASE INVENTORY ==========")
+        print(
+            "CaCO3_before =",
+            np.sum(CaCO3_before),
+        )
+        print(
+            "CaO_before   =",
+            np.sum(CaO_before),
+        )
+        print(
+            "CaCO3_in_flow =",
+            m_dot_CaCO3_in,
+        )
+        print(
+            "CaCO3_reacted_flow =",
+            m_dot_CaCO3_reacted,
+        )
+        print(
+            "X_total =",
+            X_total,
         )
 
         # --------------------------------------------------
@@ -315,7 +384,7 @@ class CalcinationModel(ReactionBase):
         # CaCO3 consumption
         # --------------------------------------------------
 
-        calciner_solids.CaCO3[:] = (
+        CaCO3_after = (
             CaCO3_before
             - CaCO3_reacted_inventory
         )
@@ -329,10 +398,24 @@ class CalcinationModel(ReactionBase):
             * self.CaO_ratio
         )
 
-        calciner_solids.CaO[:] = (
+        CaO_after = (
             CaO_before
             + CaO_generated_inventory
         )
+
+        # --------------------------------------------------
+        # COMMIT PHASE INVENTORY
+        # --------------------------------------------------
+
+        if commit_phases:
+
+            calciner_solids.CaCO3[:] = (
+                CaCO3_after
+            )
+
+            calciner_solids.CaO[:] = (
+                CaO_after
+            )
 
         # ==================================================
         # TOTAL CALCINATION HEAT
@@ -366,11 +449,11 @@ class CalcinationModel(ReactionBase):
 
         CaCO3_reacted_from_state = (
             np.sum(CaCO3_before)
-            - np.sum(calciner_solids.CaCO3)
+            - np.sum(CaCO3_after)
         )
 
         CaO_generated_from_state = (
-            np.sum(calciner_solids.CaO)
+            np.sum(CaO_after)
             - np.sum(CaO_before)
         )
 
@@ -397,79 +480,19 @@ class CalcinationModel(ReactionBase):
             - CaCO3_reacted_from_state * self.CaO_ratio
         )
         
-        print("\n========== CALCINER SOLID PHASE DIAGNOSTIC ==========")
-
-        print(
-            f"CaCO3_material_reacted      = "
-            f"{state.CaCO3_material_reacted:.12e} kg"
-        )
-
-        print(
-            f"CaO_material_generated      = "
-            f"{state.CaO_material_generated:.12e} kg"
-        )
-
-        print(
-            f"CaCO3_material_balance_error = "
-            f"{state.CaCO3_material_balance_error:.12e} kg"
-        )
-
-        print(
-            f"CaO_stoichiometric_error     = "
-            f"{state.CaO_stoichiometric_error:.12e} kg"
-        )
-
-        print("====================================================")
         
         # ==================================================
         # SOLID PHASE HANDOFF
         # Calciner -> Transition
         # ==================================================
 
-        copy_solid_phases(
-            state.materials["calciner"].solids,
-            state.materials["transition"].solids,
-        )
+        if commit_phases:
 
-        # ==================================================
-        # SOLID PHASE HANDOFF DIAGNOSTIC
-        # ==================================================
-
-        print("\n========== CALCINER -> TRANSITION SOLID HANDOFF ==========")
-
-        for phase in [
-            "H2O",
-            "Bound_H2O",
-            "CaCO3",
-            "CaO",
-            "SiO2",
-            "Al2O3",
-            "Fe2O3",
-            "C2S",
-            "C3S",
-            "C3A",
-            "C4AF",
-        ]:
-            calciner = getattr(
+            copy_solid_phases(
                 state.materials["calciner"].solids,
-                phase,
-            )
-
-            transition = getattr(
                 state.materials["transition"].solids,
-                phase,
             )
 
-            diff = np.sum(transition - calciner)
-
-            print(
-                f"{phase:10s}: "
-                f"calciner={np.sum(calciner):.6e}, "
-                f"transition={np.sum(transition):.6e}, "
-                f"diff={diff:.6e}"
-            )
-
-        print("==========================================================")
 
         # ==================================================
         # STATE OUTPUTS

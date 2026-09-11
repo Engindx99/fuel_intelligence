@@ -50,12 +50,19 @@ class ChemistryModel:
     # CALCINER CHEMISTRY
     # ======================================================
 
-    def apply_calciner(self, state, dz, u_s):
+    def apply_calciner(
+        self,
+        state,
+        dz,
+        u_s,
+        commit_phases=True,
+    ):
 
         state = self.calcination.apply(
             state,
             dz,
             u_s,
+            commit_phases=commit_phases,
         )
 
         state.Calciner_Q_sink = (

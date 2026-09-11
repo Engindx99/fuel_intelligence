@@ -6,8 +6,6 @@ from pyroprocess.preheater import Preheater
 from pyroprocess.cooler import Cooler
 
 from physics.physics import gas_mass_balance
-from physics.physics import h_gas
-
 from physics.steady_state_mass import SteadyStateMassFlow
 
 
@@ -665,54 +663,6 @@ class Twin:
         self._update_steady_state_mass_flow(inputs)
 
         # ======================================================
-        # DIAGNOSTIC: CALCINER -> PREHEATER GAS HANDOFF
-        # ======================================================
-
-        print("\n========== CALCINER -> PREHEATER GAS HANDOFF ==========")
-
-        print(
-            f"m_dot_g current       = "
-            f"{self.state.m_dot_g:.12f} kg/s"
-        )
-
-        print(
-            f"Hgas_calciner_out    = "
-            f"{self.state.Hgas_calciner_out:.12e} W"
-        )
-
-        Tg_calciner_out = self.state.Tg_calciner[0]
-
-        print(
-            f"Tg_calciner_out      = "
-            f"{Tg_calciner_out:.6f} K"
-        )
-
-        H_expected = (
-            self.state.m_dot_g
-            * h_gas(
-                Tg_calciner_out,
-                298.15,
-            )
-        )
-
-        print(
-            f"Hgas_expected(new m) = "
-            f"{H_expected:.12e} W"
-        )
-
-        print(
-            f"Handoff difference    = "
-            f"{self.state.Hgas_calciner_out - H_expected:.12e} W"
-        )
-
-        print(
-            f"Relative difference   = "
-            f"{abs(self.state.Hgas_calciner_out - H_expected) / max(abs(H_expected), 1.0):.12e}"
-        )
-
-        print("========================================================\n")
-
-        # ======================================================
         # 4. PREHEATER
         # ======================================================
 
@@ -741,7 +691,7 @@ class Twin:
         # ======================================================
         # STEADY-STATE SOLVER
         # ======================================================
-        max_iterations = 10000
+        max_iterations = 100
 
         thermal_tolerance = 1e-3
         mass_tolerance = 1e-6

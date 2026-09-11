@@ -285,7 +285,18 @@ class Burning:
         )
 
         # ======================================================
-        # COMBUSTION DISTRIBUTION
+        # BURNING REACTION ENERGY SINK
+        # ======================================================
+
+        Burning_Q_sink = (
+            state.Belite_Q_sink
+            + state.Alite_Q_sink
+            + state.C3A_Q_sink
+            + state.C4AF_Q_sink
+        )
+
+        # ======================================================
+        # AXIAL ENERGY DISTRIBUTION
         # ======================================================
 
         weights = ZONE_ENERGY_WEIGHTS["burning"]["axial"]
@@ -300,6 +311,12 @@ class Burning:
             Q_total=Q_burning,
             weights=weights,
         )
+
+        reaction_q_cell = (
+            Burning_Q_sink
+            * np.asarray(weights, dtype=float)
+        )
+
 
         # ======================================================
         # WALL THERMAL RESISTANCE
@@ -461,6 +478,7 @@ class Burning:
 
                     b[row] = (
                         q_cell[i]
+                        - reaction_q_cell[i]
                         - radiation_gas_sink
                         + m_dot_g * h_in
                         - m_dot_g * h_linear_const_i
@@ -494,6 +512,7 @@ class Burning:
 
                     b[row] = (
                         q_cell[i]
+                        - reaction_q_cell[i]
                         - radiation_gas_sink
                         - m_dot_g * h_linear_const_i
                         + m_dot_g * h_linear_const_up
@@ -1132,8 +1151,88 @@ class Burning:
             state.Ts_burning_in - self.T_ref
         )
 
-
         state.Burning_energy_balance = total_energy_balance
+
+        # ======================================================
+        # BURNING ITERATION DIAGNOSTIC
+        # ======================================================
+
+        Burning_Q_sink = (
+            state.Belite_Q_sink
+            + state.Alite_Q_sink
+            + state.C3A_Q_sink
+            + state.C4AF_Q_sink
+        )
+
+        Q_wall_loss = getattr(
+            state,
+            "Wall_loss_burning",
+            np.nan,
+        )
+
+        print("\n========== BURNING THERMAL DIAGNOSTIC ==========")
+
+        print(
+            f"Tg_in                = "
+            f"{state.Tg_burning_in:.6f} K"
+        )
+
+        print(
+            f"Tg_out               = "
+            f"{state.Tg_burning[-1]:.6f} K"
+        )
+
+        print(
+            f"Ts_in                = "
+            f"{state.Ts_burning_in:.6f} K"
+        )
+
+        print(
+            f"Ts_out               = "
+            f"{state.Ts_burning[-1]:.6f} K"
+        )
+
+        print(
+            f"Hg_in                = "
+            f"{Hg_in:.12e} W"
+        )
+
+        print(
+            f"Hg_out               = "
+            f"{state.Hgas_burning_out:.12e} W"
+        )
+
+        print(
+            f"Hs_in                = "
+            f"{Hs_in:.12e} W"
+        )
+
+        print(
+            f"Hs_out               = "
+            f"{state.Hsolid_burning_out:.12e} W"
+        )
+
+        print(
+            f"Q_burning            = "
+            f"{state.Q_burning:.12e} W"
+        )
+
+        print(
+            f"Burning_Q_sink       = "
+            f"{Burning_Q_sink:.12e} W"
+        )
+
+        print(
+            f"Q_wall_loss          = "
+            f"{Q_wall_loss:.12e} W"
+        )
+
+        print(
+            f"Burning_energy_balance = "
+            f"{state.Burning_energy_balance:.12e} W"
+        )
+
+        print("================================================")
 
         return state
 

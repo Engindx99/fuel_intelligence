@@ -14,6 +14,8 @@ from physics.physics import thermal_capacities
 from physics.physics import wall_geometry
 from physics.physics import wall_losses
 from physics.physics import gas_mass_balance
+
+from chemistry.phases import copy_solid_phases
 from chemistry.calcination import CalcinationModel
 from physics.physics import ZONE_HT_CONFIG
 
@@ -714,6 +716,64 @@ class Transition:
                 self.eps
             )
         )
+        
+        # ======================================================
+        # SOLID PHASE STATE UPDATE
+        # CaCO3 -> CaO
+        # ======================================================
+
+        transition_solids = state.materials["transition"].solids
+
+        CaCO3_before = (
+            transition_solids.CaCO3.copy()
+        )
+
+        CaO_before = (
+            transition_solids.CaO.copy()
+        )
+
+        # ------------------------------------------------------
+        # Cell-wise conversion from transition kinetics
+        # ------------------------------------------------------
+
+        CaCO3_reacted_fraction = np.clip(
+            cell_conversion.copy(),
+            0.0,
+            1.0,
+        )
+
+        CaCO3_reacted_inventory = (
+            CaCO3_before
+            * CaCO3_reacted_fraction
+        )
+
+        CaCO3_reacted_inventory = np.minimum(
+            CaCO3_reacted_inventory,
+            CaCO3_before,
+        )
+
+        # ------------------------------------------------------
+        # CaCO3 consumption
+        # ------------------------------------------------------
+
+        transition_solids.CaCO3[:] = (
+            CaCO3_before
+            - CaCO3_reacted_inventory
+        )
+
+        # ------------------------------------------------------
+        # CaO generation
+        # ------------------------------------------------------
+
+        CaO_generated_inventory = (
+            CaCO3_reacted_inventory
+            * self.chemistry.CaO_ratio
+        )
+
+        transition_solids.CaO[:] = (
+            CaO_before
+            + CaO_generated_inventory
+        )
 
 
 
@@ -1151,6 +1211,56 @@ class Transition:
                 state.Hs_transition
             )
         )
+        
+        # ======================================================
+        # SOLID PHASE HANDOFF
+        # Transition -> Burning
+        # ======================================================
+
+        copy_solid_phases(
+            state.materials["transition"].solids,
+            state.materials["burning"].solids,
+        )
+
+        # ======================================================
+        # SOLID PHASE HANDOFF DIAGNOSTIC
+        # ======================================================
+
+        print("\n========== TRANSITION -> BURNING SOLID HANDOFF ==========")
+
+        for phase in [
+            "H2O",
+            "Bound_H2O",
+            "CaCO3",
+            "CaO",
+            "SiO2",
+            "Al2O3",
+            "Fe2O3",
+            "C2S",
+            "C3S",
+            "C3A",
+            "C4AF",
+        ]:
+            transition = getattr(
+                state.materials["transition"].solids,
+                phase,
+            )
+
+            burning = getattr(
+                state.materials["burning"].solids,
+                phase,
+            )
+
+            diff = np.sum(burning - transition)
+
+            print(
+                f"{phase:10s}: "
+                f"transition={np.sum(transition):.6e}, "
+                f"burning={np.sum(burning):.6e}, "
+                f"diff={diff:.6e}"
+            )
+
+        print("==========================================================")
 
         # ======================================================
         # STEADY-STATE STORED ENERGY
